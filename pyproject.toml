@@ -1,0 +1,57 @@
+[build-system]
+build-backend = "mesonpy"
+requires = ["meson-python>=0.18"]
+
+[project]
+name = "blicket"
+# Static on purpose: a dynamic version breaks a fresh `uv sync` without build isolation.
+version = "0.1.0.dev0"
+description = "Storybook for scientific model outputs: named views on model runs."
+readme = "README.md"
+requires-python = ">=3.14"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Tobias Diez", email = "code@tobiasdiez.com" }]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Scientific/Engineering",
+    "Typing :: Typed",
+]
+dependencies = ["pydantic>=2.13", "typer>=0.27"]
+
+[project.scripts]
+blicket = "blicket.cli:app"
+
+[dependency-groups]
+# Needed in the environment because blicket is built without isolation (see [tool.uv]), so that
+# the editable install can rebuild on import.
+build = ["meson-python>=0.18", "meson>=1.5", "ninja>=1.11"]
+dev = [
+    { include-group = "build" },
+    "pytest>=9.1",
+    "ruff>=0.17",
+    "ty>=0.0.91",
+]
+
+[tool.uv]
+no-build-isolation-package = ["blicket"]
+default-groups = ["build", "dev"]
+
+[tool.ruff]
+line-length = 100
+# ruff also formats Python blocks in Markdown; the design documents keep their own layout.
+extend-exclude = ["docs"]
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF", "PT", "C4"]
+
+[tool.ty.src]
+# meson's build directory
+exclude = ["build"]
+
+[tool.pytest]
+testpaths = ["tests"]
+addopts = ["--import-mode=importlib"]

@@ -1,0 +1,8 @@
+flows  Material flows  [mfa]
+  flows/steel_by_process   Steel flows by process   stacked_area   aliases: flows/steel_process
+  flows/scrap              Scrap                    line
+  flows/slag               Slag                     line
+stocks
+  stocks/in_use            In use                   line
+
+2 groups · 4 Blicks

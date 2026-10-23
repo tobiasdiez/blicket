@@ -39,7 +39,7 @@ run directory
   → Blick transformations → per-Blick tidy tables → canonical form (typed sort, rounding)
   → baseline resolution from the store
   → change flags + magnitude per Blick, via the plot type's diff
-  → build dir: manifest.json + current tables + baseline tables of changed Blicks + viewer
+  → build dir: manifest.json + current tables + comparison output per baseline + viewer
   → terminal summary; viewer; report
 push → copies the build into the store (immutable, keyed by build id)
 ```
@@ -49,7 +49,8 @@ push → copies the build into the store (immutable, keyed by build id)
 ```
 <store>/
   builds/<build-id>/
-    manifest.json             spec version, RunInfo, commit, branch, dirty flag, timestamp, per-Blick hashes and flags
+    manifest.json             spec version, RunInfo, commit, branch, dirty flag, timestamp, tolerance and digits, per-Blick definitions, schemas and hashes
+    compare/<baseline-id>/    flags, magnitude and the baseline tables of changed Blicks, per baseline (amendment of 2026-10-23)
     blicks/<id>.parquet       canonical tables, zstd
 ```
 
@@ -228,7 +229,8 @@ my-model/
     build/<build-id>/
       manifest.json
       blicks/<id>.parquet         current tables
-      baseline/<id>.parquet       only for changed Blicks, so the site is self-contained but small
+      compare/<baseline-id>/      comparison result and the baseline tables of changed Blicks, so the
+                                  site is self-contained but small; additive, never changes the manifest
       <viewer assets>
     store/                        default store location
 ```
@@ -488,6 +490,9 @@ the loader takes a run directory and returns the run object plus `RunInfo`.
 - The custom view is a dev-mode Blick builder over the adapter's dataset protocol; transient,
   not saved, no declarative definition format. A saved Blick is code; export as code is later.
 - The adapter is project code; no IAMC adapter ships for now. Plot types declare channels.
+- Amendment of 2026-10-23 (M0.2 plan): the manifest is immutable and holds no comparison results.
+  Flags, magnitude and baseline tables live in `compare/<baseline-id>/` inside the build directory,
+  because the build id excludes the baseline and one build may be compared against several.
 - Deferred: the accept and review workflow (M3, UI plus PR-first), TypeScript type generation,
   per-PR preview deploys, difference chart (M4), the `definition` change type, remote store
   backends until M3, export of ad hoc Blicks as code, a shipped IAMC adapter.

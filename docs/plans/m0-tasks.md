@@ -66,15 +66,18 @@ amendment the same build checked against two baselines would differ while keepin
 accepted the amendment on 2026-10-23; architecture.md is updated when M0.2 lands.
 
 Structural decisions carried over from the M0.1 architecture review, to be done at the start of
-this task: the manifest's `BlickDefinition` pydantic model becomes the single description of a
-Blick's fields (`Blick` holds it plus `transform` and `PlotSpec`, `to_json` is `model_dump`, the
-`BlickOptions` TypedDict and its field table go, and one helper rewords pydantic errors for config
-and definitions alike); `FailedBlick` carries the definition when one could be built, so a Blick
-with a full definition and a raised transformation is representable; the traceback and path
-helpers private to discovery (`project_traceback`, `locate`) move to a shared module; the CLI gets
-a reusable `Project` option resolved once in the callback and an `Outcome` (text, JSON, exit code)
-protocol before the second command is written (today the exit-code policy sits on the `list`
-command's class, so a second command would have to pass the same `cls=`; move it to the app once); `Registry.to_json` writes an absolute `root`, which
+this task, as trimmed by the review of the M0.2 plan: the manifest's `BlickDefinition` pydantic
+model becomes the single *output* description of a Blick's fields (`Blick` stays a dataclass and
+gains `definition()`; the hand-written `to_json` methods go; input validation stays in
+`_validation.py`, because it runs at decoration time before id and group exist, and the
+`BlickOptions` TypedDict stays for keyword typing); one `BlickEntry` shape describes a Blick in the
+registry and in the manifest alike, carrying id and aliases at the top level and the definition
+when one could be built, so a Blick with a full definition and a raised transformation is
+representable and a failed Blick is never mistaken for a removed one; the
+traceback and path helpers private to discovery (`project_traceback`, `locate`) move to a shared
+module; the CLI gets shared `--project` and `-v` option aliases and one `finish(text, failed)` for
+output and exit code before the second command is written (today the exit-code policy sits on the `list`
+command's class, so a second command would have to pass the same `cls=`; move it to one place); `Registry.to_json` writes an absolute `root`, which
 the manifest must not inherit, since a build directory is portable. Two further notes from the
 round-3 architecture review: the manifest keeps two containers, file-level problems (which make a
 build `incomplete`, exposed today as `Registry.incomplete`) and per-Blick status, rather than one
@@ -134,6 +137,12 @@ give 0, scaling both leaves the magnitude unchanged, a sign flip gives 1, an add
 
 ### M0.6 Store, push and `blicket diff`
 
+Carried over from the M0.2 architecture review: before the second report-producing command,
+introduce a `Report` protocol (`failed`, `text(verbose)`, `json()`) with the text renderers in a
+`report.py`, so `diff`'s flag counts and top movers and M0.7's `report.md` are renderers over the
+same data instead of more branches in `cli.py`. `push` copies the manifest and the tables with the
+umask-respecting directory modes blicket writes (never `copystat` of a private directory).
+
 The `Store` class over a directory (`builds/<build-id>/` with manifest and tables), `push` as an
 immutable copy that is a no-op when the build exists, listing and lookup, the default
 `.blicket/store` and the `store` config key. The comparison file format next to the manifest.
@@ -145,6 +154,10 @@ Done when pushing twice is a no-op, `blicket diff` of two remind-mfa builds prin
 a Blick renamed with an alias is matched to its old table.
 
 ### M0.7 Baseline resolution, `blicket check`, reports and exit codes
+
+Carried over from the M0.2 architecture review: `compare/<baseline-id>/` cannot be enumerated over
+HTTP on static hosting, so `check` also writes `compare/index.json` additively, listing the
+baselines a build was compared against, for the viewer.
 
 Candidates by run profile and git ancestry of the Blick repository's HEAD
 (`git merge-base --is-ancestor`), `--against <build-id>` and `--against <branch>`, most recent

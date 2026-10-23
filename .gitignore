@@ -1,0 +1,21 @@
+# example model runs (hundreds of MB, never pushed)
+data_out/
+
+# blicket build output and local store
+.blicket/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+/build/
+/dist/
+
+# viewer
+node_modules/
+.nuxt/
+.output/
+
+# AI
+.claude/skills/feature-loop

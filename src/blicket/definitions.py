@@ -169,7 +169,7 @@ def _source(frame: FrameType, function: object = None) -> Source:
     code = getattr(function, "__code__", None)
     if code is not None and Path(code.co_filename) == file:
         return Source(file, code.co_firstlineno)
-    return Source(file, frame.f_lineno or 0)
+    return Source(file, frame.f_lineno)
 
 
 def _definition_failure(label: str, source: Source, problems: list[str]) -> DefinitionError:

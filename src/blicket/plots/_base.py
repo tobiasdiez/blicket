@@ -103,10 +103,6 @@ class PlotSpec:
             seen[column] = channel
         object.__setattr__(self, "mapping", MappingProxyType(mapping))
 
-    def to_json(self) -> dict[str, Any]:
-        """The JSON form, as ``blicket list --json`` prints it."""
-        return {"type": self.plot_type.name, "mapping": dict(self.mapping)}
-
 
 def make_spec(plot_type: PlotType, **mapping: str | None) -> PlotSpec:
     """Build a spec from factory arguments, leaving out the channels passed as ``None``."""

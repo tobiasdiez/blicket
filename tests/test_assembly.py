@@ -119,7 +119,6 @@ def test_groups_merge_across_modules_in_file_order() -> None:
         # The second module supplies the title; the third one's title is a warning.
         assert (group.title, group.modules) == ("B", ("blicks.a", "blicks.b", "blicks.c"))
         assert group.tags == ("a", "b")
-        assert registry.tags_of("shared/y") == ("a", "b")
         (warning,) = registry.warnings
         assert (warning.kind, warning.location(ROOT)) == (Kind.GROUP, "blicks/c.py:1")
         assert "gets a title in blicks/b.py:1" in warning.message
@@ -141,7 +140,19 @@ def test_invalid_ids_do_not_take_the_derived_id() -> None:
     )
     assert list(registry.blicks) == ["a/steel"]
     assert [(f.id, f.name) for f in registry.failed] == [(None, "steel"), (None, "'Nope'")]
-    assert registry.to_json()["failed"][1]["name"] == "'Nope'"
+
+
+def test_failed_blicks_keep_their_definition_when_their_arguments_are_valid() -> None:
+    records = [
+        record("blicks/a.py", definition("a/x", aliases=["a/old"]), definition("a/x", line=2)),
+        record("blicks/b.py", definition("b/y", aliases=["b/old"], controls={"r": "facet"})),
+        record("blicks/c.py", definition(name="precise", tolerance=1e-7)),
+    ]
+    duplicate, _, invalid, too_fine = assemble(records).failed
+    assert duplicate.aliases == ("a/old",)
+    assert duplicate.definition is not None
+    assert (invalid.aliases, invalid.definition) == (("b/old",), None)
+    assert too_fine.definition is not None
 
 
 def test_function_name_that_is_no_segment_needs_an_id() -> None:

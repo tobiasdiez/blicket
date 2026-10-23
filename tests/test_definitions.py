@@ -9,6 +9,7 @@ import blicket as bk
 from blicket import definitions
 from blicket._validation import _CHECKS, BlickOptions
 from blicket.assembly import assemble
+from blicket.model import BlickDefinition
 
 LINE = bk.plots.line(x="year", y="value")
 # For calls that are wrong on purpose, which the type checker would reject.
@@ -38,7 +39,9 @@ def test_decorator_records_and_returns_the_function() -> None:
 
     assert steel_by_process(1) == 1
     registry = assembled()
-    assert registry.groups["defs"] == bk.Group("defs", "Definitions", ("t",), (__name__,))
+    assert registry.groups["defs"] == bk.Group(
+        name="defs", title="Definitions", tags=("t",), modules=(__name__,)
+    )
     blick = registry.blicks["defs/steel_by_process"]
     assert (blick.title, blick.description) == ("Steel by process", "Steel flows.\n\nBy process.")
     assert blick.transform is steel_by_process
@@ -80,6 +83,11 @@ def test_every_option_is_checked_stored_and_named() -> None:
         "measures": ("value",),
         "order": {"region": ("EUR",)},
     }
+
+
+def test_options_are_the_definition_fields_plus_the_identity() -> None:
+    identity = {"id", "aliases"}  # recorded on the Blick's entry, beside its definition
+    assert BlickOptions.__optional_keys__ == BlickDefinition.model_fields.keys() | identity
 
 
 def test_register_defaults_the_title_to_the_last_segment() -> None:

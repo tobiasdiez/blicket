@@ -13,7 +13,7 @@ from blicket._validation import SEGMENT_RULE, default_title, validate_group
 from blicket.config import PYPROJECT, Config, check_tolerance
 from blicket.definitions import Definition, ModuleRecord
 from blicket.errors import NOWHERE, SKIPPED, Kind, Problem, Source
-from blicket.model import Blick, FailedBlick, Group, Registry
+from blicket.model import Blick, BlickEntry, Group, Registry
 
 
 @dataclass
@@ -42,10 +42,10 @@ class _Entry:
 
 # A module's contribution: its group and the line of its bk.group() call, its definitions as
 # entries, and its file-level problems.
-type _Finalised = tuple[Group | None, int, list[_Entry], list[Problem]]
+type _Finalised = tuple[Group | None, int | None, list[_Entry], list[Problem]]
 
 
-def _resolve_group(record: ModuleRecord) -> tuple[Group | None, list[str], int]:
+def _resolve_group(record: ModuleRecord) -> tuple[Group | None, list[str], int | None]:
     """The module's group from its first ``bk.group()`` call or its name, the problems, the line.
 
     The group is ``None`` when its name is unusable.
@@ -57,8 +57,8 @@ def _resolve_group(record: ModuleRecord) -> tuple[Group | None, list[str], int]:
                 f"the module name gives the group name {name!r}, which is not valid "
                 f"({SEGMENT_RULE}); call bk.group('...') in the module or rename the file"
             )
-            return None, [problem], 0
-        return Group(name=name, modules=(record.name,)), [], 0
+            return None, [problem], None
+        return Group(name=name, modules=(record.name,)), [], None
 
     first = record.group_calls[0]
     arguments = first.arguments
@@ -71,11 +71,13 @@ def _resolve_group(record: ModuleRecord) -> tuple[Group | None, list[str], int]:
         )
     if arguments.name is None:
         return None, problems, first.source.line
-    group = Group(arguments.name, arguments.title, arguments.tags, (record.name,))
+    group = Group(
+        name=arguments.name, title=arguments.title, tags=arguments.tags, modules=(record.name,)
+    )
     return group, problems, first.source.line
 
 
-def _group_problem(record: ModuleRecord, messages: list[str], line: int) -> Problem:
+def _group_problem(record: ModuleRecord, messages: list[str], line: int | None) -> Problem:
     return Problem(
         kind=Kind.GROUP,
         message="\n".join(messages),
@@ -88,7 +90,7 @@ def _group_problem(record: ModuleRecord, messages: list[str], line: int) -> Prob
 def _finalise(record: ModuleRecord, digits: int) -> _Finalised:
     """Resolve one module's group, default ids and titles, and check each definition."""
     if not record.group_calls and not record.definitions:
-        return None, 0, [], []
+        return None, None, [], []
     group, group_messages, line = _resolve_group(record)
     if group is None:
         return None, line, [], [_group_problem(record, [*group_messages, SKIPPED], line)]
@@ -112,7 +114,7 @@ def _build(entry: _Entry) -> Blick:
     definition = entry.definition
     options = definition.options
     transform = definition.transform
-    # Every definition without an id, a plot or a callable transform has a problem.
+    # Every definition without an id, a plot or a callable transform has an argument problem.
     assert entry.id is not None
     assert options.plot is not None
     assert callable(transform)
@@ -176,22 +178,26 @@ def assemble(
     _check_duplicates(entries, root)
     aliases = _check_aliases(entries, root)
     blicks: dict[str, Blick] = {}
-    failed: list[FailedBlick] = []
+    failed: list[BlickEntry] = []
     for entry in entries:
-        if entry.problems:
-            failed.append(
-                FailedBlick(
-                    id=entry.id,
-                    name=entry.id or entry.definition.name,
-                    group=entry.group,
-                    module=entry.module,
-                    source=entry.source,
-                    problems=tuple(entry.problems),
-                )
-            )
-        else:
-            blick = _build(entry)
+        # A Blick with valid arguments has a definition even when another check failed.
+        valid = not entry.definition.problems and entry.definition.id_problem is None
+        blick = _build(entry) if valid else None
+        if blick is not None and not entry.problems:
             blicks[blick.id] = blick
+            continue
+        failed.append(
+            BlickEntry(
+                id=entry.id,
+                name=entry.id or entry.definition.name,
+                aliases=entry.definition.options.aliases,
+                group=entry.group,
+                module=entry.module,
+                source=entry.source,
+                definition=blick.definition() if blick else None,
+                problems=tuple(entry.problems),
+            )
+        )
     aliases = {alias: blick_id for alias, blick_id in aliases.items() if blick_id in blicks}
 
     return Registry(

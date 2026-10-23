@@ -9,13 +9,18 @@ py.install_sources(
   'src/blicket/__init__.py',
   'src/blicket/_validation.py',
   'src/blicket/assembly.py',
+  'src/blicket/builder.py',
   'src/blicket/cli.py',
   'src/blicket/config.py',
   'src/blicket/definitions.py',
   'src/blicket/discovery.py',
   'src/blicket/errors.py',
+  'src/blicket/loader.py',
+  'src/blicket/manifest.py',
   'src/blicket/model.py',
   'src/blicket/py.typed',
+  'src/blicket/tables.py',
+  'src/blicket/tracebacks.py',
   subdir: 'blicket',
 )
 

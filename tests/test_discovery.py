@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import blicket as bk
-from blicket.errors import SKIPPED
+from blicket.errors import SKIPPED, Source
 from tests.support import PROJECTS, discover_clean, make_project, one_blick
 
 
@@ -32,7 +32,7 @@ def test_module_source_and_description() -> None:
     blicks = bk.discover(PROJECTS / "minimal").blicks
     steel = blicks["flows/steel_by_process"]
     assert steel.module == "blicks.flows"
-    assert steel.source == ((PROJECTS / "minimal" / "blicks" / "flows.py").resolve(), 6)
+    assert steel.source == Source((PROJECTS / "minimal" / "blicks" / "flows.py").resolve(), 6)
     assert steel.description == "Steel flows split by production process."
     # A family built in a loop keeps each loop variable.
     assert blicks["flows/slag"].transform("run") == ("run", "slag")
@@ -47,7 +47,7 @@ def test_nested_group_and_explicit_id_outside_it(tmp_path: Path) -> None:
     registry = discover_clean(make_project(tmp_path, {"blicks/flows.py": source}))
     assert registry.blicks["flows/steel/production"].group == "flows/steel"
     assert registry.blicks["steel/share"].group == "flows/steel"
-    assert registry.tags_of("steel/share") == ("mfa",)
+    assert registry.groups["flows/steel"].tags == ("mfa",)
 
 
 def test_group_after_the_decorators(tmp_path: Path) -> None:

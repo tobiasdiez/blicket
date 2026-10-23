@@ -20,7 +20,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Typing :: Typed",
 ]
-dependencies = ["pydantic>=2.13", "typer>=0.27"]
+dependencies = ["polars>=2.0", "pydantic>=2.13", "typer>=0.27"]
 
 [project.scripts]
 blicket = "blicket.cli:app"
@@ -29,11 +29,18 @@ blicket = "blicket.cli:app"
 # Needed in the environment because blicket is built without isolation (see [tool.uv]), so that
 # the editable install can rebuild on import.
 build = ["meson-python>=0.18", "meson>=1.5", "ninja>=1.11"]
+# numpy, pandas, pyarrow and xarray only for the tests of the table conversion; blicket never
+# imports them.
 dev = [
     { include-group = "build" },
+    "jsonschema>=4.26",
+    "numpy>=2.5",
+    "pandas>=3.1",
+    "pyarrow>=26",
     "pytest>=9.1",
     "ruff>=0.17",
     "ty>=0.0.91",
+    "xarray>=2026.9",
 ]
 
 [tool.uv]

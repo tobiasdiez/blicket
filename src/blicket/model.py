@@ -1,9 +1,12 @@
-"""The data model of a project's Blicks: Blicks, failed Blicks, groups and the registry."""
+"""The data model of a project's Blicks: Blicks, groups, the registry, and the shapes reports
+record them in: definitions, entries and table schemas."""
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
+
+from pydantic import BaseModel, ConfigDict, computed_field
 
 from blicket.errors import Problem, Source
 from blicket.plots import PlotSpec
@@ -12,32 +15,112 @@ ControlKind = Literal["filter", "split"]
 type Transform = Callable[[Any], Any]
 
 
-@dataclass(frozen=True)
-class Group:
+class Group(BaseModel):
     """A group of Blicks, named by ``bk.group()`` or after its module."""
+
+    model_config = ConfigDict(frozen=True)
 
     name: str
     title: str | None = None
     tags: tuple[str, ...] = ()
     modules: tuple[str, ...] = ()
 
-    def to_json(self) -> dict[str, Any]:
-        """The JSON form, as ``blicket list --json`` prints it."""
-        return {
-            "name": self.name,
-            "title": self.title,
-            "tags": list(self.tags),
-            "modules": list(self.modules),
-        }
+
+class PlotDefinition(BaseModel):
+    """A Blick's plot as recorded: the plot type's name and the mapping of channels to columns."""
+
+    model_config = ConfigDict(frozen=True)
+
+    type: str
+    mapping: dict[str, str]
+
+
+class BlickDefinition(BaseModel):
+    """How a Blick is defined, apart from its id, aliases and transformation: the options of
+    ``@bk.blick``, with the plot as a ``PlotDefinition``. ``tags`` are the Blick's own."""
+
+    model_config = ConfigDict(frozen=True)
+
+    title: str
+    description: str | None
+    tags: tuple[str, ...]
+    plot: PlotDefinition
+    controls: dict[str, ControlKind]
+    defaults: dict[str, Any]
+    tolerance: float | None
+    dims: tuple[str, ...] | None
+    measures: tuple[str, ...] | None
+    order: dict[str, tuple[Any, ...]]
+
+
+type DimensionType = Literal["string", "integer", "boolean", "date", "datetime"]
+
+
+class Dimension(BaseModel):
+    """A dimension column of a Blick's table: its name, type and values in display order."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    dtype: DimensionType
+    values: list[Any]
+
+
+class Measure(BaseModel):
+    """A measure column of a Blick's table: its name and type."""
+
+    model_config = ConfigDict(frozen=True)
+
+    name: str
+    dtype: Literal["float"]
+
+
+class TableSchema(BaseModel):
+    """The columns of a Blick's table, dimensions first."""
+
+    model_config = ConfigDict(frozen=True)
+
+    dimensions: list[Dimension]
+    measures: list[Measure]
+
+
+class BlickEntry(BaseModel):
+    """A defined Blick as a report records it: what defines it, its table, and its problems.
+
+    ``id`` is ``None`` when no usable id was given or derived; ``name`` is the id if there is
+    one, else the function's name, else the id as given. ``definition`` is ``None`` when the
+    Blick's arguments were invalid. ``data``, ``hash``, ``rows`` and ``columns`` describe the
+    table a build wrote; ``status`` is ``error`` when a problem is an error.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str | None
+    name: str
+    aliases: tuple[str, ...] = ()
+    group: str
+    module: str | None = None
+    source: Source | None = None
+    definition: BlickDefinition | None = None
+    data: str | None = None
+    hash: str | None = None
+    rows: int | None = None
+    columns: TableSchema | None = None
+    timing_ms: float | None = None
+    problems: tuple[Problem, ...] = ()
+
+    @computed_field
+    @property
+    def status(self) -> Literal["ok", "error"]:
+        return "error" if any(p.severity == "error" for p in self.problems) else "ok"
 
 
 @dataclass(frozen=True, kw_only=True)
 class Blick:
     """A named view on a model run: a transformation of the run and how to plot its table.
 
-    ``tags`` are the Blick's own tags; ``Registry.tags_of`` adds the group's. ``dims``,
-    ``measures`` and ``order`` are stored as given. ``module`` is ``None`` for Blicks that do not
-    come from a module.
+    ``tags`` are the Blick's own tags; its group has tags of its own. ``module`` is ``None`` for
+    Blicks that do not come from a module.
     """
 
     id: str
@@ -57,57 +140,67 @@ class Blick:
     module: str | None = None
     source: Source | None = None
 
-    def to_json(
-        self, root: Path | None = None, tags: Iterable[str] | None = None
-    ) -> dict[str, Any]:
-        """The JSON form, as ``blicket list --json`` prints it.
+    def definition(self) -> BlickDefinition:
+        """Everything that defines the Blick except its transformation."""
+        return BlickDefinition(
+            title=self.title,
+            description=self.description,
+            tags=self.tags,
+            plot=PlotDefinition(type=self.plot.plot_type.name, mapping=dict(self.plot.mapping)),
+            controls=dict(self.controls),
+            defaults=dict(self.defaults),
+            tolerance=self.tolerance,
+            dims=self.dims,
+            measures=self.measures,
+            order=dict(self.order),
+        )
 
-        ``tags`` overrides the Blick's own tags, so the registry can pass the group's as well.
-        """
-        return {
-            "id": self.id,
-            "title": self.title,
-            "description": self.description,
-            "group": self.group,
-            "tags": list(self.tags if tags is None else tags),
-            "plot": self.plot.to_json(),
-            "controls": dict(self.controls),
-            "defaults": dict(self.defaults),
-            "tolerance": self.tolerance,
-            "aliases": list(self.aliases),
-            "dims": None if self.dims is None else list(self.dims),
-            "measures": None if self.measures is None else list(self.measures),
-            "order": {key: list(values) for key, values in self.order.items()},
-            "module": self.module,
-            "source": self.source.to_json(root) if self.source else None,
-        }
+    def entry(
+        self,
+        *,
+        problems: tuple[Problem, ...] = (),
+        data: str | None = None,
+        hash: str | None = None,
+        rows: int | None = None,
+        columns: TableSchema | None = None,
+        timing_ms: float | None = None,
+    ) -> BlickEntry:
+        """The Blick as a report records it, with what a build made of it, if anything."""
+        return BlickEntry(
+            id=self.id,
+            name=self.id,
+            aliases=self.aliases,
+            group=self.group,
+            module=self.module,
+            source=self.source,
+            definition=self.definition(),
+            data=data,
+            hash=hash,
+            rows=rows,
+            columns=columns,
+            timing_ms=timing_ms,
+            problems=problems,
+        )
 
-
-@dataclass(frozen=True, kw_only=True)
-class FailedBlick:
-    """A Blick that was defined but cannot be built, with the problems that say why.
-
-    ``id`` is ``None`` when no usable id was given or derived; ``name`` is the id if there is
-    one, else the function's name, else the id as given.
-    """
-
-    id: str | None
-    name: str
-    group: str
-    module: str | None = None
-    source: Source | None = None
-    problems: tuple[Problem, ...]
-
-    def to_json(self, root: Path | None = None) -> dict[str, Any]:
-        """The JSON form, as ``blicket list --json`` prints it."""
-        return {
-            "id": self.id,
-            "name": self.name,
-            "group": self.group,
-            "module": self.module,
-            "source": self.source.to_json(root) if self.source else None,
-            "problems": [problem.to_json(root) for problem in self.problems],
-        }
+    def problem(
+        self,
+        kind: str,
+        message: str,
+        *,
+        severity: Literal["error", "warning"] = "error",
+        source: Source | None = None,
+        traceback: str | None = None,
+    ) -> Problem:
+        """A problem with this Blick, located at its definition unless ``source`` is given."""
+        return Problem(
+            kind=kind,
+            severity=severity,
+            source=source or self.source,
+            module=self.module,
+            ids=(self.id,),
+            message=message,
+            traceback=traceback,
+        )
 
 
 @dataclass(frozen=True)
@@ -123,7 +216,7 @@ class Registry:
 
     root: Path | None = None
     blicks: Mapping[str, Blick] = field(default_factory=dict)
-    failed: tuple[FailedBlick, ...] = ()
+    failed: tuple[BlickEntry, ...] = ()
     groups: Mapping[str, Group] = field(default_factory=dict)
     aliases: Mapping[str, str] = field(default_factory=dict)
     problems: tuple[Problem, ...] = ()
@@ -147,25 +240,3 @@ class Registry:
         Blick-level problems live in ``failed``; every error here concerns a file or the project.
         """
         return bool(self.errors)
-
-    def tags_of(self, blick_id: str) -> tuple[str, ...]:
-        """The tags of a Blick: its group's followed by its own, without repetitions."""
-        blick = self.blicks[blick_id]
-        group = self.groups.get(blick.group)
-        group_tags = group.tags if group is not None else ()
-        return tuple(dict.fromkeys((*group_tags, *blick.tags)))
-
-    def to_json(self) -> dict[str, Any]:
-        """The definitions and problems in the form ``blicket list --json`` prints."""
-        return {
-            "root": None if self.root is None else str(self.root),
-            "groups": [group.to_json() for group in self.groups.values()],
-            "blicks": [
-                blick.to_json(self.root, tags=self.tags_of(blick.id))
-                for blick in self.blicks.values()
-            ],
-            "failed": [blick.to_json(self.root) for blick in self.failed],
-            "aliases": dict(self.aliases),
-            "errors": [error.to_json(self.root) for error in self.errors],
-            "warnings": [warning.to_json(self.root) for warning in self.warnings],
-        }

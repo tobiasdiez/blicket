@@ -51,6 +51,7 @@ class Config(BaseModel):
     )
     loader: str | None = Field(
         default=None,
+        pattern=r"^\w+(\.\w+)*:\w+(\.\w+)*$",
         description='Import path of the function that loads a run, as "package.module:function".',
     )
     store: str = Field(
@@ -109,6 +110,8 @@ def _describe(error: ValidationError, section: dict[str, Any]) -> list[str]:
             problem = f"{key} must be a positive number, got {section.get(key)!r}"
         elif issue["type"] == "value_error":
             problem = str(issue.get("ctx", {}).get("error", issue["msg"]))
+        elif issue["type"] == "string_pattern_mismatch":
+            problem = f'loader must be "package.module:function", got {section.get(key)!r}'
         else:
             problem = _WRONG_TYPE[key].format(value=section.get(key))
         if problem not in problems:

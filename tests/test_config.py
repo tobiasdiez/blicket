@@ -11,9 +11,9 @@ from tests.support import make_project
 def test_defaults_and_values(tmp_path: Path) -> None:
     assert bk.load_config(make_project(tmp_path, {}, name="empty")) == bk.Config()
     assert bk.Config().blicks == ["blicks/**/*.py"]
-    root = make_project(tmp_path, {}, 'blicks = ["views/*.py"]\ndigits = 8\nloader = "m:f"\n')
+    root = make_project(tmp_path, {}, 'blicks = ["views/*.py"]\ndigits = 8\nloader = "m.n:C.f"\n')
     config = bk.load_config(root)
-    assert (config.blicks, config.digits, config.loader) == (["views/*.py"], 8, "m:f")
+    assert (config.blicks, config.digits, config.loader) == (["views/*.py"], 8, "m.n:C.f")
 
 
 @pytest.mark.parametrize(
@@ -31,6 +31,9 @@ def test_defaults_and_values(tmp_path: Path) -> None:
         ("digits = 0", "digits must be between 1 and 17, got 0"),
         ("digits = 18", "digits must be between 1 and 17, got 18"),
         ("tolerance = 1e-9", "tolerance 1e-09 is finer than 6 significant digits can express"),
+        ('loader = "mymodel.load_run"', 'loader must be "package.module:function", got \'mymodel'),
+        ('loader = "a b:c"', "loader must be \"package.module:function\", got 'a b:c'"),
+        ("loader = 1", 'loader must be a string "package.module:function"'),
         ("[tool.blicket", "invalid TOML"),
     ],
 )

@@ -9,10 +9,13 @@ def test_sources_display_and_json(tmp_path: Path) -> None:
     inside = Source(tmp_path / "blicks" / "a.py", 4)
     assert inside.display(tmp_path) == "blicks/a.py:4"
     assert inside.display() == f"{inside.file.as_posix()}:4"
-    assert Source(tmp_path / "a.py").to_json(tmp_path) == {"file": "a.py", "line": None}
+    context = {"root": tmp_path}
+    whole = Source(tmp_path / "a.py")
+    assert whole.model_dump(mode="json", context=context) == {"file": "a.py", "line": None}
     problem = Problem(kind="import", message="boom", source=Source(Path("/elsewhere/x.py"), 3))
-    assert problem.to_json(tmp_path)["source"] == {"file": "/elsewhere/x.py", "line": 3}
-    assert Problem(kind="x", message="m").to_json()["source"] is None
+    dumped = problem.model_dump(mode="json", context=context)
+    assert dumped["source"] == {"file": "/elsewhere/x.py", "line": 3}
+    assert Problem.model_validate_json(problem.model_dump_json()) == problem
 
 
 def test_sources_sort_by_file_then_line() -> None:

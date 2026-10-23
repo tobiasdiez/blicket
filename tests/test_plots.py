@@ -12,10 +12,7 @@ spec: Any = PlotSpec
 def test_factories_bind_columns_to_channels() -> None:
     spec = bk.plots.line(x="year", y="value", color="region")
     assert spec.plot_type is builtin("line")
-    assert spec.to_json() == {
-        "type": "line",
-        "mapping": {"x": "year", "y": "value", "color": "region"},
-    }
+    assert spec.mapping == {"x": "year", "y": "value", "color": "region"}
     for factory in [bk.plots.bar, bk.plots.stacked_bar, bk.plots.stacked_area]:
         assert factory(x="year", y="v").plot_type.name == factory.__name__
     mapping: Any = spec.mapping
@@ -63,4 +60,4 @@ def test_plot_type_contract() -> None:
         def diff(self, baseline: Any, current: Any, mapping: Any, controls: Any) -> Any:
             return None
 
-    assert PlotSpec(Sankey(), {"source": "from"}).to_json()["type"] == "sankey"
+    assert PlotSpec(Sankey(), {"source": "from"}).mapping == {"source": "from"}

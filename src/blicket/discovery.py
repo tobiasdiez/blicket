@@ -10,7 +10,6 @@ import importlib
 import json
 import os
 import sys
-import traceback
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -21,6 +20,7 @@ from blicket.assembly import assemble
 from blicket.config import PYPROJECT, Config, load_config
 from blicket.errors import SKIPPED, DefinitionError, Kind, Problem, Source, display_path
 from blicket.model import Registry
+from blicket.tracebacks import in_project, locate, project_traceback, raised_at
 
 
 @dataclass(frozen=True)
@@ -172,16 +172,6 @@ def _locations(module: ModuleType) -> list[str]:
     return [file] if isinstance(file, str) else [str(p) for p in getattr(module, "__path__", [])]
 
 
-def _in_project(location: str, root: Path) -> bool:
-    """Whether ``location`` is a real file under ``root``, outside its hidden directories."""
-    if not os.path.isabs(location):  # pseudo-filenames such as <frozen importlib._bootstrap>
-        return False
-    path = Path(location).resolve()
-    if not path.is_relative_to(root):
-        return False
-    return not any(part.startswith(".") for part in path.relative_to(root).parts)
-
-
 def _purge_modules(root: Path, targets: Sequence[_Target]) -> None:
     """Drop modules so that the Blick modules and the project's own code execute afresh.
 
@@ -197,8 +187,8 @@ def _purge_modules(root: Path, targets: Sequence[_Target]) -> None:
         if name == "blicket" or name.startswith("blicket."):
             return False
         file = getattr(module, "__file__", None)
-        in_project = isinstance(file, str) and _in_project(file, root)
-        return in_project or name.partition(".")[0] in top_levels
+        inside = isinstance(file, str) and in_project(file, root)
+        return inside or name.partition(".")[0] in top_levels
 
     # Decide first, delete afterwards: a namespace package's path needs its parent in place.
     for name in [name for name, module in list(sys.modules.items()) if stale(name, module)]:
@@ -223,25 +213,9 @@ def _execution_error(target: _Target, root: Path, error: BaseException) -> Probl
     raised added when that is another project file. When no frame lies in the Blick module (its
     package's ``__init__.py`` raised, say), it is the last frame in the project.
     """
-    frames = [
-        frame
-        for frame in traceback.extract_tb(error.__traceback__)
-        if _in_project(frame.filename, root)
-    ]
-    target_path = target.path.resolve()
-    in_target = [f for f in frames if Path(f.filename).resolve() == target_path]
-    source = Source(target.path)
-    if in_target:
-        source = Source(target.path, in_target[-1].lineno or 0)
-    elif frames:
-        source = Source(Path(frames[-1].filename), frames[-1].lineno or 0)
-    elif isinstance(error, SyntaxError) and error.filename:
-        source = Source(Path(error.filename), error.lineno or 0)
-
+    source = locate(error, root, prefer=target.path) or Source(target.path)
     first = str(error) if isinstance(error, DefinitionError) else f"{type(error).__name__}: {error}"
-    if in_target and frames[-1] is not in_target[-1]:
-        first += f" (raised at {display_path(frames[-1].filename, root)}:{frames[-1].lineno})"
-    lines = [first]
+    lines = [first + raised_at(error, root, source)]
     if isinstance(error, ModuleNotFoundError) and error.name:
         lines.append(f"is {error.name!r} installed in {sys.prefix}?")
     # The location already says all a traceback of these two would: it is blicket's own frames.
@@ -251,19 +225,8 @@ def _execution_error(target: _Target, root: Path, error: BaseException) -> Probl
         message="\n".join([*lines, SKIPPED]),
         source=source,
         module=target.name,
-        traceback=None if plain else _project_traceback(error, root),
+        traceback=None if plain else project_traceback(error, root),
     )
-
-
-def _project_traceback(error: BaseException, root: Path) -> str:
-    """The traceback from the first frame in the project's files, without blicket's own."""
-    exception = traceback.TracebackException.from_exception(error)
-    frames = list(exception.stack)
-    first = next(
-        (i for i, frame in enumerate(frames) if _in_project(frame.filename, root)), len(frames)
-    )
-    exception.stack = traceback.StackSummary.from_list(frames[first:])
-    return "".join(exception.format())
 
 
 def _clash(target: _Target, root: Path) -> Problem | None:

@@ -152,7 +152,7 @@ class StackedArea(bk.PlotType):
     def controls(self, schema, mapping) -> list[bk.Control]:     # build time
         ...                                                      # unbound dimensions → filter or split
 
-    def diff(self, baseline, current, mapping, controls) -> bk.Change:   # build time, headless
+    def diff(self, baseline, current, mapping, panels) -> bk.Change:     # build time, headless
         ...                                                      # flags + magnitude + diagnostics
 ```
 
@@ -180,14 +180,21 @@ export default {
   types have wanted the same thing.
 - Built-ins: line, stacked area, bar (grouped, stacked) in M0/M1; scatter and table in M2. Their
   `render` uses Vega-Lite templates; their `diff` uses a shared internal routine. Their `controls`
-  turn each unbound dimension into a filter by default, allow `split` where the chart supports
-  facets, and hide dimensions that are functionally determined by other unbound dimensions (unit
-  by variable).
+  turn each unbound dimension into a filter by default and allow `split` where the chart supports
+  facets. Hiding dimensions that are functionally determined by other unbound dimensions (unit by
+  variable) waits for a project that needs it (amendment of 2026-10-24).
+- Amendment of 2026-10-24 (M0.5): `diff` takes `panels` instead of `controls`, the dimensions
+  whose value combinations each get their own scale. The core derives them, since it lays out the
+  panels (the filters, and the splits when the Blick sets `independent_y`); the plot type scales
+  and compares within them.
 
 ## Change detection, as implemented by the built-in diff routine
 
-Per Blick, `diff` returns a **set of flags** and a magnitude. A set, not one type, because a Blick
-can gain a scenario and change values in the same run, and one type per Blick would hide the second.
+Per Blick, the comparison gives a **set of flags** and a magnitude. A set, not one type, because a
+Blick can gain a scenario and change values in the same run, and one type per Blick would hide the
+second. Amendment of 2026-10-24: the plot type's `diff` sets `schema` and computes the magnitude;
+the core sets `value` when the magnitude exceeds the Blick's tolerance, so the two cannot
+disagree, and `new`, `removed` and `error`.
 
 | Flag | Meaning | Shown as |
 |---|---|---|
@@ -197,9 +204,10 @@ can gain a scenario and change values in the same run, and one type per Blick wo
 | `value` | some common row differs beyond tolerance | ranked by magnitude |
 | `error` | the module failed to import, the transformation raised, or the output is invalid | exit code 2; never aborts the build; a failed module marks the build incomplete and disables `removed` |
 
-No flags means unchanged. The magnitude is always computed on the common keys, even when `schema`
-is also set. What happens to flagged Blicks after a human has looked at them belongs to the
-deferred accept design.
+No flags means unchanged. The magnitude is computed on the common keys, also when `schema` is set
+because dimension values appeared or vanished; it is `None` when the columns differ, since then
+nothing is compared (amendment of 2026-10-24). What happens to flagged Blicks after a human has
+looked at them belongs to the deferred accept design.
 
 **Tolerance.** `[tool.blicket] tolerance = 1e-5` project-wide, `tolerance=` per Blick, in the
 same relative-to-panel-scale units as the magnitude. A row is *same* when
@@ -208,18 +216,26 @@ rounds and nothing is flushed to zero, so the `digits` key is gone; the toleranc
 solver noise and must be positive and below 1. The defaults are validated in M0: a rerun of remind-mfa on another machine must produce
 zero `value` flags. Small changes are never hidden; they rank low.
 
-**Magnitude** (built-in routine), per measure, bounded to [0, 1]:
+**Magnitude** (built-in routine), of the measure on `y`, bounded to [0, 1]:
 
-- Panel: one combination of filter-dimension values. Split dimensions share a scale inside the
-  panel, which matches the facet rendering.
-- Panel scale s: the maximum absolute value in the panel across both tables, per measure, floored
-  at ε times the Blick-wide scale, so that a panel that is all zero in the baseline cannot rank a
-  1e-9 ripple as a total change.
-- Deviation per row = |current − baseline| / s; magnitude = min(1, max over rows and measures).
-- Stacked plot types use s = max(sum of positives, |sum of negatives|) at each x, so negative
-  flows cannot cancel the stack to zero.
-- Unit-free, bounded, matches what the eye sees on the chart, stable when values cross zero. The
-  formula is versioned in the manifest and will be iterated on real data.
+- Panel: one combination of the filter values, plus the split values when the Blick sets
+  `independent_y` (amendment of 2026-10-24); otherwise split dimensions share a scale inside the
+  panel, as the facets share their y axis. "Panel" names such a scale group here; the viewer
+  section uses the word for a facet.
+- Panel scale s: the maximum absolute value of the measure on `y` in the panel across both tables,
+  over the compared rows (the common keys), floored at ε times the Blick-wide scale, so that a panel
+  that is all zero in the baseline cannot rank a 1e-9 ripple as a total change.
+- Deviation per row = |current − baseline| / s, a row that one table lacks counting as 0;
+  magnitude = min(1, max over rows). Amendment of 2026-10-24: `where` holds the dimension values
+  of the first row, in the table's sort order, that reached the magnitude, or of the stack when a
+  stack (below) changed more.
+- Stacked plot types use s = max(sum of positives, |sum of negatives|) at each x of each panel,
+  so negative flows cannot cancel the stack to zero. Amendment of 2026-10-24: they compare these
+  two sums as well, so a change that moves every layer together counts as much as the stack top
+  moves.
+- Unit-free, bounded, matches what the eye sees on the chart, stable when values cross zero. No
+  formula version is stored: the comparison file records the blicket version that wrote it
+  (amendment of 2026-10-24). The formula will be iterated on real data.
 
 ## Build directory
 

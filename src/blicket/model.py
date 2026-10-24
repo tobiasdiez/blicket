@@ -1,5 +1,5 @@
 """The data model of a project's Blicks: Blicks, groups, the registry, and the shapes reports
-record them in: definitions, entries and table schemas."""
+record them in: definitions and entries."""
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -9,7 +9,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, computed_field
 
 from blicket.errors import Problem, Source
-from blicket.plots import Control, ControlKind, PlotSpec
+from blicket.plots import PlotSpec
+from blicket.schema import Control, ControlKind, TableSchema
 
 type Transform = Callable[[Any], Any]
 
@@ -55,37 +56,6 @@ class BlickDefinition(BaseModel):
     order: dict[str, tuple[Any, ...]]
 
 
-type DimensionType = Literal["string", "integer", "boolean", "date", "datetime"]
-
-
-class Dimension(BaseModel):
-    """A dimension column of a Blick's table: its name, type and values in display order."""
-
-    model_config = ConfigDict(frozen=True)
-
-    name: str
-    dtype: DimensionType
-    values: list[Any]
-
-
-class Measure(BaseModel):
-    """A measure column of a Blick's table: its name and type."""
-
-    model_config = ConfigDict(frozen=True)
-
-    name: str
-    dtype: Literal["float"]
-
-
-class TableSchema(BaseModel):
-    """The columns of a Blick's table, dimensions first."""
-
-    model_config = ConfigDict(frozen=True)
-
-    dimensions: list[Dimension]
-    measures: list[Measure]
-
-
 class BlickEntry(BaseModel):
     """A defined Blick as a report records it: what defines it, its table, and its problems.
 
@@ -118,6 +88,14 @@ class BlickEntry(BaseModel):
     @property
     def status(self) -> Literal["ok", "error"]:
         return "error" if any(p.severity == "error" for p in self.problems) else "ok"
+
+    @property
+    def panels(self) -> tuple[str, ...]:
+        """The dimensions whose value combinations each get their own scale in a comparison: the
+        filters, and the splits when the definition sets ``independent_y``, since each facet
+        then has a y axis of its own."""
+        independent = self.definition is not None and self.definition.independent_y
+        return tuple(c.dimension for c in self.controls if c.kind == "filter" or independent)
 
 
 @dataclass(frozen=True, kw_only=True)

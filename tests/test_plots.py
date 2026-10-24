@@ -1,10 +1,11 @@
 from typing import Any
 
+import polars as pl
 import pytest
 
 import blicket as bk
-from blicket.model import Dimension, Measure, TableSchema
-from blicket.plots import Control, PlotSpec, builtin
+from blicket.plots import PlotSpec, builtin
+from blicket.schema import Control, Dimension, Measure, TableSchema
 
 # For specs that are wrong on purpose, which the type checker would reject.
 spec: Any = PlotSpec
@@ -46,8 +47,6 @@ def test_plot_type_contract() -> None:
     abstract: Any = bk.PlotType
     with pytest.raises(TypeError):
         abstract()
-    with pytest.raises(NotImplementedError, match="do not implement diff"):
-        builtin("line").diff(None, None, {}, [])
 
     class Sankey(bk.PlotType):
         name = "sankey"
@@ -56,8 +55,8 @@ def test_plot_type_contract() -> None:
         def controls(self, schema: Any, mapping: Any) -> list[Any]:
             return []
 
-        def diff(self, baseline: Any, current: Any, mapping: Any, controls: Any) -> Any:
-            return None
+        def diff(self, baseline: Any, current: Any, mapping: Any, panels: Any) -> bk.Change:
+            return bk.Change()
 
     assert PlotSpec(Sankey(), {"source": "from"}).mapping == {"source": "from"}
 
@@ -76,3 +75,29 @@ def test_builtin_controls_filter_every_unbound_dimension() -> None:
             Control(dimension="region", kind="filter", default="USA"),
             Control(dimension="empty", kind="filter", default=None),
         ]
+
+
+def test_builtin_diff_compares_the_stacks_of_the_stacked_types() -> None:
+    # A large layer and two small ones that grow by 1 each: the stack grows by 2 to 14.
+    baseline = pl.DataFrame({"year": [2020] * 3, "kind": ["a", "b", "c"], "value": [10.0, 1, 1]})
+    current = baseline.with_columns(value=pl.Series([10.0, 2, 2]))
+    mapping = {"x": "year", "y": "value", "color": "kind"}
+    magnitudes = {
+        name: builtin(name).diff(baseline, current, mapping, []).magnitude
+        for name in ("line", "bar", "stacked_area", "stacked_bar")
+    }
+    stacked = pytest.approx(2 / 14)
+    assert magnitudes == {"line": 0.1, "bar": 0.1, "stacked_area": stacked, "stacked_bar": stacked}
+
+
+def test_a_stacked_type_without_a_colour_compares_rows_only() -> None:
+    baseline = pl.DataFrame({"year": [2020] * 3, "kind": ["a", "b", "c"], "value": [10.0, 1, 1]})
+    current = baseline.with_columns(value=pl.Series([10.0, 2, 2]))
+    unstacked = builtin("stacked_area").diff(baseline, current, {"x": "year", "y": "value"}, [])
+    assert unstacked.magnitude == 0.1
+
+
+def test_builtin_diff_needs_a_measure_on_y() -> None:
+    table = pl.DataFrame({"year": [2020], "value": [1.0]})
+    with pytest.raises(ValueError, match="the mapping binds no column to y, which line needs"):
+        builtin("line").diff(table, table, {"x": "year"}, [])

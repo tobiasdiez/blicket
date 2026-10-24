@@ -90,8 +90,9 @@ A transformation returns a long table: a polars or pandas frame, an Arrow table,
 `to_df()` or `to_dataframe()`, such as a flodym array or an xarray object. Named levels of a pandas
 index become columns and unnamed levels are dropped; a Series is not accepted. Float columns are
 measures and the others dimensions, so an integer column that holds values needs `measures=[...]`;
-`dims=` overrides the other way. Every measure must be bound to a plot channel, and no two rows may
-share their dimension values, which become strings, integers, booleans, dates or datetimes.
+`dims=` overrides the other way. Every measure must be bound to a plot channel and hold no infinite
+value (NaN counts as null), and no two rows may share their dimension values, which become
+strings, integers, booleans, dates or datetimes.
 
 ```console
 $ blicket build runs/2026-10-22
@@ -142,6 +143,44 @@ The build directory is self-contained: copied to a laptop or a static host such 
 works from any sub-path. Opened from the file system it does not, because browsers do not let a
 page read the files next to it; `blicket serve` is the way. `serve` answers with the viewer of the
 installed blicket first, so an older copy in a build directory does not matter.
+
+## Comparing two tables
+
+The plot types compare a Blick's tables in two builds. The output below comes from a toy project
+with the one Blick above, built for the run above and for a second run in which EAF reached 0.77
+in 2021 instead of 0.7; a project prints a line per Blick.
+
+```python
+from pathlib import Path
+
+import polars as pl
+
+import blicket as bk
+
+old = Path(".blicket/build/<baseline build id>")  # placeholders: two build directories
+new = Path(".blicket/build/<current build id>")
+before = {entry.id: entry for entry in bk.manifest.read(old).blicks}
+for entry in bk.manifest.read(new).blicks:
+    previous = before.get(entry.id)
+    if entry.data is None or previous is None or previous.data is None:
+        continue  # the Blick failed, or has no table in the baseline
+    plot = entry.definition.plot
+    baseline = pl.read_parquet(old / previous.data)
+    current = pl.read_parquet(new / entry.data)
+    change = bk.plots.builtin(plot.type).diff(baseline, current, plot.mapping, entry.panels)
+    print(entry.id, sorted(change.flags), change.magnitude, change.where)
+```
+
+```console
+flows/steel_by_process [] 0.03225806451612916 {'year': 2021, 'process': 'EAF'}
+```
+
+The magnitude is EAF's change in 2021, 0.07, relative to the highest stack of the panel, 2.17.
+`entry.panels` are the dimensions whose values each get their own scale: the filters, and the
+splits of a Blick with `independent_y=True`. `diff` sets the flag `schema` and never `value`: a
+Blick changed when the magnitude exceeds its tolerance (`tolerance` in `[tool.blicket]`, 1e-5 by
+default, or `tolerance=` on the Blick). The magnitude is `None` when no row was compared, and a
+row that one table lacks counts as 0. `bk.Change` describes the fields.
 
 ## Example
 

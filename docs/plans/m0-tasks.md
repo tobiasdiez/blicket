@@ -123,29 +123,18 @@ is visible in `flows/production_by_source` only. Consequence for M0.5: with no r
 `digits` config key has no job; M0.5 removes it (and the `tolerance >= 10^(1 - digits)` rule),
 and the panel-scale floor ε is chosen without a zero floor to respect.
 
-### M0.5 Plot type contract and change detection
+### M0.5 Plot type contract and change detection (built on 2026-10-24)
 
-`controls(schema, mapping)` and `diff(baseline, current, mapping, controls)` on `PlotType`, the
-`Control` and `Change` types (flag set, magnitude, diagnostics with the panels that changed
-most). The shared internal diff routine: outer join on the dimension columns, `schema` with the
-named values, `value` with the tolerance relative to the panel scale, the panel scale with its
-ε floor, the stacked-scale rule for `stacked_area` and `stacked_bar`, the bounded magnitude per
-measure, the formula version in the manifest. The built-ins' `controls`: unbound dimensions
-become filters, `split` where the chart facets, dimensions functionally determined by others are
-hidden, `controls=` and `defaults=` from the Blick definition apply. Panels are defined by the
-filter controls; `split` is the facet.
-
-The Blick-wide scale is the per-measure maximum absolute value over both tables. From M0.3:
-`flows/production_trade_consumption` puts Production (5e8) and sign-crossing net
-imports (−9e7) in one panel (Region split, Flow colour); a panel-relative tolerance turns a 10 %
-change of net imports into about 1 %, so decide per-series versus per-panel scale on this Blick.
-Carried over from the M0.1 architecture review: derive the plot factories from the channel
-declarations (`PlotType.__call__(**mapping) -> PlotSpec`) instead of one hand-written factory per
-built-in, so project plot types in M4 get theirs for free.
-
-Done when the property tests from the architecture's verification list pass: identical tables
-give 0, scaling both leaves the magnitude unchanged, a sign flip gives 1, an added value gives
-`schema`, near-zero and sign-crossing cases behave.
+The plan is `m0-5-plot-type-contract-and-change-detection.md`; `controls` and the `digits` removal
+came with M1. `PlotType.diff(baseline, current, mapping, panels)` compares a Blick's table in two
+builds, through one routine for the four built-ins, which for the stacked types also compares the
+stack sums. It returns a `Change`: `schema` with the columns and dimension values that appeared or
+vanished, the magnitude on the common keys relative to the panel scale (per panel, not per series),
+and `where`, the row that changed most. The core sets `value` from the magnitude and the Blick's
+tolerance, with the panels from `BlickEntry.panels`; no formula version is stored. Deferred: hiding
+dimensions functionally determined by others, until a project needs it; deriving the plot factories
+from the channel declarations (`PlotType.__call__`), when the first project plot type wants a
+factory (M4).
 
 ### M0.6 Store, push and `blicket diff`
 
@@ -164,6 +153,13 @@ and `removed`, and prints the terminal summary (counts per flag, top movers).
 
 Done when pushing twice is a no-op, `blicket diff` of two remind-mfa builds prints a summary, and
 a Blick renamed with an alias is matched to its old table.
+
+From M0.5: `diff` takes the current build's `BlickEntry.panels` and sets only `schema`; the core
+sets `value` when the magnitude exceeds the Blick's tolerance, and `new`, `removed` and `error`. The
+comparison file records the blicket version that wrote it, which names the formula. Cases for
+matching the Blicks of two builds: a baseline entry in error with a fine current one is `new`;
+entries without an id; two error entries sharing a claimed id; `manifest.build.incomplete` as the
+source of the `removed` rule.
 
 ### M0.7 Baseline resolution, `blicket check`, reports and exit codes
 
@@ -187,12 +183,16 @@ Done when a feature branch resolves main's latest build as baseline, a second pr
 own, `check` on an unchanged run against its own previous build exits 0, and a deliberate
 transformation change is flagged with the expected flags and a sensible magnitude.
 
+From M0.5, for the task that adds the viewer's comparison toggle (here) or M4's first plot type
+that does not facet: a colour dimension with many values offered as a split by the plot type's
+`controls`, and a plot type's veto of a `split` the author asked for.
+
 ### M0.8 Measurements, defaults and M0 verification
 
 A fresh remind-mfa run from the current checkout on this machine, checked against a build of an
-older run, confirming or correcting the `tolerance` and `digits` defaults chosen in M0.4;
-measurements recorded in `docs/`. Walk the M0 verification list of the architecture, with the
-cross-machine item waived. A README with installation and the `check` walkthrough.
+older run, confirming or correcting the `tolerance` default; measurements recorded in `docs/`. Walk
+the M0 verification list of the architecture, with the cross-machine item waived. A README with
+installation and the `check` walkthrough.
 
 Done when the fresh rerun produces zero `value` flags at the defaults, and every other M0 item in
 the verification list holds.

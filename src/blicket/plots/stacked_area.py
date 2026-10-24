@@ -7,6 +7,7 @@ class StackedArea(BuiltinPlotType):
     """Areas stacked over a dimension, one layer per colour value."""
 
     name = "stacked_area"
+    stacked = True
     channels = (
         Channel("x", "dimension", required=True, doc="Horizontal axis, usually time."),
         Channel("y", "measure", required=True, doc="Height of each layer."),

@@ -24,6 +24,7 @@ class StackedBar(BuiltinPlotType):
     """Bars stacked at each ``x`` value, one segment per colour value."""
 
     name = "stacked_bar"
+    stacked = True
     channels = _CHANNELS
 
 

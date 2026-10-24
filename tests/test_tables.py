@@ -2,6 +2,7 @@
 
 import datetime as dt
 import io
+import math
 import subprocess
 import sys
 import textwrap
@@ -391,6 +392,11 @@ def test_an_empty_table_is_a_warning() -> None:
             "add it to dims=",
         ),
         (FRAME.with_columns(extra=pl.lit(1.0)), {}, "'extra' are bound to no plot channel"),
+        (
+            FRAME.with_columns(value=pl.Series([math.inf, -math.inf])),
+            {},
+            "measure column 'value' has 2 infinite value(s), which no chart can show",
+        ),
         (
             pl.DataFrame({"year": [2020, 2020], "value": [1.0, 2.0]}),
             {},

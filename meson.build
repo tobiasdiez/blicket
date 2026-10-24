@@ -19,6 +19,7 @@ py.install_sources(
   'src/blicket/manifest.py',
   'src/blicket/model.py',
   'src/blicket/py.typed',
+  'src/blicket/schema.py',
   'src/blicket/serve.py',
   'src/blicket/tables.py',
   'src/blicket/tracebacks.py',
@@ -29,6 +30,7 @@ py.install_sources(
 py.install_sources(
   'src/blicket/plots/__init__.py',
   'src/blicket/plots/_base.py',
+  'src/blicket/plots/_diff.py',
   'src/blicket/plots/bar.py',
   'src/blicket/plots/line.py',
   'src/blicket/plots/stacked_area.py',

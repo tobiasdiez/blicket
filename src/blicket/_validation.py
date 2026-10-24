@@ -13,8 +13,8 @@ from dataclasses import dataclass, field
 from typing import Any, TypedDict, get_args
 
 from blicket.errors import did_you_mean
-from blicket.model import ControlKind
 from blicket.plots import PlotSpec
+from blicket.schema import ControlKind
 
 SEGMENT_RULE = "lowercase letters, digits, '_' and '-', starting with a letter or digit"
 _SEGMENT = re.compile(r"[a-z0-9][a-z0-9_-]*")

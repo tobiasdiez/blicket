@@ -4,17 +4,15 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Literal
+from typing import ClassVar, Literal
 
-from pydantic import BaseModel, ConfigDict
+import polars as pl
 
 from blicket.errors import DefinitionError, did_you_mean
-
-if TYPE_CHECKING:  # blicket.model imports this module
-    from blicket.model import TableSchema
+from blicket.plots._diff import compare
+from blicket.schema import Change, Control, TableSchema
 
 ChannelKind = Literal["dimension", "measure"]
-ControlKind = Literal["filter", "split"]
 
 
 @dataclass(frozen=True)
@@ -25,21 +23,6 @@ class Channel:
     kind: ChannelKind
     required: bool = False
     doc: str = ""
-
-
-class Control(BaseModel):
-    """What the viewer offers for a dimension that the plot leaves unbound.
-
-    A ``filter`` shows the rows of one value at a time, ``default`` first. A ``split`` draws a
-    panel per value; its ``default`` is the value it filters on when the viewer turns it into a
-    filter. ``default`` is ``None`` only for a dimension without values.
-    """
-
-    model_config = ConfigDict(frozen=True)
-
-    dimension: str
-    kind: ControlKind
-    default: Any = None
 
 
 class PlotType(ABC):
@@ -59,14 +42,46 @@ class PlotType(ABC):
 
     @abstractmethod
     def diff(
-        self, baseline: Any, current: Any, mapping: Mapping[str, str], controls: Sequence[Any]
-    ) -> Any:
-        """Compare two tables and return the flags, magnitude and diagnostics."""
+        self,
+        baseline: pl.DataFrame,
+        current: pl.DataFrame,
+        mapping: Mapping[str, str],
+        panels: Sequence[str],
+    ) -> Change:
+        """Compare a Blick's table in two builds.
+
+        Both tables are as a build stores them: the dimension columns first, then the measures,
+        one per measure channel of the mapping, as floats with null for a missing value and no
+        NaN or infinite value; every combination of dimension values once, none of them null;
+        the rows sorted by the dimensions. ``mapping`` holds the channels the Blick's plot binds,
+        and only those, and names columns of the current table; the baseline may lack them or
+        have others, which is a ``schema`` change. ``panels`` are the dimensions whose value
+        combinations each get their own scale; empty means all rows share one.
+
+        The ``Change`` holds:
+
+        - ``flags``: ``schema`` when columns or dimension values appeared or vanished. The caller
+          sets ``value`` from the magnitude and the Blick's tolerance, and the other flags.
+        - ``columns_added`` and ``columns_removed``: the columns only one table has, or whose
+          dtypes differ, with their types in the words of the manifest: ``dimension_type`` of a
+          dimension, ``"float"`` for a measure.
+        - ``values_added`` and ``values_removed``: per dimension, the values only one table has.
+        - ``magnitude``: the largest change of a row both tables have, relative to the scale of
+          its panel, at most 1; ``None`` when the columns differ or no row was compared.
+        - ``where``: the dimension values of the row that changed most, the first in the tables'
+          order on a tie; ``None`` when nothing changed. Below the tolerance it names noise, so
+          it is read with the magnitude.
+        """
 
 
 class BuiltinPlotType(PlotType):
-    """The built-ins declare their channels and share ``controls``; they do not implement
-    ``diff``."""
+    """The built-ins declare their channels and share ``controls`` and ``diff``.
+
+    ``stacked`` says that the layers of the ``color`` channel are stacked, so ``diff`` measures
+    against the height of the stacks and compares their sums as well.
+    """
+
+    stacked: ClassVar[bool] = False
 
     def controls(self, schema: TableSchema, mapping: Mapping[str, str]) -> list[Control]:
         """A filter at the first value in display order for every dimension the mapping leaves
@@ -79,9 +94,18 @@ class BuiltinPlotType(PlotType):
         ]
 
     def diff(
-        self, baseline: Any, current: Any, mapping: Mapping[str, str], controls: Sequence[Any]
-    ) -> Any:
-        raise NotImplementedError("the built-in plot types do not implement diff")
+        self,
+        baseline: pl.DataFrame,
+        current: pl.DataFrame,
+        mapping: Mapping[str, str],
+        panels: Sequence[str],
+    ) -> Change:
+        """Compare the measure on ``y``, as stacks of the ``color`` layers for a stacked type; the
+        other channels play no part."""
+        if "y" not in mapping:
+            raise ValueError(f"the mapping binds no column to y, which {self.name} needs")
+        stacked_by = mapping.get("color") if self.stacked else None
+        return compare(baseline, current, mapping["y"], panels, stacked_by)
 
 
 def _unknown_channel(plot_type: str, channel: str, known: Sequence[str]) -> str:

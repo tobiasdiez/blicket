@@ -13,14 +13,9 @@ from typing import Any
 import polars as pl
 
 from blicket.errors import Kind, Problem
-from blicket.model import Blick, Dimension, DimensionType, Measure, TableSchema
+from blicket.model import Blick
+from blicket.schema import Dimension, Measure, TableSchema, dimension_type
 
-_DIMENSION_TYPES: dict[Any, DimensionType] = {
-    pl.String: "string",
-    pl.Boolean: "boolean",
-    pl.Date: "date",
-    pl.Datetime: "datetime",
-}
 _INDEX_HINT = (
     "an unnamed pandas index level was dropped; if it holds data, name it, "
     'df.index.name = "year" or df.index.names = [...]; if it is only row numbers, call '
@@ -144,10 +139,6 @@ def to_polars(value: Any) -> tuple[pl.DataFrame, bool]:
     )
 
 
-def _dimension_type(dtype: pl.DataType) -> DimensionType | None:
-    return "integer" if dtype.is_integer() else _DIMENSION_TYPES.get(dtype.base_type())
-
-
 def _roles(
     frame: pl.DataFrame, blick: Blick, kinds: Mapping[str, str], errors: list[str]
 ) -> tuple[list[str], list[str]]:
@@ -215,7 +206,7 @@ def _casts(
                 f"{column!r}{on} is a float column that measures= leaves out, so it counts as a "
                 f"dimension; add {column!r} to measures="
             )
-        elif _dimension_type(dtype) is None:
+        elif dimension_type(dtype) is None:
             rejected.add(column)
             where = f" (bound to {bound[column]}=)" if column in bound else ""
             if column in (blick.dims or ()):
@@ -238,7 +229,7 @@ def _casts(
             implied = blick.dims is not None and column not in (blick.measures or ())
             fix = "; with dims= given, every other column is a measure, so add it to dims="
             reason = fix if implied else " and cannot be a measure"
-            errors.append(f"{column!r} is a {_dimension_type(dtype) or dtype} column{reason}")
+            errors.append(f"{column!r} is a {dimension_type(dtype) or dtype} column{reason}")
     return casts, rejected
 
 
@@ -279,7 +270,7 @@ def _check_plot(
                 )
             else:
                 errors.append(
-                    f"{column!r} on {channel}= is a {_dimension_type(dtype) or dtype} column and "
+                    f"{column!r} on {channel}= is a {dimension_type(dtype) or dtype} column and "
                     "cannot be a measure"
                 )
 
@@ -305,6 +296,16 @@ def _check_rows(frame: pl.DataFrame, dims: Sequence[str], errors: list[str]) -> 
             f"{count} rows repeat the dimension values of another row, such as {example}; "
             "aggregate them or add the column that tells them apart"
         )
+
+
+def _check_measures(frame: pl.DataFrame, measures: Sequence[str], errors: list[str]) -> None:
+    """Measures are finite."""
+    for column in measures:
+        if infinite := frame[column].is_infinite().sum():
+            errors.append(
+                f"measure column {column!r} has {infinite} infinite value(s), which no chart can "
+                "show and no comparison can measure; replace them with null or a number"
+            )
 
 
 def _check_options(
@@ -380,6 +381,7 @@ def check(frame: pl.DataFrame, blick: Blick, index_dropped: bool = False) -> Che
         notes.append("the table has no rows")
     if sound:
         _check_rows(frame, dims, errors)
+        _check_measures(frame, measures, errors)
         _check_options(frame, blick, dims, errors, notes)
     problems = (
         *(blick.problem(Kind.TABLE, message) for message in errors),
@@ -393,7 +395,7 @@ def check(frame: pl.DataFrame, blick: Blick, index_dropped: bool = False) -> Che
         frame = frame.sort(dims)
     dimensions = []
     for column in dims:
-        dtype = _dimension_type(frame.schema[column])
+        dtype = dimension_type(frame.schema[column])
         assert dtype is not None, "every dimension type was checked"
         order = blick.order.get(column) or enum_order.get(column, ())
         dimensions.append(Dimension(name=column, dtype=dtype, values=_values(frame[column], order)))

@@ -13,7 +13,7 @@ from blicket import builder, manifest, viewer
 from blicket.builder import NothingToBuild
 from blicket.errors import BlicketError
 from blicket.manifest import Manifest
-from blicket.plots import Control
+from blicket.schema import Control, Dimension, Measure, TableSchema
 from tests.support import VALUES, commit_all, git, line_of, make_build_project, make_run, one_blick
 
 BLICKS = """\
@@ -370,6 +370,31 @@ def chosen(run):
 def derived(run):
     return table(run)
 """
+
+
+def test_panels_are_the_filters_and_with_independent_y_axes_the_splits() -> None:
+    schema = TableSchema(
+        dimensions=[
+            Dimension(name=name, dtype="string", values=["a"])
+            for name in ("scenario", "region", "kind")
+        ],
+        measures=[Measure(name="value", dtype="float")],
+    )
+
+    def entry(independent_y: bool) -> bk.BlickEntry:
+        blick = bk.Blick(
+            id="t/x",
+            title="X",
+            group="t",
+            plot=bk.plots.line(x="kind", y="value"),
+            independent_y=independent_y,
+            controls={"region": "split"},
+            transform=lambda run: run,
+        )
+        return blick.entry(columns=schema)
+
+    assert entry(independent_y=False).panels == ("scenario",)
+    assert entry(independent_y=True).panels == ("scenario", "region")
 
 
 def test_controls_are_derived_from_the_table_and_the_requests(tmp_path: Path) -> None:

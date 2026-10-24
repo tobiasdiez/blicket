@@ -110,27 +110,18 @@ in `data_out/` must come from the remind-mfa commit the Blicks are written again
 
 Done when `blicket build` works on each of the example runs and the timings are recorded.
 
-### M0.4 Canonical form and content hashes
+### M0.4 Canonical form and content hashes (dropped on 2026-10-24)
 
-Input from M0.3: on the fresh runs (remind-mfa HEAD, input data 2.8.0) two unchanged reruns
-produce byte-identical raw tables for all Blicks, so there is no rerun noise to measure on one
-machine. The deliberately changed run (`collection_rate` × 0.9) is visible in
-`flows/production_by_source`; the two production tables differ from the reruns by a relative
-3.9e-16 only, float rounding that counts as a second noise sample. `flows/production_by_polymer`
-holds 573 tiny negatives (down to −1.25e-7), 881 positives below 1e-12 of the maximum and 1604 rows
-under 1e-9 of it, while genuine small values start near 1e-7 of the maximum: the zero floor belongs
-near 1e-9 to 1e-8 of the Blick scale, not 1e-6. The canonical form fixes the dimension column
-order, so a rewrite of a Blick (`pd.concat` puts the naming dimension first) does not change
-hashes.
-
-Typed sort on the dimension columns, N significant digits, the zero floor relative to the
-Blick-wide scale, Parquet with zstd, and a content hash per table that is independent of the
-input library. Designed against the flodym tables from M0.3, not synthetic data. A measurement on the example
-runs on raw and canonical tables, recorded in the plan.
-
-Done when the same table hashes identically twice and from polars and pandas alike, the two
-unchanged reruns hash identically and the changed run differs in exactly the two production
-tables at the proposed `digits` default, and a test pins the format.
+Dropped by Tobias after its plan review: the two unchanged example reruns are byte-identical, so
+there is no rerun noise to suppress on one machine; the comparison's tolerance (M0.5) handles
+small differences at diff time; and a writer-independent content hash would only have kept build
+ids stable across polars upgrades. Stored tables stay as the checks leave them (dimension columns
+first, rows sorted by the dimension columns, normalised dtypes), hashed as Parquet bytes. The
+facts the plan review measured stay in `m0-4-canonical-form.md` for M0.5: noise in the production
+tables reaches 1.3e-15 of the column scale, the smallest genuine value 2e-8 of it; the changed run
+is visible in `flows/production_by_source` only. Consequence for M0.5: with no rounding, the
+`digits` config key has no job; M0.5 removes it (and the `tolerance >= 10^(1 - digits)` rule),
+and the panel-scale floor ε is chosen without a zero floor to respect.
 
 ### M0.5 Plot type contract and change detection
 
@@ -144,7 +135,8 @@ become filters, `split` where the chart facets, dimensions functionally determin
 hidden, `controls=` and `defaults=` from the Blick definition apply. Panels are defined by the
 filter controls; `split` is the facet.
 
-From M0.3: `flows/production_trade_consumption` puts Production (5e8) and sign-crossing net
+The Blick-wide scale is the per-measure maximum absolute value over both tables. From M0.3:
+`flows/production_trade_consumption` puts Production (5e8) and sign-crossing net
 imports (−9e7) in one panel (Region split, Flow colour); a panel-relative tolerance turns a 10 %
 change of net imports into about 1 %, so decide per-series versus per-panel scale on this Blick.
 Carried over from the M0.1 architecture review: derive the plot factories from the channel
@@ -212,6 +204,13 @@ the verification list holds.
 3. **No second-machine run.** The cross-machine noise measurement in the architecture's
    verification list is waived; M0 measures reruns on one machine.
 4. **Default ids keep the function name as is** (`flows/steel_by_process`); see the M0.1 plan.
+
+## M1, pulled ahead (2026-10-24)
+
+Tobias chose to build the viewer before the comparison tasks; the plan is `m1-viewer.md`. The
+comparison tasks M0.5–M0.7 follow it and add the overview's change colouring and the comparison
+toggle to the viewer. Feature suggestion recorded there: a switch to turn off the copying of the
+viewer into build directories.
 
 ## Not in M0
 

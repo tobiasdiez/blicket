@@ -36,7 +36,7 @@ monorepo: the Python package at the root, `viewer/` (Nuxt app), `examples/`, `do
 ```
 run directory
   → project loader(paths) → run object + RunInfo (run id, profile, input fingerprint, model commit and branch, dirty flag)
-  → Blick transformations → per-Blick tidy tables → canonical form (typed sort, rounding)
+  → Blick transformations → per-Blick tidy tables → checked tables (roles, typed sort)
   → baseline resolution from the store
   → change flags + magnitude per Blick, via the plot type's diff
   → build dir: manifest.json + current tables + comparison output per baseline + viewer
@@ -49,7 +49,7 @@ push → copies the build into the store (immutable, keyed by build id)
 ```
 <store>/
   builds/<build-id>/
-    manifest.json             spec version, RunInfo, commit, branch, dirty flag, timestamp, tolerance and digits, per-Blick definitions, schemas and hashes
+    manifest.json             spec version, RunInfo, commit, branch, dirty flag, timestamp, tolerance, per-Blick definitions, schemas and hashes
     compare/<baseline-id>/    flags, magnitude and the baseline tables of changed Blicks, per baseline (amendment of 2026-10-23)
     blicks/<id>.parquet       canonical tables, zstd
 ```
@@ -202,10 +202,9 @@ deferred accept design.
 
 **Tolerance.** `[tool.blicket] tolerance = 1e-5` project-wide, `tolerance=` per Blick, in the
 same relative-to-panel-scale units as the magnitude. A row is *same* when
-|current − baseline| / s ≤ tolerance, with s the panel scale. Canonical form rounds to N
-significant digits (project-wide, default 6; tolerance must be at least 10^(1−N)) and flushes
-values below a floor relative to the Blick-wide scale to zero, so solver noise around zero does not
-survive. The defaults are validated in M0: a rerun of remind-mfa on another machine must produce
+|current − baseline| / s ≤ tolerance, with s the panel scale. Amendment of 2026-10-24: nothing
+rounds and nothing is flushed to zero, so the `digits` key is gone; the tolerance alone absorbs
+solver noise and must be positive and below 1. The defaults are validated in M0: a rerun of remind-mfa on another machine must produce
 zero `value` flags. Small changes are never hidden; they rank low.
 
 **Magnitude** (built-in routine), per measure, bounded to [0, 1]:
@@ -225,7 +224,7 @@ zero `value` flags. Small changes are never hidden; they rank low.
 
 ```
 my-model/
-  pyproject.toml            [tool.blicket]: blick globs, loader, store path, tolerance, digits
+  pyproject.toml            [tool.blicket]: blick globs, loader, store path, tolerance
   blicks/**.py              Blick code
   blicks/plot_types/        project plot types (.py + .js)
   .blicket/                 gitignored
@@ -368,7 +367,7 @@ loops. TypeScript types for the manifest are hand-written for now.
   and magnitude, `blicket check`, `blicket diff <build> <build>`, `report.md`, exit codes. No
   viewer. Dogfood on remind-mfa under `examples/remind-mfa/` with the pickled runs in
   `data_out/`, with two measurements: loader time, and the noise level across reruns and
-  machines, which sets the tolerance and digits defaults.
+  machines, which sets the tolerance default.
 - **M1 Catalog.** Nuxt viewer with overview, Blick page with controls and comparison toggle,
   browser halves of the built-ins, `blicket build`, `blicket serve <dir>`.
 - **M2 Dev loop.** `blicket dev` with code reload, SSE, run-directory polling. Scatter and table

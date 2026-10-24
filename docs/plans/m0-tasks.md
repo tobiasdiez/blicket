@@ -21,13 +21,15 @@ file in this directory when it starts; the first one is
   on the cluster). blicket's own dependencies (typer, pydantic, polars 2.0) have 3.15 wheels.
   Decided on 2026-10-23: the floor is 3.14 for now and is raised once remind-mfa's dependency
   chain ships 3.15 wheels.
-- Three `plastics_SSP2_h12` runs made minutes apart from the same code sit in `data_out/`. Their
-  pickles differ byte-wise, so they are a real rerun-noise sample for one machine. Tobias dropped
-  the cross-machine requirement on 2026-10-23; M0 measures noise on this machine only.
+- `data_out/` holds runs produced on 2026-10-24 from remind-mfa HEAD `a7c389a` with input data
+  2.8.0 (see `data_out/RUNS.md`): two unchanged reruns and one with `collection_rate` scaled by
+  0.9. The reruns' raw tables are byte-identical, so there is no rerun noise on this machine.
+  Tobias dropped the cross-machine requirement on 2026-10-23. (The original three runs of
+  2026-10-22 came from an older remind-mfa and were deleted.)
 - The pickled model exposes `future_mfa` and `historical_mfa`, flodym `MFASystem`s with 52 flows,
-  5 stocks and 8 dimensions (Time, Historical Time, Region, Element, Material, Type, End Use,
-  Driver Scenario). `FlodymArray.to_df()` yields a long table, the input form the architecture
-  already planned for.
+  5 stocks and 8 dimensions (Time, Historical Time, Region, Element, Polymer, Polymer Type, End
+  Use, Driver Scenario). `FlodymArray.to_df()` yields a long table with a named MultiIndex, and
+  blicket accepts the array itself. A pickle loads only with the remind-mfa version that wrote it.
 - Toolchain on this machine: uv 0.13.5, meson and ninja installed, CPython 3.14.8 as system
   Python.
 
@@ -48,7 +50,8 @@ module is reported with exit code 2 without hiding the other Blicks.
 ### M0.2 Loader, RunInfo and the headless build
 
 `RunInfo` (run id, profile, fingerprint, model commit and branch, dirty flag) and the loader
-protocol (`loader = "pkg.mod:load_run"`, called once per build with the run selection). The Blick
+protocol (`load_run` in `blicketconf.py` by convention, or `loader = "pkg.mod:load_run"`, called
+once per build with the run selection). The Blick
 output table as a polars frame: conversion from polars, pandas, pyarrow, xarray and flodym,
 dimension and measure inference with `dims=` and `measures=`, `order=`, validation (unbound
 measures and duplicate dimension keys are an `error`). Running all transformations, capturing
@@ -91,29 +94,43 @@ manifest as an `error` instead of aborting, and the manifest validates against i
 
 ### M0.3 remind-mfa adapter and first Blicks
 
-`examples/remind-mfa/` as its own uv project depending on blicket (path dependency, not editable,
-refreshed with `uv sync --reinstall-package blicket`; an editable install would share
-meson-python's build directory with the root environment and break on rebuilds) and on remind-mfa.
-A loader that reads `model.pickle` from `<timestamp>_<model>_<scenario>_<regions>` folders,
-parsed from the right so scenarios with underscores survive, and returns the run object plus
-`RunInfo` (run id from the folder name, profile from model, scenario and regions, fingerprint of
-the pickle, model commit when the checkout is available). Five to eight Blicks ported from
-`visualize_common` and the plastics `visualize_custom`: use stock by end use, consumption,
-production, trade, end-use split, GDP per capita, polymer splits. Loader and transformation times
-recorded in the plan file. The plan file also sketches
-the dataset protocol the builder will need in M2, on paper only, as the architecture asks.
+`examples/remind-mfa/` as its own virtual uv project depending on blicket (path dependency, not
+editable; blicket's pyproject gets `cache-keys` so the example sees source changes) and on
+remind-mfa (editable path dependency on the sibling checkout, with a dependency override for
+polars, which remind-mfa's tree pins below 2.0). A loader that reads `model.pickle` from the run folder and
+returns the run object plus `RunInfo` (run id from the folder name, profile from the pickle's
+config, fingerprint of the pickle; no model commit, since the pickle carries none and the
+checkout's HEAD is not the commit that produced a run). Ten Blicks ported from
+`visualize_common` and the plastics `visualize_custom`: use stock by region and by end use,
+consumption, production, production versus net imports versus consumption, end-use split, GDP
+per capita, scenario rates, polymer splits (trade waits for a sign convention in M0.5 or M4).
+Loader and transformation times recorded in the plan file. The plan file also sketches the
+dataset protocol the builder will need in M2, on paper only, as the architecture asks. The runs
+in `data_out/` must come from the remind-mfa commit the Blicks are written against.
 
-Done when `blicket build` works on each of the three example runs and the timings are recorded.
+Done when `blicket build` works on each of the example runs and the timings are recorded.
 
 ### M0.4 Canonical form and content hashes
 
+Input from M0.3: on the fresh runs (remind-mfa HEAD, input data 2.8.0) two unchanged reruns
+produce byte-identical raw tables for all Blicks, so there is no rerun noise to measure on one
+machine. The deliberately changed run (`collection_rate` × 0.9) is visible in
+`flows/production_by_source`; the two production tables differ from the reruns by a relative
+3.9e-16 only, float rounding that counts as a second noise sample. `flows/production_by_polymer`
+holds 573 tiny negatives (down to −1.25e-7), 881 positives below 1e-12 of the maximum and 1604 rows
+under 1e-9 of it, while genuine small values start near 1e-7 of the maximum: the zero floor belongs
+near 1e-9 to 1e-8 of the Blick scale, not 1e-6. The canonical form fixes the dimension column
+order, so a rewrite of a Blick (`pd.concat` puts the naming dimension first) does not change
+hashes.
+
 Typed sort on the dimension columns, N significant digits, the zero floor relative to the
 Blick-wide scale, Parquet with zstd, and a content hash per table that is independent of the
-input library. Designed against the flodym tables from M0.3, not synthetic data. A first noise
-measurement across the three local reruns on raw and canonical tables, recorded in the plan.
+input library. Designed against the flodym tables from M0.3, not synthetic data. A measurement on the example
+runs on raw and canonical tables, recorded in the plan.
 
-Done when the same table hashes identically twice and from polars and pandas alike, the three
-reruns hash identically at the proposed `digits` default, and a fixture test pins the format.
+Done when the same table hashes identically twice and from polars and pandas alike, the two
+unchanged reruns hash identically and the changed run differs in exactly the two production
+tables at the proposed `digits` default, and a test pins the format.
 
 ### M0.5 Plot type contract and change detection
 
@@ -127,6 +144,9 @@ become filters, `split` where the chart facets, dimensions functionally determin
 hidden, `controls=` and `defaults=` from the Blick definition apply. Panels are defined by the
 filter controls; `split` is the facet.
 
+From M0.3: `flows/production_trade_consumption` puts Production (5e8) and sign-crossing net
+imports (−9e7) in one panel (Region split, Flow colour); a panel-relative tolerance turns a 10 %
+change of net imports into about 1 %, so decide per-series versus per-panel scale on this Blick.
 Carried over from the M0.1 architecture review: derive the plot factories from the channel
 declarations (`PlotType.__call__(**mapping) -> PlotSpec`) instead of one hand-written factory per
 built-in, so project plot types in M4 get theirs for free.
@@ -157,7 +177,10 @@ a Blick renamed with an alias is matched to its old table.
 
 Carried over from the M0.2 architecture review: `compare/<baseline-id>/` cannot be enumerated over
 HTTP on static hosting, so `check` also writes `compare/index.json` additively, listing the
-baselines a build was compared against, for the viewer.
+baselines a build was compared against, for the viewer. From M0.3: one example project will hold
+Blicks for several models (plastics, steel, cement) with one loader and one profile per model, so
+a Blick that does not apply to a run (a plastics Blick on a steel run) needs a status distinct
+from `error` and `removed`; design it together with `removed`.
 
 Candidates by run profile and git ancestry of the Blick repository's HEAD
 (`git merge-base --is-ancestor`), `--against <build-id>` and `--against <branch>`, most recent

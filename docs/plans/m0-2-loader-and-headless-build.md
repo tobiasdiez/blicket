@@ -50,7 +50,7 @@ canonicalises it.
 3. `blicket build data_out/2026-10-22--10-18-17_plastics_SSP2_h12` prints
 
    ```
-   run 2026-10-22--10-18-17_plastics_SSP2_h12 · profile plastics_SSP2_h12 · HEAD 0a6b858 (dirty) · loaded in 1.5 s
+   run 2026-10-22--10-18-17_plastics_SSP2_h12 · profile plastics_SSP2_h12 · blicks at 0a6b858 (dirty) · loaded in 1.5 s
    7 Blicks: 6 built · 1 error
    build 3f9a1c2b7d4e6f80 → .blicket/build/3f9a1c2b7d4e6f80
 

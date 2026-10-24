@@ -114,7 +114,9 @@ object is reusable across Blicks in one process; what it is comes from the adapt
 The adapter is project code, the counterpart of Storybook's `main.ts`. Nothing domain-specific
 ships with blicket for now; a standard IAMC adapter is a later option.
 
-- **Loader.** `loader = "mymodel.blicket:load_run"` receives a run selection (paths, labels) and
+- **Loader.** `load_run` in `blicketconf.py` next to `pyproject.toml` (found by convention, like
+  pytest's `conftest.py`; amendment of 2026-10-24), or the function named by
+  `loader = "mymodel.blicket:load_run"`, receives a run selection (paths, labels) and
   returns the run object and a `RunInfo` (run id, profile name such as "baseline" or "policy",
   fingerprint of the input files, model commit and branch if known). The loader defines what a
   run is: it may collect several model runs, for example several REMIND scenario folders, into
@@ -124,7 +126,8 @@ ships with blicket for now; a standard IAMC adapter is a later option.
   default labels, which the dev-mode run picker uses. Defaults come from the project config; a
   selection changed in the dev session is not written back.
 - **Dataset protocol, optional.** Code Blicks only need the run object. The Blick builder needs
-  a run object that also implements a small protocol: the dimensions and their values, an
+  a run object that also implements a small protocol: the quantities (flows, stocks, parameters,
+  variables) with their units, per quantity the dimensions and their values, an
   optional hierarchy per dimension (a tree plus summation groups, for IAMC variable names
   with the plus-sign convention), display order, a style registry per dimension value, and
   `select(...)` returning a labelled long table for a set of dimension values. The core's
@@ -407,7 +410,7 @@ the loader takes a run directory and returns the run object plus `RunInfo`.
 
    ```
    $ blicket dev output/baseline-2026-10-23
-   run baseline-2026-10-23 · profile baseline · HEAD a1b2c3 (dirty) · baseline: build 7f3e (main, 2026-10-20)
+   run baseline-2026-10-23 · profile baseline · blicks at a1b2c3 (dirty) · baseline: build 7f3e (main, 2026-10-20)
    48 Blicks: 41 unchanged · 5 value · 1 schema · 1 new · 0 errors
    top movers: flows/steel-by-process 0.31 · stocks/buildings 0.12 · flows/scrap 0.04
    viewer: http://127.0.0.1:8765/#/

@@ -1,0 +1,44 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+
+/* Primary as text (the active tab, the current breadcrumb) a shade darker in light mode, for
+   4.5:1 on the surface. */
+:root {
+  --ui-primary: var(--ui-color-primary-700);
+}
+
+.dark {
+  --ui-primary: var(--ui-color-primary-400);
+}
+
+/* The export menu of a chart: room above the chart, so it never covers the legend, and its button
+   in the page's ink in both colour modes. */
+.vega-embed.has-actions {
+  padding-top: 2.25rem;
+}
+
+.vega-embed summary {
+  /* vega-embed shows it faintly until hovered, which a touch screen never does. */
+  opacity: 1 !important;
+  background: var(--ui-bg) !important;
+  border-color: var(--ui-border-accented) !important;
+  color: var(--ui-text-muted) !important;
+  box-shadow: none !important;
+}
+
+.vega-embed summary svg {
+  fill: currentColor;
+}
+
+.vega-embed .vega-actions {
+  background: var(--ui-bg) !important;
+  border-color: var(--ui-border-accented) !important;
+}
+
+.vega-embed .vega-actions a {
+  color: var(--ui-text) !important;
+}
+
+.vega-embed .vega-actions a:hover {
+  background: var(--ui-bg-elevated) !important;
+}

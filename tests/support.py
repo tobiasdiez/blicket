@@ -104,3 +104,11 @@ import blicket as bk
 def values(run):
     return pl.DataFrame({"year": [2020, 2021, 2022], "value": run["values"]})
 """
+
+
+def make_viewer(directory: Path, text: str = "viewer") -> Path:
+    """A generated viewer: ``index.html`` and an asset, both naming ``text``."""
+    (directory / "_nuxt").mkdir(parents=True)
+    (directory / "index.html").write_text(f"<html>{text}</html>")
+    (directory / "_nuxt" / f"{text}.js").write_text(f"// {text}")
+    return directory

@@ -36,41 +36,59 @@ def _by_flow(arrays: dict[str, fd.FlodymArray]) -> pd.DataFrame:
 
 @bk.blick(
     title="Consumption by end use",
+    unit="t per year",
     plot=bk.plots.stacked_area(x="Time", y="value", color="End Use"),
     controls={"Region": "split"},  # one panel per Region
 )
 def consumption_by_end_use(run: PlasticsModel) -> fd.FlodymArray:
-    """The inflow into the use stock per region and end use, in t per year."""
+    """Plastics entering use per region and end use, in t per year.
+
+    Summed over elements and polymers.
+    """
     return run.future_mfa.stocks["use"].inflow.sum_to(("t", "r", "u"))
 
 
 @bk.blick(
     title="Production by polymer",
+    unit="t per year",
     plot=bk.plots.stacked_area(x="Time", y="value", color="Polymer"),
     controls={"Region": "split"},  # one panel per Region
 )
 def production_by_polymer(run: PlasticsModel) -> fd.FlodymArray:
-    """Primary and mechanically recycled production per region and polymer, in t per year."""
+    """Production per region and polymer, in t per year.
+
+    Newly polymerized and mechanically recycled together, summed over elements.
+    """
     return _production(run).sum_to(("t", "r", "p"))
 
 
 @bk.blick(
     title="Production by source",
+    unit="t per year",
     plot=bk.plots.stacked_area(x="Time", y="value", color="Flow"),
     controls={"Region": "split"},  # one panel per Region
 )
 def production_by_source(run: PlasticsModel) -> pd.DataFrame:
-    """Primary production and mechanically recycled polymers per region, in t per year."""
+    """Production per region, newly polymerized (primary) or mechanically recycled, in t per year.
+
+    Summed over elements and polymers.
+    """
     return _by_flow(_production_sources(run))
 
 
 @bk.blick(
     title="Production, net imports and consumption",
+    unit="t per year",
     plot=bk.plots.line(x="Time", y="value", color="Flow"),
     controls={"Region": "split"},  # one panel per Region
 )
 def production_trade_consumption(run: PlasticsModel) -> pd.DataFrame:
-    """Production, net imports of primary plastics and products, and consumption, in t per year."""
+    """Production, net imports and consumption per region, in t per year.
+
+    Production is primary and mechanically recycled; net imports, imports minus exports and so
+    negative for net exporters, are of primary plastics and of manufactured products; consumption
+    is the plastics entering use. Summed over elements and polymers.
+    """
     mfa = run.future_mfa
     flows = mfa.flows
     return _by_flow(
@@ -90,9 +108,14 @@ def production_trade_consumption(run: PlasticsModel) -> pd.DataFrame:
 
 @bk.blick(
     title="End-use split",
+    unit="fraction",
     plot=bk.plots.stacked_area(x="Time", y="value", color="End Use"),
     controls={"Region": "split"},  # one panel per Region
 )
 def end_use_split(run: PlasticsModel) -> fd.FlodymArray:
-    """Each end use's share of consumption per region, as a fraction."""
+    """Each end use's share of the plastics entering use, per region and year.
+
+    Derived from consumption by end use, summed over elements and polymers; the shares sum to 1
+    over end uses.
+    """
     return consumption_by_end_use(run).get_shares_over("u")

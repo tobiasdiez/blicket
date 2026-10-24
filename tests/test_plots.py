@@ -3,7 +3,8 @@ from typing import Any
 import pytest
 
 import blicket as bk
-from blicket.plots import PlotSpec, builtin
+from blicket.model import Dimension, Measure, TableSchema
+from blicket.plots import Control, PlotSpec, builtin
 
 # For specs that are wrong on purpose, which the type checker would reject.
 spec: Any = PlotSpec
@@ -45,8 +46,6 @@ def test_plot_type_contract() -> None:
     abstract: Any = bk.PlotType
     with pytest.raises(TypeError):
         abstract()
-    with pytest.raises(NotImplementedError, match="do not implement controls"):
-        builtin("line").controls(None, {})
     with pytest.raises(NotImplementedError, match="do not implement diff"):
         builtin("line").diff(None, None, {}, [])
 
@@ -61,3 +60,19 @@ def test_plot_type_contract() -> None:
             return None
 
     assert PlotSpec(Sankey(), {"source": "from"}).mapping == {"source": "from"}
+
+
+def test_builtin_controls_filter_every_unbound_dimension() -> None:
+    schema = TableSchema(
+        dimensions=[
+            Dimension(name="year", dtype="integer", values=[2020, 2021]),
+            Dimension(name="region", dtype="string", values=["USA", "EUR"]),
+            Dimension(name="empty", dtype="string", values=[]),
+        ],
+        measures=[Measure(name="value", dtype="float")],
+    )
+    for name in ("line", "stacked_area", "bar", "stacked_bar"):
+        assert builtin(name).controls(schema, {"x": "year", "y": "value"}) == [
+            Control(dimension="region", kind="filter", default="USA"),
+            Control(dimension="empty", kind="filter", default=None),
+        ]

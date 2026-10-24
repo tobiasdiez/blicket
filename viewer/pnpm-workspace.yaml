@@ -1,0 +1,4 @@
+# esbuild's install script checks its platform binary; vue-demi's is for Vue 2, not needed.
+allowBuilds:
+  esbuild: true
+  vue-demi: false

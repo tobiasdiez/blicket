@@ -11,7 +11,7 @@ import pytest
 import typer
 from typer.testing import CliRunner, Result
 
-from blicket import builder, cli, manifest
+from blicket import builder, cli, manifest, viewer
 from tests.support import (
     PROJECTS,
     VALUES,
@@ -20,6 +20,7 @@ from tests.support import (
     make_build_project,
     make_project,
     make_run,
+    make_viewer,
     one_blick,
 )
 
@@ -199,7 +200,7 @@ def test_abort_and_click_errors_are_no_bugs(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_every_command_maps_failures_to_exit_2(monkeypatch: pytest.MonkeyPatch) -> None:
-    arguments = {"list": [], "build": ["run"]}
+    arguments = {"list": [], "build": ["run"], "serve": []}
     group: Any = typer.main.get_command(cli.app)
     assert set(group.commands) == set(arguments), "add the new command here"
     monkeypatch.setattr(cli, "_root", _raise(RuntimeError("boom")))
@@ -215,8 +216,8 @@ def test_usage_error_exits_2() -> None:
 
 def test_help_and_version() -> None:
     result = runner.invoke(cli.app, ["list", "--help"], terminal_width=200)
-    assert "[tool.blicket]" in result.stdout
-    assert "Exit codes: 0 success, 2 errors." in result.stdout
+    assert "Show the project's Blicks and any definition problems." in result.stdout
+    assert "Exit codes" not in result.stdout  # the README has them
     assert invoke("--version").stdout == f"blicket {importlib.metadata.version('blicket')}\n"
 
 
@@ -264,6 +265,16 @@ def test_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     )
     again = build("runs/a").stdout.splitlines()[2]
     assert again == f"build {build_id} → .blicket/build/{build_id} (built before, left as it was)"
+
+
+def test_a_rebuild_says_when_it_refreshes_the_viewer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build_project(tmp_path, monkeypatch)
+    assert build("runs/a").exit_code == 0
+    monkeypatch.setenv(viewer.VIEWER_ENV, str(make_viewer(tmp_path / "two", "two")))
+    assert build("runs/a").stdout.splitlines()[2].endswith("(built before, viewer refreshed)")
+    assert build("runs/a").stdout.splitlines()[2].endswith("(built before, left as it was)")
 
 
 def test_a_rebuild_prints_its_own_load_time(
@@ -358,6 +369,14 @@ def test_build_failures_are_one_line_on_stderr(
     assert (result.exit_code, result.stdout) == (2, "")
     assert result.stderr.startswith(message)
     assert result.stderr.count("\n") == 1
+
+
+def test_build_needs_a_viewer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    build_project(tmp_path, monkeypatch)
+    monkeypatch.delenv(viewer.VIEWER_ENV)
+    result = invoke("build", "runs/a")
+    assert (result.exit_code, result.stdout) == (2, "")
+    assert result.stderr.startswith("error: no viewer found: install a blicket release")
 
 
 def test_loader_failure_is_one_line_on_stderr(

@@ -17,7 +17,7 @@ from blicket.errors import BlicketError, ConfigError, DefinitionError, LoaderErr
 from blicket.loader import RunSelection, fingerprint
 from blicket.manifest import Manifest, RunInfo
 from blicket.model import Blick, BlickEntry, Group, Registry
-from blicket.plots import Channel, PlotSpec, PlotType
+from blicket.plots import Channel, Control, PlotSpec, PlotType
 
 __all__ = [
     "Blick",
@@ -27,6 +27,7 @@ __all__ = [
     "Channel",
     "Config",
     "ConfigError",
+    "Control",
     "DefinitionError",
     "Group",
     "LoaderError",

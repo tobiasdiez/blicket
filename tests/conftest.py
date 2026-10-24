@@ -5,8 +5,8 @@ from types import ModuleType
 
 import pytest
 
-from blicket import definitions
-from tests.support import PROJECTS
+from blicket import definitions, viewer
+from tests.support import PROJECTS, make_viewer
 
 
 def _from(module: ModuleType, bases: tuple[Path, ...]) -> bool:
@@ -36,3 +36,12 @@ def isolated_imports(tmp_path_factory: pytest.TempPathFactory) -> Iterator[None]
         sys.modules.setdefault(name, module)
     definitions._records.clear()
     definitions._records.update(records)
+
+
+@pytest.fixture(autouse=True)
+def installed_viewer(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """The viewer of every test, named by ``BLICKET_VIEWER``; never the installation's own."""
+    monkeypatch.setenv(viewer.VIEWER_ENV, str(make_viewer(tmp_path_factory.mktemp("viewer"))))
+    monkeypatch.setattr(viewer, "_bundled", lambda: None)

@@ -2,8 +2,8 @@
 
 Storybook for scientific model outputs. A *Blick* is a named view on a model run: a function that
 turns the run into a table, and how to plot that table. blicket discovers a project's Blicks,
-lists them with every problem it finds in their definitions, and builds their tables for a model
-run. The idea behind it is in
+lists them with every problem it finds in their definitions, builds their tables for a model run,
+and shows them in a web viewer. The idea behind it is in
 [docs/concept.md](docs/concept.md), the design in [docs/architecture.md](docs/architecture.md).
 
 ## Defining Blicks
@@ -27,11 +27,17 @@ bk.group("flows", title="Material flows", tags=["mfa"])
 
 @bk.blick(
     title="Steel flows by process",
+    unit="t per year",
     plot=bk.plots.stacked_area(x="year", y="value", color="process"),
 )
 def steel_by_process(run):
     return run["flows"]
 ```
+
+`unit=` names the unit of the measure; the viewer puts it on the y axis and in the tooltips.
+`independent_y=True` is for Blicks whose panels differ by orders of magnitude: each panel of a
+split then gets its own y axis by default; otherwise the panels share one, and the viewer's toggle
+changes either. Both are part of the Blick's definition in the manifest.
 
 ```console
 $ blicket list
@@ -42,8 +48,10 @@ flows  Material flows  [mfa]
 ```
 
 `blicket list` looks for the project by walking up from the working directory; `--project PATH`
-names the project directory instead. Exit codes: 0 success, 2 errors of any kind. `-v` shows
-tracebacks, `--json` prints the report as JSON.
+names the project directory instead. `-v` shows tracebacks, `--json` prints the report as JSON.
+
+Exit codes, for every command: 0 success (for `serve`, stopped with Ctrl-C), 2 errors of any kind,
+a Blick that fails to build included.
 
 ## Building a run
 
@@ -96,16 +104,44 @@ The first line names the run and its profile, the commit of the repository that 
 (`blicks at`, marked `(dirty)` with uncommitted changes), and the loader's wall time.
 
 The build directory holds `manifest.json`, which describes the run, the project's settings and git
-state, every Blick's definition, table schema and problems, and one `blicks/<id>.parquet` per Blick
-that built. The build id is a hash of the manifest without the timestamps and timings, the blicket
-version, tracebacks, the run's id, paths and model checkout, the repository's branch and dirty flag,
-and where the Blicks are defined; it covers the Blicks, their tables and problems, the settings, the
-run's profile and fingerprint, and the commit. Building the same run with the same Blicks at the
-same commit gives the same id again and leaves the directory as it is. A transformation that raises,
-or a table that fails a check, is listed under `errors` like a problem of `blicket list`; the other
-Blicks are built all the same, and the exit code is 2. `--json` prints the manifest, `--out DIR`
-puts the build directory into `DIR` instead of `.blicket/build`, and `-v` shows tracebacks. blicket
-gives `.blicket/` a `.gitignore`, so builds never show up in `git status`.
+state, every Blick's definition, table schema, controls and problems, one `blicks/<id>.parquet` per
+Blick that built, and a copy of the viewer (`index.html`, `favicon.svg`, `_nuxt/`, and a
+`viewer-version` marker listing the copied files). The build id is a hash of the manifest without
+the timestamps and timings, the blicket version, tracebacks, the run's id, paths and model
+checkout, the repository's branch and dirty flag, where the Blicks are defined, and the controls
+blicket derives for them; it covers the Blicks' definitions, their tables and problems, the
+settings, the run's profile and fingerprint, and the commit. Building the same run with the same
+Blicks at the same commit gives the same id again and leaves the directory as it is. A
+transformation that raises, or a table that fails a check, is listed under `errors` like a problem
+of `blicket list`; the other Blicks are built all the same, and the exit code is 2. `--json`
+prints the manifest, `--out DIR` puts the build directory into `DIR` instead of `.blicket/build`,
+and `-v` shows tracebacks. blicket gives `.blicket/` a `.gitignore`, so builds never show up in
+`git status`. A build of the same id keeps its manifest and tables; only the files of its copy of
+the viewer are replaced when it differs from the installed one (`(built before, viewer
+refreshed)`).
+
+## Looking at a build
+
+```console
+$ blicket serve .blicket/build/5d0c3f1e2a9b8c47
+viewer: http://127.0.0.1:8765/#/   (Ctrl-C stops)
+```
+
+Without an argument, `blicket serve` serves the build of the project made last; `--port`,
+`--host` and `--open` (open the browser) do what they say. It serves nothing outside the build
+directory and the viewer. The overview lists the Blicks by group with a
+search box; a Blick's page shows its chart, its controls and a data tab with the rows shown.
+Every dimension that the plot does not bind to a channel gets a control: a filter that shows one
+value at a time, starting at the first value in display order or at `defaults={dim: value}`, or,
+with `controls={dim: "split"}`, one panel per value. The control state is in the URL
+(`#/blick/flows/steel_by_process?region=EU&_split=scenario`, `_y` for the y axes, `_tab=data` for
+the data tab), so a link reproduces the view. A chart exports as PNG or SVG, the rows shown as
+CSV.
+
+The build directory is self-contained: copied to a laptop or a static host such as GitHub Pages, it
+works from any sub-path. Opened from the file system it does not, because browsers do not let a
+page read the files next to it; `blicket serve` is the way. `serve` answers with the viewer of the
+installed blicket first, so an older copy in a build directory does not matter.
 
 ## Example
 
@@ -124,6 +160,24 @@ uv run pytest
 uv run ruff check . && uv run ruff format --check .
 uv run ty check
 ```
+
+The viewer is a Nuxt app in [viewer/](viewer); its README says how to work on it, with Node and
+pnpm. A development installation has no viewer of its own: generate one and point
+`BLICKET_VIEWER` at it, as an absolute path or relative to where blicket runs, for instance from
+`examples/remind-mfa`:
+
+```console
+$ (cd ../../viewer && pnpm install && pnpm generate)
+$ export BLICKET_VIEWER=../../viewer/.output/public
+```
+
+`blicket build` then copies it into build directories and `blicket serve` serves it; both need a
+viewer and stop with an error without one. `BLICKET_VIEWER` wins over a bundled viewer, so a new
+viewer can be tried with a release install. The release wheel bundles the viewer: after
+`uv sync`, `uv build --wheel -Csetup-args=-Dviewer=enabled` runs `pnpm install --frozen-lockfile`
+and `pnpm generate` and installs the site as `blicket/_viewer`. The meson option `viewer` (in
+`meson.options`) is off by default, so `uv sync` and the editable install need no Node; a wheel
+built from the sdist without the option, or without network for pnpm, has no viewer.
 
 blicket is built with meson-python without build isolation, so that the editable install made by
 `uv sync` can rebuild on import. The build tools therefore live in the `build` dependency group,

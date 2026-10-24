@@ -1,8 +1,10 @@
-"""The headless build: load a run, run every Blick's transformation, write a build directory.
+"""The build: load a run, run every Blick's transformation, write a build directory.
 
-A build directory holds ``manifest.json`` and ``blicks/<id>.parquet`` for every Blick that built.
-It is assembled in a temporary directory next to its destination and renamed to its id at the
-end, so it appears complete or not at all; an existing directory of the same id is left alone.
+A build directory holds ``manifest.json``, ``blicks/<id>.parquet`` for every Blick that built,
+and a copy of the viewer. It is assembled in a temporary directory next to its destination and
+renamed to its id at the end, so it appears complete or not at all. An existing directory of the
+same id keeps its manifest and tables; only its copy of the viewer is replaced when it is not the
+installed one.
 """
 
 import contextlib
@@ -19,7 +21,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from blicket import manifest, tables
+from blicket import manifest, tables, viewer
 from blicket.config import PYPROJECT, load_config
 from blicket.discovery import discover
 from blicket.errors import NOWHERE, BlicketError, ConfigError, Kind, Problem
@@ -41,15 +43,18 @@ class NothingToBuild(BlicketError):
 class Build:
     """A build directory, the manifest this build computed, and the project root it was built from.
 
-    ``existed`` when a build of the same id was there already. That directory is left as it was,
-    so its manifest may hold another run id, paths, branch, dirty flag and timings than
-    ``manifest``, which has this build's, with its sources relative to the root as written.
+    ``existed`` when a build of the same id was there already. That directory keeps its manifest
+    and tables, so its manifest may hold another run id, paths, branch, dirty flag and timings
+    than ``manifest``, which has this build's, with its sources relative to the root as written.
+    ``viewer`` is ``True`` when the installed viewer was copied into the directory, ``False``
+    when its copy was current already.
     """
 
     path: Path
     manifest: Manifest
     existed: bool
     root: Path
+    viewer: bool
 
 
 def build(
@@ -60,14 +65,16 @@ def build(
 ) -> Build:
     """Build the run at ``paths`` with the Blicks of the project at ``project``.
 
-    The build directory goes into ``out``, by default ``<project>/.blicket/build``. Problems with
-    Blicks and files are recorded in the manifest. Raises ``NothingToBuild`` when no Blick can be
-    built, and another ``BlicketError`` when the config, a run path or the loader fails or the
-    build cannot be written, all before a build directory exists. What the loader and the
-    transformations print goes to stderr.
+    The build directory goes into ``out``, by default ``<project>/.blicket/build``, with the
+    viewer ``viewer.find`` returns. Problems with Blicks and files are recorded in the manifest.
+    Raises ``NothingToBuild`` when no Blick can be built, and another ``BlicketError`` when the
+    config, ``BLICKET_VIEWER``, a run path or the loader fails or the build cannot be written,
+    all before a build directory exists, or when the viewer of an existing build cannot be
+    replaced. What the loader and the transformations print goes to stderr.
     """
     root = Path(project).resolve()
     config = load_config(root)
+    site = viewer.find()
     target = config.loader
     if target is None:
         if not (root / f"{DEFAULT_LOADER_MODULE}.py").is_file():
@@ -128,12 +135,13 @@ def build(
             existed = final.exists()
             if existed:
                 manifest.read(final)  # raises when the existing build is damaged
-            else:
+            copied = viewer.copy(site, final if existed else temporary)
+            if not existed:
                 temporary.rename(final)
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary, ignore_errors=True)
-    return Build(final, Manifest.model_validate_json(text), existed, root)
+    return Build(final, Manifest.model_validate_json(text), existed, root, copied)
 
 
 def _git(root: Path, *args: str) -> str:

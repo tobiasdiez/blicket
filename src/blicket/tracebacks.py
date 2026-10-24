@@ -4,7 +4,6 @@ Discovery, the loader and the build use these, so an exception raised by a Blick
 loader and by a transformation is located and trimmed alike.
 """
 
-import os
 import traceback
 from pathlib import Path
 
@@ -13,9 +12,10 @@ from blicket.errors import Source
 
 def in_project(location: str, root: Path) -> bool:
     """Whether ``location`` is a real file under ``root``, outside its hidden directories."""
-    if not os.path.isabs(location):  # pseudo-filenames such as <frozen importlib._bootstrap>
+    path = Path(location)
+    if not path.is_absolute():  # pseudo-filenames such as <frozen importlib._bootstrap>
         return False
-    path = Path(location).resolve()
+    path = path.resolve()
     if not path.is_relative_to(root):
         return False
     return not any(part.startswith(".") for part in path.relative_to(root).parts)

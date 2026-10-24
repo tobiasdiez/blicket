@@ -291,6 +291,20 @@ def test_files_outside_the_root_and_explicit_config(tmp_path: Path) -> None:
     assert list(registry.blicks) == ["y/y"]
 
 
+def test_a_symlinked_blick_file_is_where_its_link_is(tmp_path: Path) -> None:
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    (shared / "steel.py").write_text(one_blick("flows/steel"))
+    root = make_project(tmp_path, {"blicks/other.py": one_blick("flows/other")})
+    (root / "blicks" / "steel.py").symlink_to(shared / "steel.py")
+    registry = discover_clean(root)
+    steel = registry.blicks["flows/steel"]
+    assert (steel.module, steel.source and steel.source.file) == (
+        "blicks.steel",
+        root.resolve() / "blicks" / "steel.py",
+    )
+
+
 # ---------------------------------------------------------------------------------------------
 # Imports, processes and the purge
 

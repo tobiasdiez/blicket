@@ -38,3 +38,36 @@ jobs:
           cd tests/projects/minimal
           "$RUNNER_TEMP/smoke/bin/blicket" list > "$RUNNER_TEMP/list.txt"
           diff expected-list.txt "$RUNNER_TEMP/list.txt"
+
+  viewer:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6 # the version from packageManager in viewer/package.json
+        with:
+          package_json_file: viewer/package.json
+          cache: true
+          cache_dependency_path: viewer/pnpm-lock.yaml
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+      - uses: astral-sh/setup-uv@v10
+        with:
+          enable-cache: true
+      - name: Test, type-check and lint (oxlint) the viewer
+        working-directory: viewer
+        run: |
+          pnpm install --frozen-lockfile
+          pnpm test
+          pnpm typecheck
+          pnpm lint
+      # The release wheel: meson generates the viewer and installs it as blicket/_viewer. blicket
+      # builds without isolation (see [tool.uv]), so the build tools must be in the environment.
+      - run: uv sync --only-group build
+      - run: uv build --wheel -Csetup-args=-Dviewer=enabled
+      - name: The installed wheel finds its viewer
+        run: |
+          uv venv "$RUNNER_TEMP/viewer"
+          uv pip install --python "$RUNNER_TEMP/viewer" dist/*.whl
+          env -u BLICKET_VIEWER "$RUNNER_TEMP/viewer/bin/python" -c "from blicket import viewer; viewer.find()"

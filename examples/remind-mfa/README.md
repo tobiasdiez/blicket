@@ -95,11 +95,15 @@ a commit whose `pyproject.toml` differs, `uv run` rewrites `uv.lock` (do not com
 
 ## Building
 
+`build` copies the viewer into every build directory, and blicket installed from a checkout has
+none of its own, so `build` and `serve` stop with an error until you generate one and set
+`BLICKET_VIEWER` as the [root README](../../README.md#development) shows. Then:
+
 ```console
 $ uv run blicket build ../../data_out/2026-10-24--01-25-28_plastics_SSP2_h12
-run 2026-10-24--01-25-28_plastics_SSP2_h12 · profile plastics_SSP2_h12 · blicks at e46088d · loaded in 666 ms
+run 2026-10-24--01-25-28_plastics_SSP2_h12 · profile plastics_SSP2_h12 · blicks at e7a2a23 (dirty) · loaded in 949 ms
 10 Blicks: 10 built
-build 804f5a5bea3deb5d → .blicket/build/804f5a5bea3deb5d
+build dfa92620f1ae4726 → .blicket/build/dfa92620f1ae4726
 ```
 
 "loaded in" includes importing remind-mfa. The commit after "blicks at" is the one of the blicket
@@ -117,6 +121,16 @@ $ uv run python -c "import polars as pl; print(pl.read_parquet('.blicket/build/<
 
 CI does not build this example: it needs the remind-mfa checkout and the runs, which are not in
 the repository.
+
+## Looking at a build
+
+`uv run blicket serve` serves the build made last; a build made with an older viewer gets the
+current one on its next `build`.
+
+The Blicks give their units with `unit=`. The flows split by Region into one panel per region on a
+shared y axis, so the regions compare by size; "Scenario rates" shows one `Parameter` at a time,
+starting at `collection_rate`, and its panels, when split, each have their own y axis
+(`independent_y=True`), since the rates differ by orders of magnitude.
 
 ## Developing blicket
 

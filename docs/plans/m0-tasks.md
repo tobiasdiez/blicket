@@ -212,6 +212,58 @@ comparison tasks M0.5–M0.7 follow it and add the overview's change colouring a
 toggle to the viewer. Feature suggestion recorded there: a switch to turn off the copying of the
 viewer into build directories.
 
+Notes from the M1 architecture review for the tasks that follow:
+
+- **M0.5 start.** A leaf `schema.py` holding `Dimension`, `Measure`, `TableSchema`, `Control` (and
+  then `Change`), imported by both `plots/_base.py` and `model.py`, instead of the `TYPE_CHECKING`
+  reach-back from the plot base into `model`. The per-Blick default for independent y axes is done
+  in M1 (`independent_y` on the Blick, in the definition and the manifest); the magnitude's panel
+  is filter plus split values when a Blick sets it. A colour dimension with more than eight values
+  may be offered as a split by the plot type's `controls`, so the chart draws single-colour panels
+  instead of repeated hues. `controls_for` applies the author's `controls=` kind unconditionally,
+  so a plot type that does not facet cannot veto a split yet.
+- **M0.7 start.** The comparison rendering concatenates baseline and current rows with a `__source`
+  column and lets each layer filter on it (Vega-Lite does not partition a layer with its own data
+  inside a facet); `frame`/`prepare`/`magnitude` in `viewer/app/plots/layout.ts` read
+  `args.table`, so the comparison passes the concatenated rows there, with no signature change. The
+  viewer fetches tables as `./<data>?<hash>` already, which content-addresses baseline tables
+  under `compare/` too.
+- **M2 start.** `serve.py`'s handler, server and runner are replaced by the Starlette dev app
+  (`serve` becomes `dev` without the watcher); `build_directory`, `newest_build`, the lookup rule
+  (installed viewer first) and the no-cache set survive. `useManifest` gains `reload()` for the
+  SSE refetch that keeps control state.
+- **M4 start.** The plot module contract passes `theme` as a tokens object (mode, categorical
+  palette, ink, Vega config) and the registry becomes `resolvePlotType(name): Promise`, so a module
+  loaded from the build directory needs no bundled import. Whether the helpers in `layout.ts` and
+  `encodings.ts` become public waits for the second project plot type; rendering and its queue
+  live in `BlickChart.vue`.
+
+## Backlog from Tobias's first look at the viewer (2026-10-24)
+
+Not scheduled; each is a task of its own or joins the milestone named.
+
+- **Viewer test data.** The viewer needs a small build directory of its own (a manifest and a few
+  tiny tables under `viewer/`), so that it can be developed and tried without an example project
+  and a model run; the dev server would serve it when no `blicket serve` is running.
+- **"defined at blicks/drivers.py:23" opens the file in the IDE.** A link the editor understands
+  (`vscode://file/<absolute path>:<line>` or the like); needs the project root, which the manifest
+  does not hold today (M2's dev server knows it).
+- **The plot type chips are not helpful.** `line`, `stacked_area` and the role chips on the
+  overview and the Blick page say nothing a researcher needs; drop them or replace them with
+  something that does (the unit, the last change).
+- **The overview needs a revamp for REMIND's scale.** Hundreds of Blicks will not work as one
+  grouped list. Likely shape: the user, not the project, pins a few favourites, which the overview
+  shows in detail (chart included); the rest stays searchable. User-level state, so stored in the
+  browser or a user config, not in the project.
+- **The header's "Blick code e7a2a23".** It is the git commit of the project that defines the
+  Blicks (the manifest's `repository`), not blicket's version; the example lives inside the blicket
+  repository, so the two coincide there. The label does not say that; rename it (for example
+  "project at e7a2a23") or drop it from the header and keep it in the footer.
+- **A "World" panel for regional splits.** Panels by region want an aggregated panel next to the
+  regions (the sum, named "World"). Best supported by blicket itself with a helper, the name and
+  the aggregation (sum) given per Blick or once in the project config, so every regional Blick
+  gets it without repeating the code.
+
 ## Not in M0
 
 The viewer and `blicket serve` (M1), the dev server, hot reload and the Blick builder with its

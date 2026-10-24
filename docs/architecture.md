@@ -77,7 +77,8 @@ push → copies the build into the store (immutable, keyed by build id)
 
 A labelled long table: dimension columns (string, int, date) and one or more measure columns
 (float). Dimensions are inferred as the non-float columns; `dims=` / `measures=` override. Parquet
-keeps the types. Units, if present, are a dimension column. The combination of dimension values
+keeps the types. The charted measure has one unit per Blick (`unit=`, amendment of 2026-10-24); a
+table mixing units keeps them in a dimension column. The combination of dimension values
 must be unique per row; duplicates are an `error`. Raw run data stays opaque behind the project
 loader.
 
@@ -158,7 +159,7 @@ class StackedArea(bk.PlotType):
 ```ts
 // stacked_area.js — browser half, loaded by dynamic import; framework-agnostic, never sees Vue
 export default {
-  render({ el, table, mapping, state }) { ... },
+  render({ el, table, schema, mapping, unit, state, theme, name }) { ...; return cleanup },
   renderComparison({ el, current, baseline, mapping, state, change }) { ... },
 }
 ```
@@ -240,11 +241,16 @@ my-model/
 The build directory is the portable unit: it can be copied from a cluster to a laptop and viewed
 there with `blicket serve <dir>`. Relative paths in the manifest, a Nuxt build generated with a
 relative base URL, and hash routing mean a build directory works on GitHub Pages, under subpaths,
-on plain file servers, and after being copied.
+on plain file servers, and after being copied. Amendment of 2026-10-24 (M1): `blicket build` copies
+the installed viewer into the build directory with a `viewer-version` marker; the viewer files are
+not in the manifest and do not affect the id, and building an existing id again replaces only them,
+when the installed viewer differs. `build` and `serve` require a viewer: the bundled one, or the
+one `BLICKET_VIEWER` names in a checkout.
 
 ## Viewer (Nuxt)
 
-- `ssr: false`, `router.options.hashMode: true`, generated with `NUXT_APP_BASE_URL=./`; the
+- `ssr: false`, `router.options.hashMode: true`, generated with a relative base URL (`./`, the
+  default of `nuxt.config.ts` outside the dev server); the
   generated `.output/public` is installed into the wheel by a meson custom target. Node and Nuxt
   are maintainer-only dependencies.
 - Overview: Blicks ranked by magnitude and coloured by flags, filters by flag, tag and group, the
@@ -255,6 +261,13 @@ on plain file servers, and after being copied.
 - The viewer's own dev server proxies a Python-built build directory during viewer development.
 - Opening from `file://` is blocked by browsers for `fetch`; `blicket serve` is the answer, a
   folder picker a later nicety.
+- Amendment of 2026-10-24 (M1): the build derives each Blick's controls through the plot type and
+  records them in the manifest (`BlickEntry.controls`), so the viewer only reads them; panels of
+  split dimensions share their y axis unless the Blick sets `independent_y=True`, and a toggle
+  changes either. A plot type's browser half is `{ render }` alone. `blicket serve` is a
+  stdlib static server that answers from the installed viewer first, then from the build
+  directory; the viewer's dev server proxies the build's files to it. The viewer uses Nuxt UI
+  with its icons bundled, and the built-ins' browser halves are bundled with it.
 
 ## Development loop
 
@@ -369,7 +382,8 @@ loops. TypeScript types for the manifest are hand-written for now.
   `data_out/`, with two measurements: loader time, and the noise level across reruns and
   machines, which sets the tolerance default.
 - **M1 Catalog.** Nuxt viewer with overview, Blick page with controls and comparison toggle,
-  browser halves of the built-ins, `blicket build`, `blicket serve <dir>`.
+  browser halves of the built-ins, `blicket build`, `blicket serve <dir>`. Amendment of
+  2026-10-24: built ahead of M0.5–M0.7, so without the comparison toggle, which comes with them.
 - **M2 Dev loop.** `blicket dev` with code reload, SSE, run-directory polling. Scatter and table
   plot types. The Blick builder with run picker, variable picker, channel mapping and item
   selection, on the remind-mfa adapter. This completes job 1.

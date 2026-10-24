@@ -261,7 +261,8 @@ the built-ins skips that plugin path for now, deliberately.
 `digits` leaves the config, the manifest's `config` block, `check_tolerance`, the assembly's use
 of it, the tests and the docs (the list from the M0.5 review); `tolerance` must be positive and
 below 1 for the project and per Blick. Nothing rounds (M0.4 was dropped), so the key had no job.
-It changes every build id and the manifest shape; `spec` stays `0.1`, since no build has been
+It changes every build id and the manifest shape; `spec` stays `0.1` (later raised to 0.2, see
+the Deviations), since no build has been
 stored anywhere yet, and the commit says so.
 
 ## Affected areas
@@ -297,6 +298,15 @@ stored anywhere yet, and the commit says so.
   Blick, check the controls, the URL state, the data tab and dark mode; load the generated site
   from a sub-path on a plain static server to confirm the relative base URL and hash routing.
 
+Checked by hand (2026-10-24, headless Chrome on the three example builds, after each review round):
+all ten Blicks render without console errors or requests outside the server; the Parameter
+filter, splitting and un-splitting, the y-axis toggle and its per-Blick default write the URL and a
+deep link restores them, an unknown value shows a notice; the line and bar tooltips list every
+series with its unit; a legend click highlights a series and a second click clears it; the data
+tab sorts, opens from `_tab=data`, and fits 390 px; dark mode with 12 and 13 colours; PNG export
+on the opaque surface; the site loads from a sub-path of `python -m http.server` with deep links;
+opened from `file://` it says to serve the folder.
+
 ## Out of scope
 
 Change colouring, the comparison toggle and the diagnostics strip (M0.5–M0.7); the dev server
@@ -327,3 +337,53 @@ Sankey (M4); thumbnails on the overview; a `file://` folder picker; end-to-end b
   returning a cleanup; the built-ins are bundled with the viewer, the plugin path is M4.
 - Tables are fetched whole; the overview is a grouped list with search.
 - `digits` is removed in passing, as its own commit.
+
+## Deviations
+
+Recorded by the implementation, 2026-10-24, after review rounds 1 to 3 and Tobias's follow-up of
+2026-10-24.
+
+- No `buildUrl` runtime value: the app always reads `./manifest.json`, in development through the
+  dev server's proxy to `blicket serve`. `nuxt.config.ts` makes `./` the default base URL outside
+  the dev server, through `NUXT_APP_BASE_URL` (setting `app.baseURL` alone still generates
+  `/_nuxt/` paths), so `pnpm generate` needs no environment variable.
+- A split control carries a default too: the value it filters on when the viewer un-splits it.
+- The viewer copy records its files in the `viewer-version` marker (version on line one, the files
+  after) and a refresh removes exactly those, so later files in a build directory survive. Nuxt's
+  `200.html` and `404.html` are not generated.
+- Tables are fetched as `./<data>?<hash>` and cached by hash, so a table of another build served
+  on the same port is never shown from the browser cache.
+- `BLICKET_VIEWER` wins over the bundled viewer, to try a new viewer with a release install.
+  `serve` picks the build made last by the manifests' `created_at`.
+- Tooltips are Vega-Lite's own: a pivot of the colour (and line type) on the crosshair rule for
+  lines and areas, one per bar; numbers in tooltips and the data tab are formatted per value.
+  Past eight colour values the hues repeat; lines get a dash per round, unless the dash shows the
+  line type; there is no opacity channel. A click on a legend entry highlights its series.
+- Reproducibility is not byte-exact: the prerender timestamp in `index.html` varies; the assets
+  are content-hashed and the marker is a content hash.
+- Two definition fields, and the manifest spec goes to 0.2 (builds of 0.1 lack the derived
+  controls; the viewer asks to rebuild them): `unit=` on `@bk.blick`, shown on the y axis and in
+  tooltips, and `independent_y=` on `@bk.blick`, the default of the y-axis toggle. The panel
+  layout is the core's (splits are controls it derives for every plot type), hence a Blick
+  option, not a plot option.
+- A plot type's browser half is `{ render }` alone, as the architecture states; its arguments
+  gain `unit` and `name`, the export file name. The built-ins export their spec builders for the
+  tests. The shared code planned as `plots/vega.ts` is split into `viewer/app/plots/layout.ts`
+  (channels, data, panels, sizes), `encodings.ts` (encodings, legend, tooltips) and `embed.ts`.
+- vega-embed shows its export menu (PNG at twice the size on the opaque surface, and SVG; not
+  `actions: false`), and the Blick page offers the rows shown as CSV.
+- No fixed `buildId`: it appeared only in `index.html`, which differs per generate anyway.
+- Numbers use three significant digits on axes and in tooltips, six in the data tab, with SI
+  prefixes from 1,000 up and plain digits below, so a share reads 0.25 and not 250m.
+- `meson.options` holds the `viewer` option. CI builds the viewer wheel after
+  `uv sync --only-group build`, since blicket builds without isolation.
+- pnpm 12 refuses unreviewed install scripts: `viewer/pnpm-workspace.yaml` allows esbuild's and
+  denies vue-demi's. `pnpm lint` is oxlint (Tobias), with the TypeScript, Vue, unicorn and import
+  plugins; type-aware rules would need TypeScript 7, which vue-tsc 3.3 cannot use. Nuxt re-creates the `viewer/dist` link on every
+  generate, so its `.gitignore` line stays.
+- The definition's source is shown as `file:line` text, not a link: the manifest holds no absolute
+  path to link to.
+- The viewer is required (Tobias, after a first look): `viewer.find()` returns the viewer or
+  raises, so `build` and `serve` stop with an error without one. This retracts two sentences of
+  the plan above: "`build` says so once in the summary and `serve` serves the data with a hint",
+  and the lookup's "else none".

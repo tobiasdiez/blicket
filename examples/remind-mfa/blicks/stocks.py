@@ -11,18 +11,26 @@ bk.group("stocks", title="In-use stocks")
 
 @bk.blick(
     title="In-use stock by region",
+    unit="t",
     plot=bk.plots.line(x="Time", y="value", color="Region"),
 )
 def use_by_region(run: PlasticsModel) -> fd.FlodymArray:
-    """Plastics in use per region, summed over elements, polymers and end uses, in t."""
+    """Plastics in use per region, in t.
+
+    Summed over elements, polymers and end uses.
+    """
     # flodym dimension letters: t Time, r Region, u End Use
     return run.future_mfa.stocks["use"].stock.sum_to(("t", "r"))
 
 
 @bk.blick(
     title="Global in-use stock by end use",
+    unit="t",
     plot=bk.plots.stacked_area(x="Time", y="value", color="End Use"),
 )
 def use_by_end_use(run: PlasticsModel) -> fd.FlodymArray:
-    """Plastics in use worldwide per end use, in t."""
+    """Plastics in use worldwide per end use, in t.
+
+    Summed over regions, elements and polymers.
+    """
     return run.future_mfa.stocks["use"].stock.sum_to(("t", "u"))

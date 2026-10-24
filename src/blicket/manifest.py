@@ -8,7 +8,8 @@ on. The name ``compare`` inside a build directory is reserved.
 
 The build id is content-addressed over the whole manifest except what ``NOT_IN_ID`` leaves out:
 timestamps and timings, the blicket version, tracebacks, the run's id, paths and model checkout,
-the repository's branch and dirty flag, and where the Blicks are defined. A rerun that differs
+the repository's branch and dirty flag, where the Blicks are defined, and the controls blicket
+derives from their definitions and columns. A rerun that differs
 only in those is the same build, so its existing directory is reused. Equal content without
 problems gives the same id on any machine and from any working directory; a build with problems
 embeds exception text, so its id is reproducible on one machine only. Ids compare only within
@@ -26,7 +27,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from blicket.errors import BlicketError, Problem
 from blicket.model import BlickEntry, Group
 
-SPEC = "0.1"
+SPEC = "0.2"
 MANIFEST = "manifest.json"
 
 NOT_IN_ID: dict[str, Any] = {
@@ -45,6 +46,9 @@ NOT_IN_ID: dict[str, Any] = {
             "module": True,
             "source": True,
             "problems": {"__all__": {"traceback"}},
+            # derived from the definition and the columns, which are in the id, by blicket's
+            # code, which is not
+            "controls": True,
         }
     },
     "problems": {"__all__": {"traceback"}},

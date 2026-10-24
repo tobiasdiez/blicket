@@ -47,7 +47,12 @@ dev = [
 no-build-isolation-package = ["blicket"]
 default-groups = ["build", "dev"]
 # What uv watches to rebuild blicket where it is a path dependency, as in examples/remind-mfa.
-cache-keys = [{ file = "pyproject.toml" }, { file = "meson.build" }, { file = "src/**/*.py" }]
+cache-keys = [
+    { file = "pyproject.toml" },
+    { file = "meson.build" },
+    { file = "meson.options" },
+    { file = "src/**/*.py" },
+]
 
 [tool.ruff]
 line-length = 100

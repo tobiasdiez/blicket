@@ -9,10 +9,11 @@ import jsonschema
 import pytest
 
 import blicket as bk
-from blicket import builder, manifest
+from blicket import builder, manifest, viewer
 from blicket.builder import NothingToBuild
 from blicket.errors import BlicketError
 from blicket.manifest import Manifest
+from blicket.plots import Control
 from tests.support import VALUES, commit_all, git, line_of, make_build_project, make_run, one_blick
 
 BLICKS = """\
@@ -95,8 +96,10 @@ def test_statuses_and_files(project: Path) -> None:
     assert ok.hash.startswith("parquet-sha256:")
     files = sorted(p.relative_to(built.path).as_posix() for p in built.path.rglob("*.*"))
     assert files == [
+        "_nuxt/viewer.js",
         "blicks/views/from_pandas.parquet",
         "blicks/views/from_polars.parquet",
+        "index.html",
         "manifest.json",
     ]
     written = json.loads((built.path / "manifest.json").read_text())
@@ -142,6 +145,16 @@ def test_nothing_is_written_without_a_buildable_blick(tmp_path: Path) -> None:
     with pytest.raises(NothingToBuild) as info:
         bk.build(root, [make_run(tmp_path / "run")])
     assert [p.kind for p in info.value.registry.errors] == ["import"]
+    assert not (root / ".blicket").exists()
+
+
+def test_nothing_is_written_without_a_viewer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = make_build_project(tmp_path, {"blicks/a.py": VALUES})
+    monkeypatch.delenv(viewer.VIEWER_ENV)
+    with pytest.raises(BlicketError, match="no viewer found: install a blicket release"):
+        bk.build(root, [make_run(tmp_path / "run")])
     assert not (root / ".blicket").exists()
 
 
@@ -325,3 +338,65 @@ def test_manifest_validates_against_its_schema_and_round_trips(project: Path) ->
     text = (bk.build(project, ["runs/a"]).path / "manifest.json").read_text()
     jsonschema.validate(json.loads(text), Manifest.model_json_schema(mode="serialization"))
     assert json.loads(Manifest.model_validate_json(text).model_dump_json()) == json.loads(text)
+
+
+CONTROLS = """\
+import itertools
+
+import polars as pl
+
+import blicket as bk
+
+KEYS = list(itertools.product(["low", "high"], ["USA", "EUR"], ["a", "b"], [2020, 2021]))
+
+
+def table(run):
+    columns = dict(zip(["scenario", "region", "kind", "year"], zip(*KEYS)))
+    return pl.DataFrame({**columns, "value": [float(i) for i in range(len(KEYS))]})
+
+
+@bk.blick(
+    plot=bk.plots.line(x="year", y="value"),
+    unit="t",
+    independent_y=True,
+    controls={"region": "split", "kind": "filter"},
+    defaults={"scenario": "low", "kind": ["b", "a"], "region": "USA"},
+)
+def chosen(run):
+    return table(run)
+
+
+@bk.blick(plot=bk.plots.line(x="year", y="value", color="region"), defaults={"kind": "c"})
+def derived(run):
+    return table(run)
+"""
+
+
+def test_controls_are_derived_from_the_table_and_the_requests(tmp_path: Path) -> None:
+    root = make_build_project(tmp_path, {"blicks/views.py": CONTROLS})
+    built = bk.build(root, [make_run(tmp_path / "run")])
+    chosen, derived = built.manifest.blicks
+    # Values in display order, sorted here: high before low, EUR before USA.
+    assert chosen.controls == (
+        Control(dimension="scenario", kind="filter", default="low"),
+        Control(dimension="region", kind="split", default="USA"),
+        Control(dimension="kind", kind="filter", default="b"),
+    )
+    # Bound dimensions have no control; a default the table lacks falls back to the first value.
+    assert derived.controls == (
+        Control(dimension="scenario", kind="filter", default="high"),
+        Control(dimension="kind", kind="filter", default="a"),
+    )
+    written = json.loads((built.path / "manifest.json").read_text())
+    assert written["blicks"][1]["controls"][1] == {
+        "dimension": "kind",
+        "kind": "filter",
+        "default": "a",
+    }
+    assert written["blicks"][1]["definition"]["controls"] == {}
+    # The unit and the y axis default are part of the definition.
+    definition = written["blicks"][0]["definition"]
+    assert (definition["unit"], definition["independent_y"]) == ("t", True)
+    # The controls follow from the definition and the columns; the id leaves them out.
+    written["blicks"][0]["controls"] = []
+    assert Manifest.model_validate(written).content_id(root) == built.manifest.build.id

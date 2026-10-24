@@ -1,0 +1,3 @@
+# The generated viewer, installed as blicket/_viewer; needs Node and pnpm. Off for development,
+# where BLICKET_VIEWER points at viewer/.output/public; on for the release wheel.
+option('viewer', type: 'feature', value: 'disabled', description: 'Generate and install the viewer')

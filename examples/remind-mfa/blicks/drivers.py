@@ -22,6 +22,7 @@ RATES = (
 
 @bk.blick(
     title="GDP per capita",
+    unit="2005 USD PPP per person",
     plot=bk.plots.line(x="Time", y="value", color="Region"),
 )
 def gdp_per_capita(run: PlasticsModel) -> fd.FlodymArray:
@@ -31,22 +32,36 @@ def gdp_per_capita(run: PlasticsModel) -> fd.FlodymArray:
 
 @bk.blick(
     title="Scenario rates",
+    unit="fraction",
     plot=bk.plots.line(x="Time", y="value", color="Region"),
-    controls={"Parameter": "split"},  # one panel per Parameter
+    # The rates differ by orders of magnitude, so split into panels each gets its own axis.
+    independent_y=True,
+    defaults={"Parameter": "collection_rate"},  # Parameter is a filter: one rate at a time
 )
 def scenario_rates(run: PlasticsModel) -> pd.DataFrame:
-    """The end-of-life and production rates the scenario sets, per region, as fractions."""
+    """Six rates the scenario sets per region and year, each a fraction.
+
+    Collection is the share of end-of-life plastics collected; landfill, mechanical recycling and
+    chemical recycling are shares of the collected waste; the bio-based and DACCU rates are the
+    shares of primary high-value chemicals production made from biomass and from carbon captured
+    from the air.
+    """
     parameters = run.future_mfa.parameters
     return pd.concat({name: parameters[name].to_df() for name in RATES}, names=["Parameter"])
 
 
 @bk.blick(
     title="Polymer splits",
+    unit="fraction",
     plot=bk.plots.stacked_bar(x="Region", y="value", color="Polymer"),
     controls={"End Use": "split"},  # one panel per End Use
 )
 def polymer_splits(run: PlasticsModel) -> fd.FlodymArray:
-    """Polymer shares of the use-stock inflow per region and end use, last historical year."""
+    """Each polymer's share of the plastics entering use, per region and end use.
+
+    The shares sum to 1 over polymers. They are those of the last historical year, which the
+    scenario holds constant afterwards.
+    """
     mfa = run.future_mfa
     # flodym dimension letters: t Time, h Historical Time
     return mfa.parameters["polymer_shares_use_inflow"][{"t": mfa.dims["h"].items[-1]}]

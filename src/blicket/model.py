@@ -9,9 +9,8 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, computed_field
 
 from blicket.errors import Problem, Source
-from blicket.plots import PlotSpec
+from blicket.plots import Control, ControlKind, PlotSpec
 
-ControlKind = Literal["filter", "split"]
 type Transform = Callable[[Any], Any]
 
 
@@ -37,14 +36,17 @@ class PlotDefinition(BaseModel):
 
 class BlickDefinition(BaseModel):
     """How a Blick is defined, apart from its id, aliases and transformation: the options of
-    ``@bk.blick``, with the plot as a ``PlotDefinition``. ``tags`` are the Blick's own."""
+    ``@bk.blick``, with the plot as a ``PlotDefinition``. ``tags`` are the Blick's own;
+    ``controls`` are the control kinds the author asked for, not the controls a build derives."""
 
     model_config = ConfigDict(frozen=True)
 
     title: str
     description: str | None
+    unit: str | None
     tags: tuple[str, ...]
     plot: PlotDefinition
+    independent_y: bool
     controls: dict[str, ControlKind]
     defaults: dict[str, Any]
     tolerance: float | None
@@ -90,7 +92,9 @@ class BlickEntry(BaseModel):
     ``id`` is ``None`` when no usable id was given or derived; ``name`` is the id if there is
     one, else the function's name, else the id as given. ``definition`` is ``None`` when the
     Blick's arguments were invalid. ``data``, ``hash``, ``rows`` and ``columns`` describe the
-    table a build wrote; ``status`` is ``error`` when a problem is an error.
+    table a build wrote, and ``controls`` are what the viewer offers for it: the plot type's
+    controls with the requests of ``definition.controls`` and ``definition.defaults`` applied.
+    ``status`` is ``error`` when a problem is an error.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -106,6 +110,7 @@ class BlickEntry(BaseModel):
     hash: str | None = None
     rows: int | None = None
     columns: TableSchema | None = None
+    controls: tuple[Control, ...] = ()
     timing_ms: float | None = None
     problems: tuple[Problem, ...] = ()
 
@@ -126,9 +131,11 @@ class Blick:
     id: str
     title: str
     description: str | None = None
+    unit: str | None = None
     group: str
     tags: tuple[str, ...] = ()
     plot: PlotSpec
+    independent_y: bool = False
     controls: Mapping[str, ControlKind] = field(default_factory=dict)
     defaults: Mapping[str, Any] = field(default_factory=dict)
     tolerance: float | None = None
@@ -145,8 +152,10 @@ class Blick:
         return BlickDefinition(
             title=self.title,
             description=self.description,
+            unit=self.unit,
             tags=self.tags,
             plot=PlotDefinition(type=self.plot.plot_type.name, mapping=dict(self.plot.mapping)),
+            independent_y=self.independent_y,
             controls=dict(self.controls),
             defaults=dict(self.defaults),
             tolerance=self.tolerance,
@@ -154,6 +163,27 @@ class Blick:
             measures=self.measures,
             order=dict(self.order),
         )
+
+    def _controls_for(self, schema: TableSchema) -> tuple[Control, ...]:
+        """The plot type's controls for a table of ``schema``, with this Blick's requests applied.
+
+        ``controls={dim: "split"}`` or ``"filter"`` sets a control's kind; a value in ``defaults``
+        becomes its default when the table holds it, and of a list the first element does.
+        """
+        values = {dimension.name: dimension.values for dimension in schema.dimensions}
+        derived: list[Control] = []
+        for control in self.plot.plot_type.controls(schema, self.plot.mapping):
+            update: dict[str, Any] = {}
+            if (kind := self.controls.get(control.dimension)) is not None:
+                update["kind"] = kind
+            if control.dimension in self.defaults:
+                wanted = self.defaults[control.dimension]
+                if isinstance(wanted, list | tuple):
+                    wanted = wanted[0] if wanted else None
+                if wanted in values.get(control.dimension, ()):
+                    update["default"] = wanted
+            derived.append(control.model_copy(update=update))
+        return tuple(derived)
 
     def entry(
         self,
@@ -165,7 +195,8 @@ class Blick:
         columns: TableSchema | None = None,
         timing_ms: float | None = None,
     ) -> BlickEntry:
-        """The Blick as a report records it, with what a build made of it, if anything."""
+        """The Blick as a report records it, with what a build made of it, if anything: its
+        table's schema ``columns`` and the controls derived for it."""
         return BlickEntry(
             id=self.id,
             name=self.id,
@@ -178,6 +209,7 @@ class Blick:
             hash=hash,
             rows=rows,
             columns=columns,
+            controls=self._controls_for(columns) if columns is not None else (),
             timing_ms=timing_ms,
             problems=problems,
         )

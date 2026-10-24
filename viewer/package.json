@@ -1,0 +1,37 @@
+{
+  "name": "blicket-viewer",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev",
+    "generate": "nuxt generate",
+    "postinstall": "nuxt prepare",
+    "test": "vitest run",
+    "typecheck": "nuxt typecheck",
+    "lint": "oxlint"
+  },
+  "dependencies": {
+    "@iconify-json/lucide": "1.2.147",
+    "@nuxt/ui": "4.12.0",
+    "hyparquet": "1.31.5",
+    "hyparquet-compressors": "1.1.2",
+    "nuxt": "4.6.2",
+    "tailwindcss": "4.3.3",
+    "vega": "6.4.0",
+    "vega-embed": "7.3.0",
+    "vega-lite": "6.5.0",
+    "vue": "3.5.44",
+    "vue-router": "5.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "oxlint": "1.89.0",
+    "typescript": "^6.0.3",
+    "vitest": "5.0.5",
+    "vue-tsc": "3.3.13"
+  },
+  "engines": {
+    "node": ">=24"
+  },
+  "packageManager": "pnpm@12.15.0"
+}

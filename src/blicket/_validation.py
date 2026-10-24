@@ -41,7 +41,9 @@ class BlickOptions(TypedDict, total=False):
     id: str
     title: str
     description: str
+    unit: str
     plot: PlotSpec
+    independent_y: bool
     controls: Mapping[str, ControlKind]
     defaults: Mapping[str, Any]
     tolerance: float
@@ -59,7 +61,9 @@ class CheckedOptions:
     id: str | None = None
     title: str | None = None
     description: str | None = None
+    unit: str | None = None
     plot: PlotSpec | None = None
+    independent_y: bool = False
     controls: Mapping[str, ControlKind] = field(default_factory=dict)
     defaults: Mapping[str, Any] = field(default_factory=dict)
     tolerance: float | None = None
@@ -203,6 +207,12 @@ def _plot(value: object) -> PlotSpec:
     return value
 
 
+def _flag(value: object) -> bool:
+    if not isinstance(value, bool):
+        raise _Invalid(f"independent_y must be True or False, got {_shown(value)}")
+    return value
+
+
 def _controls(value: object) -> dict[str, ControlKind]:
     if not isinstance(value, Mapping):
         raise _Invalid(
@@ -254,7 +264,9 @@ _CHECKS: dict[str, Callable[[object], Any]] = {
     "id": _id,
     "title": _title,
     "description": _description,
+    "unit": lambda value: _title(value, "unit"),
     "plot": _plot,
+    "independent_y": _flag,
     "controls": _controls,
     "defaults": lambda value: dict(_json_mapping(value, "defaults", "column to value")),
     "tolerance": _tolerance,

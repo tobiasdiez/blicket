@@ -16,6 +16,7 @@ import json
 import os
 import sys
 import traceback
+import webbrowser
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from pathlib import Path
@@ -25,8 +26,9 @@ import typer
 from pydantic import BaseModel
 from typer.core import TyperGroup
 
+from blicket import serve
 from blicket.builder import Build, NothingToBuild, build
-from blicket.config import PYPROJECT, find_project_root
+from blicket.config import find_project_root
 from blicket.discovery import discover
 from blicket.errors import NOWHERE, BlicketError, Kind, Problem, Source, display_path
 from blicket.manifest import Manifest
@@ -72,10 +74,7 @@ ProjectOption = Annotated[
     Path | None,
     typer.Option(
         "--project",
-        help=(
-            f"The project directory, which holds the {PYPROJECT} with \\[tool.blicket]. "
-            "Default: found by walking up from the working directory."
-        ),
+        help="The project directory (default: the project containing the working directory).",
         show_default=False,
     ),
 ]
@@ -86,7 +85,6 @@ VerboseOption = Annotated[
 app = typer.Typer(
     name="blicket",
     cls=_App,
-    help="Storybook for scientific model outputs.",
     no_args_is_help=True,
     add_completion=False,
     pretty_exceptions_enable=False,
@@ -108,7 +106,7 @@ def main(
         ),
     ] = False,
 ) -> None:
-    """Storybook for scientific model outputs."""
+    """A catalog of charts (Blicks) built from model runs."""
 
 
 def _root(project: Path | None) -> Path:
@@ -118,13 +116,12 @@ def _root(project: Path | None) -> Path:
 @app.command("list")
 def list_command(
     project: ProjectOption = None,
-    as_json: Annotated[bool, typer.Option("--json", help="Print the report as JSON.")] = False,
+    as_json: Annotated[
+        bool, typer.Option("--json", help="Print the Blicks and problems as JSON.")
+    ] = False,
     verbose: VerboseOption = False,
 ) -> None:
-    """List the project's groups and Blicks, then warnings and errors.
-
-    Exit codes: 0 success, 2 errors.
-    """
+    """Show the project's Blicks and any definition problems."""
     registry = discover(_root(project))
     finish(_list_report(registry, as_json, verbose), failed=registry.has_errors)
 
@@ -134,7 +131,10 @@ def build_command(
     runs: Annotated[
         list[Path],
         typer.Argument(
-            help="The run directory, or several; the project's loader decides what they mean.",
+            help=(
+                "A model run's output directory (several only if the project's loader combines "
+                "them)."
+            ),
             metavar="RUN_PATH...",
             show_default=False,
         ),
@@ -144,21 +144,17 @@ def build_command(
         Path | None,
         typer.Option(
             "--out",
-            help=(
-                "The directory that receives the build directory <id>/. "
-                "Default: .blicket/build in the project."
-            ),
+            help="Where build directories go (default: .blicket/build in the project).",
             show_default=False,
         ),
     ] = None,
-    as_json: Annotated[bool, typer.Option("--json", help="Print the manifest.")] = False,
+    as_json: Annotated[bool, typer.Option("--json", help="Print the manifest as JSON.")] = False,
     verbose: VerboseOption = False,
 ) -> None:
-    """Load a run, build every Blick's table and write a build directory with its manifest.
+    """Build every Blick of a run into a browsable build directory.
 
-    Without a Blick that can be built, it prints what blicket list would and writes nothing.
-
-    Exit codes: 0 every Blick built, 2 errors.
+    Writes to .blicket/build/<id>/ (under --out if given) and prints the id; show it with
+    blicket serve.
     """
     try:
         built = build(_root(project), runs, out=out)
@@ -171,6 +167,41 @@ def build_command(
     else:
         text = render_build(built, verbose=verbose)
     finish(text, failed=built.manifest.has_errors)
+
+
+@app.command("serve")
+def serve_command(
+    directory: Annotated[
+        Path | None,
+        typer.Argument(
+            help="A build directory (default: the newest in the project).",
+            metavar="[BUILD_DIR]",
+            show_default=False,
+        ),
+    ] = None,
+    port: Annotated[
+        int, typer.Option(help="The port to listen on (0: any free port).", min=0, max=65535)
+    ] = serve.DEFAULT_PORT,
+    host: Annotated[str, typer.Option(help="The address to listen on.")] = serve.DEFAULT_HOST,
+    open_browser: Annotated[
+        bool, typer.Option("--open", help="Open the viewer in your browser.")
+    ] = False,
+    project: ProjectOption = None,
+    verbose: VerboseOption = False,
+) -> None:
+    """Serve a build directory on localhost; Ctrl-C stops."""
+    path = (
+        serve.newest_build(_root(project))
+        if directory is None
+        else serve.build_directory(directory)
+    )
+    server = serve.make_server(path, host, port)
+    if directory is None:
+        typer.echo(f"build {path.name} → {display_path(path, Path.cwd())}")
+    typer.echo(f"viewer: {server.url}#/   (Ctrl-C stops)")
+    if open_browser:
+        webbrowser.open(server.url)
+    serve.run(server)
 
 
 def finish(text: str, *, failed: bool) -> None:
@@ -362,7 +393,10 @@ def render_build(result: Build, *, verbose: bool = False) -> str:
     milliseconds = manifest.build.loader_ms
     loaded = f"{milliseconds:.0f} ms" if milliseconds < 1000 else f"{milliseconds / 1000:.1f} s"
     where = display_path(result.path, Path.cwd())
-    existed = " (built before, left as it was)" if result.existed else ""
+    existed = ""
+    if result.existed:
+        kept = "viewer refreshed" if result.viewer else "left as it was"
+        existed = f" (built before, {kept})"
     lines = [
         *_project_line(result.root),
         f"run {run.id} · profile {run.profile} · {head} · loaded in {loaded}",

@@ -1,14 +1,20 @@
-"""The plot type contract: channels, the plot spec a Blick carries, the built-ins' base."""
+"""The plot type contract: channels, controls, the plot spec a Blick carries, the built-ins."""
 
 from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any, ClassVar, Literal
+from typing import TYPE_CHECKING, Any, ClassVar, Literal
+
+from pydantic import BaseModel, ConfigDict
 
 from blicket.errors import DefinitionError, did_you_mean
 
+if TYPE_CHECKING:  # blicket.model imports this module
+    from blicket.model import TableSchema
+
 ChannelKind = Literal["dimension", "measure"]
+ControlKind = Literal["filter", "split"]
 
 
 @dataclass(frozen=True)
@@ -19,6 +25,21 @@ class Channel:
     kind: ChannelKind
     required: bool = False
     doc: str = ""
+
+
+class Control(BaseModel):
+    """What the viewer offers for a dimension that the plot leaves unbound.
+
+    A ``filter`` shows the rows of one value at a time, ``default`` first. A ``split`` draws a
+    panel per value; its ``default`` is the value it filters on when the viewer turns it into a
+    filter. ``default`` is ``None`` only for a dimension without values.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    dimension: str
+    kind: ControlKind
+    default: Any = None
 
 
 class PlotType(ABC):
@@ -33,7 +54,7 @@ class PlotType(ABC):
     channels: ClassVar[tuple[Channel, ...]]
 
     @abstractmethod
-    def controls(self, schema: Any, mapping: Mapping[str, str]) -> Sequence[Any]:
+    def controls(self, schema: TableSchema, mapping: Mapping[str, str]) -> list[Control]:
         """Derive the controls of a chart from the table schema and the mapping."""
 
     @abstractmethod
@@ -44,10 +65,18 @@ class PlotType(ABC):
 
 
 class BuiltinPlotType(PlotType):
-    """The built-ins declare their channels; they do not implement ``controls`` or ``diff``."""
+    """The built-ins declare their channels and share ``controls``; they do not implement
+    ``diff``."""
 
-    def controls(self, schema: Any, mapping: Mapping[str, str]) -> Sequence[Any]:
-        raise NotImplementedError("the built-in plot types do not implement controls")
+    def controls(self, schema: TableSchema, mapping: Mapping[str, str]) -> list[Control]:
+        """A filter at the first value in display order for every dimension the mapping leaves
+        unbound."""
+        bound = set(mapping.values())
+        return [
+            Control(dimension=d.name, kind="filter", default=d.values[0] if d.values else None)
+            for d in schema.dimensions
+            if d.name not in bound
+        ]
 
     def diff(
         self, baseline: Any, current: Any, mapping: Mapping[str, str], controls: Sequence[Any]

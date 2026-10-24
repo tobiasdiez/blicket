@@ -89,22 +89,24 @@ def _targets(root: Path, patterns: Sequence[str]) -> tuple[list[_Target], list[P
     """The Blick files matched by ``patterns``, sorted by POSIX path, with their module names.
 
     Hidden directories and files (``.venv`` among them) never match a wildcard, and files whose
-    stem starts with ``_`` are helpers, except ``__init__.py``.
+    stem starts with ``_`` are helpers, except ``__init__.py``. A file is where its path says, a
+    symbolic link included; a match is outside the root when the pattern climbs out with ``..``
+    (glob writes ``..`` only where the pattern has it) or is absolute.
     """
     found: set[Path] = set()
     for pattern in patterns:
         for match in glob.glob(pattern, root_dir=root, recursive=True):
-            path = Path(os.path.normpath(root / match))
+            path = root / match
             if path.suffix == ".py" and path.is_file():
                 found.add(path)
 
     targets: list[_Target] = []
     problems: list[Problem] = []
     for path in sorted(found, key=lambda p: p.as_posix()):
-        if not path.is_relative_to(root):
+        if not path.is_relative_to(root) or ".." in path.relative_to(root).parts:
             message = (
-                f"lies outside the project root {root}; Blick modules must be inside it, fix "
-                "the globs in [tool.blicket] blicks"
+                f"lies outside the project root {root}, where the glob climbs out of it; Blick "
+                "modules must be inside it, fix the globs in [tool.blicket] blicks"
             )
             problems.append(_bad_filename(path, message))
             continue

@@ -13,9 +13,11 @@ __pycache__/
 /dist/
 
 # viewer
-node_modules/
-.nuxt/
-.output/
+viewer/node_modules/
+viewer/.nuxt/
+viewer/.output/
+viewer/dist
+viewer/*.tsbuildinfo
 
 # AI
 .claude/skills/feature-loop

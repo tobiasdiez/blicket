@@ -86,7 +86,6 @@ class BuildConfig(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     tolerance: float
-    digits: int
 
 
 class Run(RunInfo):

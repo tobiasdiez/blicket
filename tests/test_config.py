@@ -1,19 +1,17 @@
 from pathlib import Path
 
 import pytest
-from pydantic import ValidationError
 
 import blicket as bk
-from blicket.config import check_tolerance
 from tests.support import make_project
 
 
 def test_defaults_and_values(tmp_path: Path) -> None:
     assert bk.load_config(make_project(tmp_path, {}, name="empty")) == bk.Config()
     assert bk.Config().blicks == ["blicks/**/*.py"]
-    root = make_project(tmp_path, {}, 'blicks = ["views/*.py"]\ndigits = 8\nloader = "m.n:C.f"\n')
-    config = bk.load_config(root)
-    assert (config.blicks, config.digits, config.loader) == (["views/*.py"], 8, "m.n:C.f")
+    lines = 'blicks = ["views/*.py"]\ntolerance = 1e-9\nloader = "m.n:C.f"\n'
+    config = bk.load_config(make_project(tmp_path, {}, lines))
+    assert (config.blicks, config.tolerance, config.loader) == (["views/*.py"], 1e-9, "m.n:C.f")
 
 
 @pytest.mark.parametrize(
@@ -23,14 +21,11 @@ def test_defaults_and_values(tmp_path: Path) -> None:
         ("zzz = 1", "unknown key 'zzz' in [tool.blicket]; valid keys: blicks"),
         ('blicks = "blicks/*.py"', "blicks must be a list of glob strings"),
         ('tolerance = "x"', "tolerance must be a number"),
-        ("tolerance = -1e-5", "tolerance must be a positive number"),
-        ("tolerance = nan", "tolerance must be a positive number"),
-        ("digits = 1.5", "digits must be a whole number"),
-        ('digits = "6"', "digits must be a whole number"),
+        ("tolerance = -1e-5", "tolerance must be a positive number below 1, got -1e-05"),
+        ("tolerance = nan", "tolerance must be a positive number below 1"),
+        ("tolerance = 1.0", "tolerance must be a positive number below 1, got 1.0"),
         ('tolerance = "6"', "tolerance must be a number"),
-        ("digits = 0", "digits must be between 1 and 17, got 0"),
-        ("digits = 18", "digits must be between 1 and 17, got 18"),
-        ("tolerance = 1e-9", "tolerance 1e-09 is finer than 6 significant digits can express"),
+        ("digits = 6", "unknown key 'digits' in [tool.blicket]; valid keys: blicks"),
         ('loader = "mymodel.load_run"', 'loader must be "package.module:function", got \'mymodel'),
         ('loader = "a b:c"', "loader must be \"package.module:function\", got 'a b:c'"),
         ("loader = 1", 'loader must be a string "package.module:function"'),
@@ -47,8 +42,8 @@ def test_invalid_config(tmp_path: Path, lines: str, expected: str) -> None:
 
 def test_every_config_problem_is_reported(tmp_path: Path) -> None:
     with pytest.raises(bk.ConfigError) as info:
-        bk.load_config(make_project(tmp_path, {}, "blick = 1\ndigits = 30\n"))
-    assert "digits must be between" in str(info.value)
+        bk.load_config(make_project(tmp_path, {}, "blick = 1\ntolerance = 2\n"))
+    assert "tolerance must be a positive number below 1" in str(info.value)
     assert "unknown key 'blick'" in str(info.value)
 
 
@@ -73,13 +68,3 @@ def test_root_found_by_walking_up(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
 def test_no_root(tmp_path: Path) -> None:
     with pytest.raises(bk.ConfigError, match="pass --project"):
         bk.find_project_root(tmp_path)
-
-
-def test_tolerance_must_fit_digits() -> None:
-    with pytest.raises(ValidationError, match="raise digits \\(now 6\\) to 8"):
-        bk.Config(tolerance=1e-7)
-    assert bk.Config(tolerance=1e-7, digits=8).tolerance == 1e-7
-    assert bk.Config(tolerance=1.0, digits=1).digits == 1
-    assert check_tolerance(1e-5, 6) is None  # the defaults sit exactly on the bound
-    # No digits setting can express 1e-20, so the hint names only the tolerance.
-    assert str(check_tolerance(1e-20, 6)).endswith("can express; use tolerance >= 1e-05")

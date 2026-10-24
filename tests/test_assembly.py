@@ -124,12 +124,6 @@ def test_groups_merge_across_modules_in_file_order() -> None:
         assert "gets a title in blicks/b.py:1" in warning.message
 
 
-def test_blick_tolerance_must_fit_digits() -> None:
-    records = [record("blicks/tol.py", definition(name="precise", tolerance=1e-7))]
-    assert "finer than 6 significant digits" in messages(assemble(records), "tol/precise")[0]
-    assert list(assemble(records, config=bk.Config(digits=8)).blicks) == ["tol/precise"]
-
-
 def test_invalid_ids_do_not_take_the_derived_id() -> None:
     registry = assemble(
         [
@@ -146,13 +140,11 @@ def test_failed_blicks_keep_their_definition_when_their_arguments_are_valid() ->
     records = [
         record("blicks/a.py", definition("a/x", aliases=["a/old"]), definition("a/x", line=2)),
         record("blicks/b.py", definition("b/y", aliases=["b/old"], controls={"r": "facet"})),
-        record("blicks/c.py", definition(name="precise", tolerance=1e-7)),
     ]
-    duplicate, _, invalid, too_fine = assemble(records).failed
+    duplicate, _, invalid = assemble(records).failed
     assert duplicate.aliases == ("a/old",)
     assert duplicate.definition is not None
     assert (invalid.aliases, invalid.definition) == (("b/old",), None)
-    assert too_fine.definition is not None
 
 
 def test_function_name_that_is_no_segment_needs_an_id() -> None:

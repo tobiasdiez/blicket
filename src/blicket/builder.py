@@ -113,7 +113,7 @@ def build(
                 build=BuildInfo(
                     id="", incomplete=registry.incomplete, loader_ms=round(loader_ms, 1)
                 ),
-                config=BuildConfig(tolerance=config.tolerance, digits=config.digits),
+                config=BuildConfig(tolerance=config.tolerance),
                 run=Run(**info.model_dump(), paths=shown),
                 repository=repository,
                 groups=tuple(registry.groups.values()),

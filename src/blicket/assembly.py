@@ -1,8 +1,8 @@
 """Assembly: from the records of executed Blick modules to a ``Registry``.
 
 Finalises each module record (its group, default ids and titles), then checks across modules:
-groups contributed by several modules, ids claimed twice, alias collisions and per-Blick
-tolerances. Works on records alone, so it needs no files.
+groups contributed by several modules, ids claimed twice and alias collisions. Works on records
+alone, so it needs no files.
 """
 
 from collections.abc import Sequence
@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from blicket._validation import SEGMENT_RULE, default_title, validate_group
-from blicket.config import PYPROJECT, Config, check_tolerance
+from blicket.config import PYPROJECT
 from blicket.definitions import Definition, ModuleRecord
 from blicket.errors import NOWHERE, SKIPPED, Kind, Problem, Source
 from blicket.model import Blick, BlickEntry, Group, Registry
@@ -87,7 +87,7 @@ def _group_problem(record: ModuleRecord, messages: list[str], line: int | None) 
     )
 
 
-def _finalise(record: ModuleRecord, digits: int) -> _Finalised:
+def _finalise(record: ModuleRecord) -> _Finalised:
     """Resolve one module's group, default ids and titles, and check each definition."""
     if not record.group_calls and not record.definitions:
         return None, None, [], []
@@ -103,9 +103,6 @@ def _finalise(record: ModuleRecord, digits: int) -> _Finalised:
             entry.add(Kind.INVALID_DEFINITION, definition.id_problem)
         for message in definition.problems:
             entry.add(Kind.INVALID_DEFINITION, message)
-        tolerance = definition.options.tolerance
-        if tolerance is not None and (problem := check_tolerance(tolerance, digits)):
-            entry.add(Kind.INVALID_DEFINITION, problem)
         entries.append(entry)
     return group, line, entries, problems
 
@@ -142,7 +139,6 @@ def assemble(
     records: Sequence[ModuleRecord],
     problems: Sequence[Problem] = (),
     *,
-    config: Config | None = None,
     root: Path | None = None,
 ) -> Registry:
     """Build a registry from module records.
@@ -151,12 +147,11 @@ def assemble(
     on the order in which modules ran. ``problems`` are those found before assembly, such as
     import errors. Every Blick with a problem goes to ``Registry.failed``.
     """
-    digits = (config or Config()).digits
     found = list(problems)
     ordered = sorted(
         records, key=lambda r: (r.file is None, r.file.as_posix() if r.file else r.name)
     )
-    modules = [(record, _finalise(record, digits)) for record in ordered]
+    modules = [(record, _finalise(record)) for record in ordered]
     groups = _merge_groups(modules, found, root)
     entries = [entry for _, (_, _, module_entries, _) in modules for entry in module_entries]
     for _, (_, _, _, module_problems) in modules:

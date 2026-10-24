@@ -1,16 +1,14 @@
 """The ``[tool.blicket]`` section of a project's ``pyproject.toml`` and the project root lookup."""
 
-import math
 import tomllib
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from blicket.errors import ConfigError, did_you_mean
 
 PYPROJECT = "pyproject.toml"
-MAX_DIGITS = 17  # a double has at most 17 significant decimal digits
 
 # Messages for values of the wrong type, in place of pydantic's.
 _WRONG_TYPE = {
@@ -18,31 +16,13 @@ _WRONG_TYPE = {
     "loader": 'loader must be a string "package.module:function", got {value!r}',
     "store": "store must be a directory path, got {value!r}",
     "tolerance": "tolerance must be a number, got {value!r}",
-    "digits": "digits must be a whole number, got {value!r}",
 }
-
-
-def check_tolerance(tolerance: float, digits: int) -> str | None:
-    """Return why the positive ``tolerance`` is unusable with ``digits`` digits, or ``None``.
-
-    A tolerance below ``10 ** (1 - digits)`` is finer than ``digits`` significant digits can
-    express.
-    """
-    floor = 10.0 ** (1 - digits)
-    # The relative slack keeps 1e-5 with digits = 6 valid despite floating-point rounding.
-    if tolerance >= floor * (1 - 1e-9):
-        return None
-    needed = math.ceil(1 - math.log10(tolerance) - 1e-9)
-    fix = f"use tolerance >= {floor:g}"
-    if needed <= MAX_DIGITS:
-        fix += f" or raise digits (now {digits}) to {needed} in [tool.blicket]"
-    return f"tolerance {tolerance:g} is finer than {digits} significant digits can express; {fix}"
 
 
 class Config(BaseModel):
     """The ``[tool.blicket]`` section. Unknown keys are rejected so that typos fail loudly."""
 
-    # strict: no "6" for a number, no 6.0 for a whole number
+    # strict: no "1e-5" string for a number
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     blicks: list[str] = Field(
@@ -63,24 +43,10 @@ class Config(BaseModel):
     tolerance: float = Field(
         default=1e-5,
         gt=0,
+        lt=1,
         allow_inf_nan=False,
-        description="Relative tolerance below which a value counts as unchanged.",
+        description="Relative tolerance below which a value counts as unchanged, in (0, 1).",
     )
-    digits: int = Field(default=6, description="Significant digits kept when values are rounded.")
-
-    @field_validator("digits")
-    @classmethod
-    def _digits_in_range(cls, digits: int) -> int:
-        if not 1 <= digits <= MAX_DIGITS:
-            raise ValueError(f"digits must be between 1 and {MAX_DIGITS}, got {digits}")
-        return digits
-
-    @model_validator(mode="after")
-    def _tolerance_fits_digits(self) -> Config:
-        problem = check_tolerance(self.tolerance, self.digits)
-        if problem is not None:
-            raise ValueError(problem)
-        return self
 
 
 def _read_pyproject(path: Path) -> dict[str, Any]:
@@ -109,10 +75,8 @@ def _describe(error: ValidationError, section: dict[str, Any]) -> list[str]:
             close = did_you_mean(key, keys)
             hint = f"; did you mean {close!r}? Valid" if close else "; valid"
             problem = f"unknown key {key!r} in [tool.blicket]{hint} keys: {', '.join(keys)}"
-        elif issue["type"] in {"greater_than", "finite_number"}:
-            problem = f"{key} must be a positive number, got {section.get(key)!r}"
-        elif issue["type"] == "value_error":
-            problem = str(issue.get("ctx", {}).get("error", issue["msg"]))
+        elif issue["type"] in {"greater_than", "less_than", "finite_number"}:
+            problem = f"{key} must be a positive number below 1, got {section.get(key)!r}"
         elif issue["type"] == "string_pattern_mismatch":
             problem = f'loader must be "package.module:function", got {section.get(key)!r}'
         else:

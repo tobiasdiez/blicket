@@ -12,7 +12,7 @@ import blicket as bk
 from blicket import builder, manifest
 from blicket.builder import NothingToBuild
 from blicket.errors import BlicketError
-from blicket.manifest import BuildConfig, Manifest
+from blicket.manifest import Manifest
 from tests.support import VALUES, commit_all, git, line_of, make_build_project, make_run, one_blick
 
 BLICKS = """\
@@ -99,7 +99,8 @@ def test_statuses_and_files(project: Path) -> None:
         "blicks/views/from_polars.parquet",
         "manifest.json",
     ]
-    assert built.manifest.config == BuildConfig(tolerance=1e-5, digits=6)
+    written = json.loads((built.path / "manifest.json").read_text())
+    assert written["config"] == {"tolerance": 1e-5}
     assert built.manifest.build.incomplete is False
 
 
@@ -224,10 +225,10 @@ def test_the_id_covers_problems_and_config(tmp_path: Path) -> None:
     (root / "blicks" / "broken.py").unlink()
     ids.append(bk.build(root, [run]).manifest.build.id)
     with (root / "pyproject.toml").open("a") as file:
-        file.write("digits = 8\n")
+        file.write("tolerance = 1e-4\n")
     built = bk.build(root, [run]).manifest
     assert len({*ids, built.build.id}) == 4
-    assert (built.config.digits, built.build.incomplete) == (8, False)
+    assert (built.config.tolerance, built.build.incomplete) == (1e-4, False)
 
 
 def test_a_changed_table_or_profile_changes_the_id(project: Path, tmp_path: Path) -> None:

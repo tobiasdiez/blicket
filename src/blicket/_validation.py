@@ -220,14 +220,9 @@ def _controls(value: object) -> dict[str, ControlKind]:
 
 
 def _tolerance(value: object) -> float:
-    if (
-        isinstance(value, int | float)
-        and not isinstance(value, bool)
-        and math.isfinite(value)
-        and value > 0
-    ):
+    if isinstance(value, int | float) and not isinstance(value, bool) and 0 < value < 1:
         return float(value)
-    raise _Invalid(f"tolerance must be a positive number, got {_shown(value)}")
+    raise _Invalid(f"tolerance must be a positive number below 1, got {_shown(value)}")
 
 
 def _aliases(value: object) -> tuple[str, ...]:

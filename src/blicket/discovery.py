@@ -74,7 +74,7 @@ def discover(project: str | os.PathLike[str], config: Config | None = None) -> R
                 records.append(record or definitions.ModuleRecord(target.name, target.path))
     # A package __init__.py that raises fails every Blick module under it alike.
     unique = list({(p.kind, p.source, p.message): p for p in problems}.values())
-    return assemble(records, unique, config=config, root=root)
+    return assemble(records, unique, root=root)
 
 
 # ---------------------------------------------------------------------------------------------

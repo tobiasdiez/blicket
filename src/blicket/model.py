@@ -208,8 +208,8 @@ class Registry:
     """The Blicks, groups and problems of one project, assembled by ``discover``.
 
     ``blicks`` holds exactly the Blicks that can be built, in discovery order. Every Blick with
-    a problem (an invalid definition, an id claimed twice, an alias collision, a tolerance finer
-    than the project's digits) is in ``failed`` instead, so that nothing defined vanishes.
+    a problem (an invalid definition, an id claimed twice, an alias collision) is in ``failed``
+    instead, so that nothing defined vanishes.
     ``problems`` are those that concern a file or the project rather than one Blick, errors and
     warnings alike. ``aliases`` maps each former id to its current id.
     """

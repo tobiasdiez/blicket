@@ -3,10 +3,10 @@ record them in: definitions and entries."""
 
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, computed_field
+from pydantic import BaseModel, ConfigDict, computed_field, field_validator
 
 from blicket.errors import Problem, Source
 from blicket.plots import PlotSpec
@@ -62,9 +62,10 @@ class BlickEntry(BaseModel):
     ``id`` is ``None`` when no usable id was given or derived; ``name`` is the id if there is
     one, else the function's name, else the id as given. ``definition`` is ``None`` when the
     Blick's arguments were invalid. ``data``, ``hash``, ``rows`` and ``columns`` describe the
-    table a build wrote, and ``controls`` are what the viewer offers for it: the plot type's
-    controls with the requests of ``definition.controls`` and ``definition.defaults`` applied.
-    ``status`` is ``error`` when a problem is an error.
+    table a build wrote, ``data`` as a relative path that stays inside the build directory, and
+    ``controls`` are what the viewer offers for it: the plot type's controls with the requests of
+    ``definition.controls`` and ``definition.defaults`` applied. ``status`` is ``error`` when a
+    problem is an error.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -83,6 +84,15 @@ class BlickEntry(BaseModel):
     controls: tuple[Control, ...] = ()
     timing_ms: float | None = None
     problems: tuple[Problem, ...] = ()
+
+    @field_validator("data")
+    @classmethod
+    def _inside_the_build(cls, data: str | None) -> str | None:
+        if data is not None:
+            path = PurePosixPath(data)
+            if path.is_absolute() or ".." in path.parts or "\0" in data:
+                raise ValueError(f"data must be a path inside the build directory, got {data!r}")
+        return data
 
     @computed_field
     @property

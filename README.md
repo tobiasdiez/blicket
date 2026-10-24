@@ -3,7 +3,7 @@
 Storybook for scientific model outputs. A *Blick* is a named view on a model run: a function that
 turns the run into a table, and how to plot that table. blicket discovers a project's Blicks,
 lists them with every problem it finds in their definitions, builds their tables for a model run,
-and shows them in a web viewer. The idea behind it is in
+shows them in a web viewer, and compares two builds. The idea behind it is in
 [docs/concept.md](docs/concept.md), the design in [docs/architecture.md](docs/architecture.md).
 
 ## Defining Blicks
@@ -50,8 +50,8 @@ flows  Material flows  [mfa]
 `blicket list` looks for the project by walking up from the working directory; `--project PATH`
 names the project directory instead. `-v` shows tracebacks, `--json` prints the report as JSON.
 
-Exit codes, for every command: 0 success (for `serve`, stopped with Ctrl-C), 2 errors of any kind,
-a Blick that fails to build included.
+Exit codes, for every command: 0 success (for `serve`, stopped with Ctrl-C; for `diff`, changes
+found included), 2 errors of any kind, a Blick that fails to build included.
 
 ## Building a run
 
@@ -144,43 +144,70 @@ works from any sub-path. Opened from the file system it does not, because browse
 page read the files next to it; `blicket serve` is the way. `serve` answers with the viewer of the
 installed blicket first, so an older copy in a build directory does not matter.
 
-## Comparing two tables
-
-The plot types compare a Blick's tables in two builds. The output below comes from a toy project
-with the one Blick above, built for the run above and for a second run in which EAF reached 0.77
-in 2021 instead of 0.7; a project prints a line per Blick.
-
-```python
-from pathlib import Path
-
-import polars as pl
-
-import blicket as bk
-
-old = Path(".blicket/build/<baseline build id>")  # placeholders: two build directories
-new = Path(".blicket/build/<current build id>")
-before = {entry.id: entry for entry in bk.manifest.read(old).blicks}
-for entry in bk.manifest.read(new).blicks:
-    previous = before.get(entry.id)
-    if entry.data is None or previous is None or previous.data is None:
-        continue  # the Blick failed, or has no table in the baseline
-    plot = entry.definition.plot
-    baseline = pl.read_parquet(old / previous.data)
-    current = pl.read_parquet(new / entry.data)
-    change = bk.plots.builtin(plot.type).diff(baseline, current, plot.mapping, entry.panels)
-    print(entry.id, sorted(change.flags), change.magnitude, change.where)
-```
+## Comparing two builds
 
 ```console
-flows/steel_by_process [] 0.03225806451612916 {'year': 2021, 'process': 'EAF'}
+$ blicket diff .blicket/build/5d0c3f1e2a9b8c47 .blicket/build/8e21b7c04f6a9d35
+baseline 5d0c3f1e2a9b8c47 · run 2026-10-22 · profile baseline · blicks at 0a6b858
+current  8e21b7c04f6a9d35 · run 2026-10-23 · profile baseline · blicks at 0a6b858
+1 Blick: 1 value
+top movers: flows/steel_by_process 0.032 (year=2021, process=EAF)
 ```
 
-The magnitude is EAF's change in 2021, 0.07, relative to the highest stack of the panel, 2.17.
-`entry.panels` are the dimensions whose values each get their own scale: the filters, and the
-splits of a Blick with `independent_y=True`. `diff` sets the flag `schema` and never `value`: a
-Blick changed when the magnitude exceeds its tolerance (`tolerance` in `[tool.blicket]`, 1e-5 by
-default, or `tolerance=` on the Blick). The magnitude is `None` when no row was compared, and a
-row that one table lacks counts as 0. `bk.Change` describes the fields.
+The output comes from a toy project with the one Blick above, built for the run above and for a
+second run in which EAF reached 0.77 in 2021 instead of 0.7. The baseline comes first; each build
+is a build directory or the id of a build in the store (below). `diff` matches the Blicks of the
+two builds by id, or through `aliases=`, so a renamed Blick keeps its baseline, and compares their
+tables through the plot type. A Blick gets a set of flags; none means unchanged. The summary
+counts the Blicks per flag, leaving out the flags no Blick has, and names the Blicks of each flag
+but `value`:
+
+- `value`: the magnitude exceeds the Blick's tolerance (`tolerance` in `[tool.blicket]`, 1e-5 by
+  default, or `tolerance=` on the Blick). The magnitude is the largest change of a row, relative
+  to the scale of its panel, at most 1, and `None` when no row was compared; a row that one table
+  lacks counts as 0. Here it is EAF's change in 2021, 0.07, relative to the highest stack of the
+  panel, 2.17. Each value of a dimension that a control filters on has a scale of its own, and so
+  has each value of a split of a Blick with `independent_y=True`. The top movers are the three
+  Blicks flagged `value` with the largest magnitudes, with the row that changed most.
+- `schema`: columns or dimension values appeared or vanished; the summary names them, five
+  values per dimension at most. The magnitude covers the rows both tables have.
+- `new`: the baseline has no table for the Blick; the summary says when the Blick did not build
+  in the baseline.
+- `removed`: a baseline Blick with a table that no current Blick claims by its id or aliases.
+  When a module of the current build failed to import or another file-level error occurred, or a
+  Blick has no usable id, nothing is removed, and the summary says why. A build line ends with
+  `incomplete (Blicks missing)` when a module of that build failed to import or another
+  file-level error occurred.
+- `error`: the Blick did not build, its plot type is not one this blicket knows, or the plot type
+  cannot compare the tables; the summary gives the reason.
+
+`diff` exits 0 when it finds changes, which are an answer, not a failure; it exits 2 when a build
+cannot be read, a Blick is flagged `error`, or removed Blicks were not judged. `--json` prints the
+comparison instead, which is also its file format, read back by `bk.Comparison`: `spec`, the version
+of blicket that compared (`blicket`, which names the formula of the magnitude), `created_at`, the
+`baseline` and `current` builds (id, run, profile, time, `repository` with commit, branch and dirty
+flag, and `incomplete`), `incomplete`, the reasons why removed Blicks were not judged, empty when
+they were, and `blicks`, the current Blicks in the order of the manifest followed by the removed
+ones, each with its `id`, `name`, `matched`, the id of the baseline Blick when it differs, as for a
+Blick matched through an alias, `change` (the flags, the magnitude, the columns and values added and
+removed, and `where`, the row that changed most; `bk.Change` describes the fields) and `message`,
+why an `error` Blick has no table or was not compared, or that a `new` Blick did not build in the
+baseline.
+
+`blicket push` copies a build into the store, where it is never changed again:
+
+```console
+$ blicket push .blicket/build/5d0c3f1e2a9b8c47
+build 5d0c3f1e2a9b8c47 → .blicket/store/builds/5d0c3f1e2a9b8c47
+```
+
+Then `blicket diff 5d0c3f1e2a9b8c47 ...` finds it by id. The store is `.blicket/store` in the
+project, or the directory `store` in `[tool.blicket]` names, relative to the project, such as a
+directory on a cluster's file system that a team shares. It holds a build's manifest and tables
+under `builds/<id>/`, not the viewer, so `blicket serve .blicket/store/builds/<id>` serves it with
+the installed one. Pushing a build that is there already does nothing and says so
+(`(in the store already)`). The first push gives `builds/` a `.gitignore`, so the builds never show
+up in `git status`.
 
 ## Example
 

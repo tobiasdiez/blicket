@@ -1,5 +1,6 @@
 import importlib.metadata
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -11,6 +12,7 @@ import pytest
 import typer
 from typer.testing import CliRunner, Result
 
+import blicket as bk
 from blicket import builder, cli, manifest, viewer
 from tests.support import (
     PROJECTS,
@@ -200,7 +202,7 @@ def test_abort_and_click_errors_are_no_bugs(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_every_command_maps_failures_to_exit_2(monkeypatch: pytest.MonkeyPatch) -> None:
-    arguments = {"list": [], "build": ["run"], "serve": []}
+    arguments = {"list": [], "build": ["run"], "serve": [], "push": ["dir"], "diff": ["a", "b"]}
     group: Any = typer.main.get_command(cli.app)
     assert set(group.commands) == set(arguments), "add the new command here"
     monkeypatch.setattr(cli, "_root", _raise(RuntimeError("boom")))
@@ -405,3 +407,281 @@ def test_a_closed_pipe_ends_quietly() -> None:
         process.stdout.close()  # before blicket writes, as `blicket list | head -c0` does
         _, stderr = process.communicate()
     assert (process.returncode, stderr) == (0, b"")
+
+
+# ---------------------------------------------------------------------------------------------
+# push and diff
+
+# The Blick of VALUES with a year per value of the run.
+YEARS = VALUES.replace("[2020, 2021, 2022]", 'list(range(2020, 2020 + len(run["values"])))')
+
+# Four Blicks; with FACTOR above 1, the higher their number, the more they change.
+MOVERS = "import polars as pl\n\nimport blicket as bk\n\nFACTOR = 1.0\n" + "".join(
+    f'\n\n@bk.blick(plot=bk.plots.line(x="year", y="value"))\ndef m{number}(run):\n'
+    f"    values = [v * (1 + {number} * (FACTOR - 1)) for v in run['values']]\n"
+    '    return pl.DataFrame({"year": [2020, 2021, 2022], "value": values})\n'
+    for number in range(1, 5)
+)
+
+
+@pytest.fixture
+def commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
+    """A committed project with the runs a, b (2022 moved) and c (2023 added), as the working
+    directory; returns the short commit."""
+    return runs_project(tmp_path, monkeypatch)
+
+
+def runs_project(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, config: str = "") -> str:
+    root = make_build_project(tmp_path, {"blicks/a.py": YEARS}, config)
+    for name, values in (("a", "1 2 3"), ("b", "1 2 3.3"), ("c", "1 2 3 4")):
+        make_run(root / "runs" / name, values)
+    monkeypatch.chdir(root)
+    return commit_all(root)[:7]
+
+
+def built(run: str) -> str:
+    """The build directory of ``run``."""
+    return ".blicket/build/" + invoke("build", run).stdout.splitlines()[2].split()[1]
+
+
+def name(directory: str) -> str:
+    return Path(directory).name
+
+
+def test_push_prints_where_the_build_went(commit: str) -> None:
+    a = built("runs/a")
+    result = invoke("push", a)
+    expected = f"build {name(a)} → .blicket/store/builds/{name(a)}\n"
+    assert (result.exit_code, result.stdout) == (0, expected)
+
+
+def test_push_again_says_the_build_is_in_the_store(commit: str) -> None:
+    a = built("runs/a")
+    invoke("push", a)
+    expected = f"build {name(a)} → .blicket/store/builds/{name(a)} (in the store already)\n"
+    assert invoke("push", a).stdout == expected
+
+
+def test_push_uses_the_store_setting_of_the_project(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs_project(tmp_path, monkeypatch, 'store = "shared"\n')
+    a = Path(built("runs/a")).resolve()
+    monkeypatch.chdir(tmp_path)
+    result = invoke("push", a, "--project", "project")
+    assert result.stdout == f"build {a.name} → project/shared/builds/{a.name}\n"
+
+
+def test_diff(commit: str) -> None:
+    a, b = built("runs/a"), built("runs/b")
+    result = invoke("diff", a, b)
+    assert (result.exit_code, result.stdout) == (
+        0,
+        f"baseline {name(a)} · run a · profile test · blicks at {commit}\n"
+        f"current  {name(b)} · run b · profile test · blicks at {commit}\n"
+        "1 Blick: 1 value\n"
+        "top movers: a/values 0.091 (year=2022)\n",
+    )
+
+
+def test_diff_takes_ids_from_the_store(commit: str) -> None:
+    a, b = built("runs/a"), built("runs/b")
+    expected = invoke("diff", a, b).stdout
+    invoke("push", a)
+    invoke("push", b)
+    shutil.rmtree(".blicket/build")
+    assert invoke("diff", name(a), name(b)).stdout == expected
+
+
+def test_diff_takes_a_directory_beside_an_id(commit: str) -> None:
+    a, b = built("runs/a"), built("runs/b")
+    invoke("push", b)
+    assert invoke("diff", a, name(b)).stdout == invoke("diff", a, b).stdout
+
+
+def test_diff_finds_ids_in_the_store_of_the_project_given(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runs_project(tmp_path, monkeypatch, 'store = "shared"\n')
+    a = name(built("runs/a"))
+    invoke("push", f".blicket/build/{a}")
+    monkeypatch.chdir(tmp_path)
+    result = invoke("diff", a, a, "--project", "project")
+    assert (result.exit_code, result.stdout.splitlines()[2]) == (0, "1 Blick: 1 unchanged")
+
+
+def test_diff_of_two_directories_needs_no_project(tmp_path: Path, commit: str) -> None:
+    a, c = (Path(built(run)).resolve() for run in ("runs/a", "runs/c"))
+    os.chdir(tmp_path)
+    result = invoke("diff", a, c)
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[2:] == [
+        "1 Blick: 1 schema",
+        "",
+        "schema",
+        "  a/values",
+        "    year added: 2023",
+    ]
+
+
+def test_diff_shortens_long_lists_of_values(commit: str) -> None:
+    make_run(Path("runs/d"), "1 2 3 4 5 6 7 8 9 10")
+    lines = invoke("diff", built("runs/a"), built("runs/d")).stdout.splitlines()
+    assert lines[-1] == "    year added: 2023, 2024, 2025, 2026, 2027 … and 2 more (all in --json)"
+
+
+@pytest.mark.parametrize(("direction", "line"), [(1, "added"), (-1, "removed")])
+def test_diff_names_the_columns_that_appeared_or_vanished(
+    commit: str, direction: int, line: str
+) -> None:
+    before = built("runs/a")
+    with_scenario = YEARS.replace('"value":', '"scenario": ["low"] * len(run["values"]), "value":')
+    Path("blicks/a.py").write_text(with_scenario)
+    builds = [before, built("runs/a")][::direction]
+    lines = invoke("diff", *builds).stdout.splitlines()
+    assert lines[2:] == [
+        "1 Blick: 1 schema",
+        "",
+        "schema",
+        "  a/values",
+        f"    columns {line}: scenario (string)",
+    ]
+
+
+def test_diff_names_new_and_removed_blicks(commit: str) -> None:
+    before = built("runs/a")
+    Path("blicks/a.py").write_text(YEARS.replace("def values(", "def renamed("))
+    lines = invoke("diff", before, built("runs/a")).stdout.splitlines()
+    assert lines[2:] == [
+        "2 Blicks: 1 new · 1 removed",
+        "",
+        "new",
+        "  a/renamed",
+        "",
+        "removed",
+        "  a/values",
+    ]
+
+
+def test_diff_says_which_new_blicks_did_not_build_in_the_baseline(commit: str) -> None:
+    Path("blicks/a.py").write_text(YEARS + RAISING)
+    before = built("runs/a")
+    fixed = 'pl.DataFrame({"year": [2020, 2021, 2022], "value": run["values"]})'
+    Path("blicks/a.py").write_text(YEARS + RAISING.replace('run["missing"]', fixed))
+    lines = invoke("diff", before, built("runs/a")).stdout.splitlines()
+    assert lines[2:] == [
+        "2 Blicks: 1 unchanged · 1 new",
+        "",
+        "new",
+        "  a/missing  did not build in the baseline",
+    ]
+
+
+def test_diff_says_how_many_more_blicks_moved(commit: str) -> None:
+    Path("blicks/a.py").write_text(MOVERS)
+    before = built("runs/a")
+    Path("blicks/a.py").write_text(MOVERS.replace("FACTOR = 1.0", "FACTOR = 1.01"))
+    lines = invoke("diff", before, built("runs/a")).stdout.splitlines()
+    assert lines[2:] == [
+        "4 Blicks: 4 value",
+        "top movers: a/m4 0.038 (year=2022)",
+        "            a/m3 0.029 (year=2022)",
+        "            a/m2 0.02 (year=2022)",
+        "            … and 1 more (all in --json)",
+    ]
+
+
+def test_diff_json_is_the_comparison(commit: str) -> None:
+    result = invoke("diff", built("runs/a"), built("runs/b"), "--json")
+    assert result.exit_code == 0
+    comparison = bk.Comparison.model_validate_json(result.stdout)
+    assert json.loads(comparison.model_dump_json()) == json.loads(result.stdout)
+    assert (comparison.baseline.run, comparison.current.run) == ("a", "b")
+    assert comparison.blicks[0].change.flags == {"value"}
+
+
+def test_diff_exits_2_for_a_blick_in_error(commit: str) -> None:
+    before = built("runs/a")
+    Path("blicks/a.py").write_text(YEARS + RAISING)
+    result = invoke("diff", before, built("runs/a"))
+    raised = line_of(YEARS + RAISING, 'run["missing"]')
+    assert result.exit_code == 2
+    assert result.stdout.splitlines()[2:] == [
+        "2 Blicks: 1 unchanged · 1 error",
+        "",
+        "errors",
+        f"  a/missing  transformation raised KeyError: 'missing' (raised at blicks/a.py:{raised})",
+    ]
+
+
+def test_diff_exits_2_for_an_incomplete_current_build(commit: str) -> None:
+    before = built("runs/a")
+    Path("blicks/broken.py").write_text("import nothere\n")
+    result = invoke("diff", before, built("runs/a"))
+    assert result.exit_code == 2
+    lines = result.stdout.splitlines()
+    assert lines[1].endswith(f"blicks at {commit} (dirty) · incomplete (Blicks missing)")
+    assert lines[2:] == [
+        "1 Blick: 1 unchanged · removed not judged",
+        "removed not judged: blicks/broken.py failed to import",
+    ]
+
+
+def test_diff_exits_2_for_an_unknown_plot_type(commit: str) -> None:
+    a = built("runs/a")
+    shutil.copytree(a, "custom")
+    data = json.loads(Path("custom/manifest.json").read_text())
+    data["blicks"][0]["definition"]["plot"]["type"] = "custom"
+    Path("custom/manifest.json").write_text(json.dumps(data))
+    result = invoke("diff", a, "custom")
+    assert result.exit_code == 2
+    assert result.stdout.splitlines()[-1].startswith("  a/values  no built-in plot type 'custom'")
+
+
+def test_diff_marks_an_incomplete_baseline_but_exits_0(commit: str) -> None:
+    current = built("runs/a")
+    Path("blicks/broken.py").write_text("import nothere\n")
+    result = invoke("diff", built("runs/a"), current)
+    assert result.exit_code == 0
+    assert result.stdout.splitlines()[0].endswith("(dirty) · incomplete (Blicks missing)")
+
+
+def test_diff_of_builds_without_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
+    monkeypatch.chdir(make_build_project(tmp_path, {"blicks/a.py": YEARS}))
+    a = built(str(make_run(Path("runs/a"))))
+    assert invoke("diff", a, a).stdout.splitlines()[0].endswith("profile test · no git commit")
+
+
+@pytest.mark.parametrize(
+    ("given", "message"),
+    [
+        ("runs", "error: runs has no manifest.json; pass a build directory"),
+        ("results", "error: results is neither a build directory nor the id of a build in "),
+        ("0123456789abcdef", "error: 0123456789abcdef is neither a build directory nor the id "),
+    ],
+)
+def test_diff_of_a_build_that_cannot_be_found(commit: str, given: str, message: str) -> None:
+    result = invoke("diff", given, built("runs/a"))
+    assert (result.exit_code, result.stdout) == (2, "")
+    assert result.stderr.startswith(message)
+    assert result.stderr.count("\n") == 1
+
+
+def test_diff_names_the_store_relative_to_the_working_directory(commit: str) -> None:
+    result = invoke("diff", "results", "results")
+    assert result.stderr == (
+        "error: results is neither a build directory nor the id of a build in .blicket/store "
+        "(blicket push adds one)\n"
+    )
+
+
+def test_diff_outside_a_project_has_no_store(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    result = invoke("diff", "0123456789abcdef", "x")
+    assert result.stderr == (
+        "error: 0123456789abcdef is neither a build directory nor a build id (no project here, so "
+        "no store; run inside the project or pass --project)\n"
+    )

@@ -7,6 +7,7 @@ from typing import Any
 
 import jsonschema
 import pytest
+from pydantic import ValidationError
 
 import blicket as bk
 from blicket import builder, manifest, viewer
@@ -323,6 +324,27 @@ def test_unwritable_destination_and_unreadable_build(project: Path, tmp_path: Pa
     (built.path / "manifest.json").unlink()
     with pytest.raises(BlicketError, match=r"\(file missing\); delete it and rebuild$"):
         manifest.read(built.path)
+
+
+def test_a_manifest_of_another_spec_says_so(project: Path) -> None:
+    built = bk.build(project, ["runs/a"])
+    data = json.loads((built.path / "manifest.json").read_text())
+    (built.path / "manifest.json").write_text(json.dumps({**data, "spec": "0.1"}))
+    with pytest.raises(
+        BlicketError,
+        match=r"manifest\.json is spec 0\.1; this blicket reads 0\.2: rebuild the run$",
+    ):
+        manifest.read(built.path)
+
+
+@pytest.mark.parametrize("data", ["../x.parquet", "blicks/../../x.parquet", "/x.parquet", "x\0"])
+def test_a_table_path_stays_in_the_build_directory(data: str) -> None:
+    with pytest.raises(ValidationError, match="data must be a path inside the build directory"):
+        bk.BlickEntry(id="a/x", name="a/x", group="a", data=data)
+
+
+def test_build_ids_have_the_shape_a_store_accepts(project: Path) -> None:
+    assert manifest.BUILD_ID.fullmatch(build_id(project))
 
 
 def test_manifest_holds_no_absolute_path(project: Path, tmp_path: Path) -> None:

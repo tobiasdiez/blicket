@@ -63,7 +63,8 @@ hashes, run fingerprint and commit; M0.4 only changes what the table hash is com
 `blicket build <run dir>` runs it end to end without any comparison.
 
 The manifest is immutable and holds no comparison results. Comparison output (flags, magnitude,
-baseline tables) is written next to it, keyed by the baseline build id, from M0.6 on. This
+baseline tables) is written next to it, keyed by the baseline build id, by `check` from M0.7 on
+(M0.6's `diff` prints it and writes nothing). This
 amends the architecture's manifest sketch, which listed flags in the manifest; without the
 amendment the same build checked against two baselines would differ while keeping one id. Tobias
 accepted the amendment on 2026-10-23; architecture.md is updated when M0.2 lands.
@@ -136,30 +137,21 @@ dimensions functionally determined by others, until a project needs it; deriving
 from the channel declarations (`PlotType.__call__`), when the first project plot type wants a
 factory (M4).
 
-### M0.6 Store, push and `blicket diff`
+### M0.6 Store, push and `blicket diff` (built on 2026-10-24)
 
-Carried over from the M0.2 architecture review: before the second report-producing command,
-introduce a `Report` protocol (`failed`, `text(verbose)`, `json()`) with the text renderers in a
-`report.py`, so `diff`'s flag counts and top movers and M0.7's `report.md` are renderers over the
-same data instead of more branches in `cli.py`. `push` copies the manifest and the tables with the
-umask-respecting directory modes blicket writes (never `copystat` of a private directory).
-
-The `Store` class over a directory (`builds/<build-id>/` with manifest and tables), `push` as an
-immutable copy that is a no-op when the build exists, listing and lookup, the default
-`.blicket/store` and the `store` config key. The comparison file format next to the manifest.
-`blicket diff <build-a> <build-b>` compares two builds from the store or two build directories
-Blick by Blick through the plot types' `diff`, matching ids through aliases and reporting `new`
-and `removed`, and prints the terminal summary (counts per flag, top movers).
-
-Done when pushing twice is a no-op, `blicket diff` of two remind-mfa builds prints a summary, and
-a Blick renamed with an alias is matched to its old table.
-
-From M0.5: `diff` takes the current build's `BlickEntry.panels` and sets only `schema`; the core
-sets `value` when the magnitude exceeds the Blick's tolerance, and `new`, `removed` and `error`. The
-comparison file records the blicket version that wrote it, which names the formula. Cases for
-matching the Blicks of two builds: a baseline entry in error with a fine current one is `new`;
-entries without an id; two error entries sharing a claimed id; `manifest.build.incomplete` as the
-source of the `removed` rule.
+The plan is `m0-6-store-push-and-diff.md`. `Store` over a directory (`builds/<build-id>/` with the
+manifest and the tables) with `push`, an immutable copy with the modes the umask gives that is a
+no-op when the build is there, and `path`, the lookup by id, in the directory the existing `store`
+config key names (default `.blicket/store`), resolved against the project root; `blicket push
+BUILD_DIR`. `compare_builds` matches the Blicks of two builds by id, then through the current
+Blick's aliases, runs each plot type's `diff` and sets `value`, `new`, `removed` (not judged when
+the current build is incomplete or a Blick has no id) and `error`; `Comparison` is the comparison
+file format. `blicket diff BASELINE CURRENT [--json]` takes build directories or ids in the store,
+prints the counts per flag, the top three movers, and the Blicks whose values appeared or vanished,
+the new, the removed and those in error, and exits 0 on changes, 2 when a build cannot be read, a
+Blick is in error or removed was not judged. The renderers of `list`, `build` and `diff` are plain
+functions in `report.py`; the `Report` protocol carried over from the M0.2 review was declined.
+`diff` writes nothing: writing the comparison next to a build moved to M0.7.
 
 ### M0.7 Baseline resolution, `blicket check`, reports and exit codes
 
@@ -170,14 +162,22 @@ Blicks for several models (plastics, steel, cement) with one loader and one prof
 a Blick that does not apply to a run (a plastics Blick on a steel run) needs a status distinct
 from `error` and `removed`; design it together with `removed`.
 
+From M0.6: `check` writes the comparison (a `Comparison` from `compare_builds`) into the build
+directory's `compare/<baseline-id>/`, with the baseline tables of the changed Blicks and
+`compare/index.json`, and decides whether `push` copies `compare/` and what a user copying a build
+from the cluster takes along; `report.md` is one more function over `Comparison` in `report.py`,
+and whether `report.json` is the comparison file under `compare/<baseline-id>/` or another one is
+to decide here.
+Resolution reads the manifests in the store (profile, commit, `created_at`), skipping the
+temporary `.tmp-*` directories; `Store` has no listing yet.
+
 Candidates by run profile and git ancestry of the Blick repository's HEAD
 (`git merge-base --is-ancestor`), `--against <build-id>` and `--against <branch>`, most recent
 candidate wins, per-Blick fallback to older candidates, `new` when none.
 `blicket check <run dir> [--against ...] [--push]` as build, resolve, diff and report in one
 command, with the baseline tables of changed Blicks copied into the build directory's comparison
 output. `report.md`, appended to the GitHub step summary when that variable is set, and
-`report.json`. Exit codes 0, 1 and 2 as set by the M0.1 policy. `removed` disabled when a module
-failed to import.
+`report.json`. Exit codes 0, 1 and 2 as set by the M0.1 policy.
 
 Done when a feature branch resolves main's latest build as baseline, a second profile resolves its
 own, `check` on an unchanged run against its own previous build exits 0, and a deliberate

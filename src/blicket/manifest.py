@@ -18,6 +18,7 @@ one ``spec``, and whether a Blick changed is judged by its table hash, never by 
 
 import hashlib
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -29,6 +30,7 @@ from blicket.model import BlickEntry, Group
 
 SPEC = "0.2"
 MANIFEST = "manifest.json"
+BUILD_ID = re.compile(r"[0-9a-f]{16}")  # what ``Manifest.content_id`` returns
 
 NOT_IN_ID: dict[str, Any] = {
     # when and by what the build was made
@@ -141,16 +143,25 @@ class Manifest(BaseModel):
 
 
 def read(directory: Path) -> Manifest:
-    """The manifest of the build directory ``directory``."""
+    """The manifest of the build directory ``directory``.
+
+    Raises ``BlicketError`` when it cannot be read, is of another ``spec``, or is invalid.
+    """
     try:
-        return Manifest.model_validate_json((directory / MANIFEST).read_bytes())
+        data = json.loads((directory / MANIFEST).read_bytes())
+        spec = data.get("spec") if isinstance(data, dict) else None
+        if isinstance(spec, str) and spec != SPEC:
+            raise BlicketError(
+                f"{directory / MANIFEST} is spec {spec}; this blicket reads {SPEC}: rebuild the run"
+            )
+        return Manifest.model_validate(data)
     except OSError as error:
         reason = "file missing" if isinstance(error, FileNotFoundError) else error.strerror
         cause: Exception = error
     except ValidationError as error:
-        invalid = error.errors()[0]["type"] == "json_invalid"
-        reason = "not valid JSON" if invalid else "not a manifest of this blicket"
-        cause = error
+        reason, cause = "not a manifest of this blicket", error
+    except ValueError as error:
+        reason, cause = "not valid JSON", error
     raise BlicketError(
         f"build directory {directory} has no readable {MANIFEST} ({reason}); delete it and rebuild"
     ) from cause

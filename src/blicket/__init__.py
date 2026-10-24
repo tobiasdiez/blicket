@@ -10,6 +10,7 @@ Blick modules use this package as ``import blicket as bk``::
 
 from blicket import plots
 from blicket.builder import Build, NothingToBuild, build
+from blicket.comparison import Comparison
 from blicket.config import Config, find_project_root, load_config
 from blicket.definitions import blick, group, register, slug
 from blicket.discovery import discover
@@ -27,6 +28,7 @@ __all__ = [
     "Build",
     "Change",
     "Channel",
+    "Comparison",
     "Config",
     "ConfigError",
     "Control",

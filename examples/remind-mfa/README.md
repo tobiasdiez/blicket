@@ -122,6 +122,25 @@ $ uv run python -c "import polars as pl; print(pl.read_parquet('.blicket/build/<
 CI does not build this example: it needs the remind-mfa checkout and the runs, which are not in
 the repository.
 
+## Comparing runs
+
+With the three example runs built, `diff` compares two of them Blick by Blick, here run 28 with
+run 34, in which `collection_rate` is scaled by 0.9:
+
+```console
+$ uv run blicket diff .blicket/build/<id of run 28> .blicket/build/<id of run 34>
+baseline bfa7f61fc79b65c2 · run 2026-10-24--01-25-28_plastics_SSP2_h12 · profile plastics_SSP2_h12 · blicks at fe4d2dd (dirty)
+current  34247dcb88fd54c3 · run 2026-10-24--01-25-34_plastics_SSP2_h12 · profile plastics_SSP2_h12 · blicks at fe4d2dd (dirty)
+10 Blicks: 9 unchanged · 1 value
+top movers: flows/production_by_source 0.021 (Flow=Primary, Time=2100, Region=SSA)
+```
+
+The lower collection rate shows in production by source only: primary production in SSA in 2100
+changed by 0.021 of the highest stack of the chart, whose regions share one scale as they share the
+y axis. Run 28 against run 31, an unchanged rerun, gives `10 Blicks: 10 unchanged`.
+`uv run blicket push .blicket/build/<id>` copies a build into `.blicket/store`, after which `diff`
+takes its id alone; `--json` prints the comparison as JSON.
+
 ## Looking at a build
 
 `uv run blicket serve` serves the build made last; a build made with an older viewer gets the

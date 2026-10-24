@@ -50,7 +50,7 @@ push → copies the build into the store (immutable, keyed by build id)
 <store>/
   builds/<build-id>/
     manifest.json             spec version, RunInfo, commit, branch, dirty flag, timestamp, tolerance, per-Blick definitions, schemas and hashes
-    compare/<baseline-id>/    flags, magnitude and the baseline tables of changed Blicks, per baseline (amendment of 2026-10-23)
+    compare/<baseline-id>/    flags, magnitude and the baseline tables of changed Blicks, per baseline (amendment of 2026-10-23); if `push` copies it (M0.7)
     blicks/<id>.parquet       canonical tables, zstd
 ```
 
@@ -58,7 +58,11 @@ push → copies the build into the store (immutable, keyed by build id)
   the run fingerprint and the commit; the timestamp is not part of it, so an identical rerun
   yields the same id. Pushing the same build twice is a no-op.
   Every pushed build is kept, since storage is no constraint. This also gives run-against-run
-  comparison for free: `blicket diff <build-a> <build-b>`.
+  comparison for free: `blicket diff <build-a> <build-b>`. Amendment of 2026-10-24 (M0.6): `diff`
+  prints the comparison, as a summary or as the comparison file (`--json`), writes nothing, and
+  exits 0 when it finds changes; `check` is the guard. `check` (M0.7) writes the comparison into
+  the build directory's `compare/<baseline-id>/` and decides whether `push` copies it; `push`
+  copies the manifest and the tables.
 - **Baseline resolution** matches builds by run profile and follows git ancestry. The commit that
   anchors ancestry is HEAD of the repository holding the Blick code, read at build time; the
   model commit in the run info is informational. Among candidate builds whose commit is HEAD or
@@ -202,7 +206,7 @@ disagree, and `new`, `removed` and `error`.
 | `removed` | baseline Blick without a current Blick, after complete discovery | reported |
 | `schema` | columns, or dimension values, appeared or vanished | diagnostics name the values, summarised across Blicks |
 | `value` | some common row differs beyond tolerance | ranked by magnitude |
-| `error` | the module failed to import, the transformation raised, or the output is invalid | exit code 2; never aborts the build; a failed module marks the build incomplete and disables `removed` |
+| `error` | the module failed to import, the transformation raised, or the output is invalid | exit code 2; never aborts the build; a failed module or another file-level error marks the build incomplete; that, or a Blick without a usable id, disables `removed` |
 
 No flags means unchanged. The magnitude is computed on the common keys, also when `schema` is set
 because dimension values appeared or vanished; it is `None` when the columns differ, since then
@@ -249,7 +253,8 @@ my-model/
       manifest.json
       blicks/<id>.parquet         current tables
       compare/<baseline-id>/      comparison result and the baseline tables of changed Blicks, so the
-                                  site is self-contained but small; additive, never changes the manifest
+                                  site is self-contained but small; additive, never changes the manifest;
+                                  written by `check`, not `diff` (amendment of 2026-10-24)
       <viewer assets>
     store/                        default store location
 ```
@@ -338,7 +343,8 @@ same controls and plot types.
 
 `blicket check <run dir> [--against <build|branch>] [--push]` builds, resolves the baseline,
 prints the summary, writes `report.md` (to the GitHub step summary when present) and
-`report.json`, and exits 0 when nothing is flagged, 1 when something is, 2 on errors. It runs as a
+`report.json` (whether that is the comparison file under `compare/<baseline-id>/` is M0.7's to
+decide, amendment of 2026-10-24), and exits 0 when nothing is flagged, 1 when something is, 2 on errors. It runs as a
 post-run step on the cluster or in CI for models that run there. It never changes the store beyond
 pushing its own build. Whether a flagged-but-reviewed change still exits 1 is part of the deferred
 design.

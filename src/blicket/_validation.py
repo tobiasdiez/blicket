@@ -4,6 +4,7 @@ Every check normalises one value or raises ``_Invalid`` with all that is wrong w
 collectors at the end turn those into lists of problems, each saying what to do.
 """
 
+import annotationlib
 import inspect
 import math
 import re
@@ -147,7 +148,8 @@ def _transform(value: object, what: str) -> None:
     if not callable(value):
         raise _Invalid(f"{what} must be a function of the run, got {_shown(value)}")
     try:
-        signature = inspect.signature(value)
+        # A name bound only under TYPE_CHECKING stays a ForwardRef instead of raising.
+        signature = inspect.signature(value, annotation_format=annotationlib.Format.FORWARDREF)
     except ValueError:  # some builtins, such as str, have no signature; nothing to check
         return
     try:

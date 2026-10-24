@@ -12,8 +12,11 @@ run. The idea behind it is in
 # pyproject.toml
 [tool.blicket]
 blicks = ["blicks/**/*.py"]  # the default
-loader = "mymodel.blicket:load_run"
 ```
+
+The loader is `load_run` in `blicketconf.py` next to `pyproject.toml`, found by convention like
+pytest's `conftest.py`; a project whose loader lives inside its own package sets
+`loader = "mymodel.blicket:load_run"` instead.
 
 ```python
 # blicks/flows.py
@@ -47,7 +50,7 @@ tracebacks, `--json` prints the report as JSON.
 The `loader` in `[tool.blicket]` names a function that loads a run and says what it is:
 
 ```python
-# mymodel/blicket.py
+# blicketconf.py
 import polars as pl
 
 import blicket as bk
@@ -84,10 +87,13 @@ share their dimension values, which become strings, integers, booleans, dates or
 
 ```console
 $ blicket build runs/2026-10-22
-run 2026-10-22 · profile baseline · HEAD 0a6b858 · loaded in 12 ms
+run 2026-10-22 · profile baseline · blicks at 0a6b858 · loaded in 12 ms
 1 Blick: 1 built
 build 5d0c3f1e2a9b8c47 → .blicket/build/5d0c3f1e2a9b8c47
 ```
+
+The first line names the run and its profile, the commit of the repository that holds the Blicks
+(`blicks at`, marked `(dirty)` with uncommitted changes), and the loader's wall time.
 
 The build directory holds `manifest.json`, which describes the run, the project's settings and git
 state, every Blick's definition, table schema and problems, and one `blicks/<id>.parquet` per Blick
@@ -101,6 +107,15 @@ Blicks are built all the same, and the exit code is 2. `--json` prints the manif
 puts the build directory into `DIR` instead of `.blicket/build`, and `-v` shows tracebacks. blicket
 gives `.blicket/` a `.gitignore`, so builds never show up in `git status`.
 
+## Example
+
+[examples/remind-mfa](examples/remind-mfa) is a project on runs of remind-mfa's plastics model: a
+loader that unpickles a run, and ten Blicks, mostly ported from remind-mfa's own figures, which
+return flodym arrays and pandas frames. It has its own uv environment with remind-mfa from a
+checkout next to this repository. The runs are not in the repository, and producing one needs
+remind-mfa's input data, which is not public; the example's README says how to set it up and build
+a run.
+
 ## Development
 
 ```console
@@ -113,8 +128,10 @@ uv run ty check
 blicket is built with meson-python without build isolation, so that the editable install made by
 `uv sync` can rebuild on import. The build tools therefore live in the `build` dependency group,
 which is installed by default; `uv sync --no-default-groups` is not supported for development.
-Every module under `src/blicket` must be listed in `meson.build` (a test checks this). `uv build`
-packs only committed files; use `uv build --wheel` to try uncommitted work.
+Every module under `src/blicket` must be listed in `meson.build` (a test checks this). The
+`cache-keys` in `[tool.uv]`, there for the example's path dependency, also make `uv run` reinstall
+the editable package after a source edit, which takes about half a second. `uv build` packs only
+committed files; use `uv build --wheel` to try uncommitted work.
 
 ## License
 

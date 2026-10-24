@@ -1,7 +1,7 @@
 """The definition API, used directly from this module, outside discovery."""
 
 import functools
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -10,6 +10,10 @@ from blicket import definitions
 from blicket._validation import _CHECKS, BlickOptions
 from blicket.assembly import assemble
 from blicket.model import BlickDefinition
+
+if TYPE_CHECKING:
+    # Bound for the type checker only, as such imports are in Blick modules.
+    from collections.abc import Sized as RunType
 
 LINE = bk.plots.line(x="year", y="value")
 # For calls that are wrong on purpose, which the type checker would reject.
@@ -194,6 +198,14 @@ def test_every_problem_of_a_blick_is_reported() -> None:
 
 def test_transform_without_a_signature_is_accepted() -> None:
     bk.register(id="defs/x", plot=LINE, transform=str)
+    assert list(assembled().blicks) == ["defs/x"]
+
+
+def test_transform_annotated_with_a_type_checking_import_is_accepted() -> None:
+    def total(run: RunType) -> RunType:
+        return run
+
+    bk.register(id="defs/x", plot=LINE, transform=total)
     assert list(assembled().blicks) == ["defs/x"]
 
 

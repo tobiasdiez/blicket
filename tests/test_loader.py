@@ -22,10 +22,27 @@ def failing_build(tmp_path: Path, loader: str, runs: int = 1) -> LoaderError:
     return info.value
 
 
-def test_missing_loader_key(tmp_path: Path) -> None:
+def test_no_loader_anywhere(tmp_path: Path) -> None:
     root = make_project(tmp_path, {"blicks/a.py": one_blick("a/x")})
-    with pytest.raises(bk.ConfigError, match=r'no loader in \[tool.blicket\]; add loader = "'):
+    with pytest.raises(bk.ConfigError, match=r"no loader; add blicketconf.py with a load_run"):
         bk.build(root, [make_run(tmp_path / "run")])
+
+
+def test_blicketconf_is_the_default_loader(tmp_path: Path) -> None:
+    files = {"blicks/a.py": one_blick("a/x"), "blicketconf.py": LOADER}
+    root = make_project(tmp_path, files)
+    build = bk.build(root, [make_run(tmp_path / "run")])
+    assert build.manifest.run.id == "run"
+
+
+def test_loader_key_wins_over_blicketconf(tmp_path: Path) -> None:
+    files = {
+        "blicks/a.py": one_blick("a/x"),
+        "blicketconf.py": "def load_run(selection):\n    raise AssertionError('not me')\n",
+        "model_loader.py": LOADER,
+    }
+    root = make_project(tmp_path, files, 'loader = "model_loader:load_run"\n')
+    assert bk.build(root, [make_run(tmp_path / "run")]).manifest.run.id == "run"
 
 
 def test_missing_run_path(tmp_path: Path) -> None:

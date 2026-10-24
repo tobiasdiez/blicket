@@ -355,9 +355,10 @@ def render_build(result: Build, *, verbose: bool = False) -> str:
     """The text of ``blicket build``: the run, the counts, the build directory, then problems."""
     manifest = result.manifest
     run, repository = manifest.run, manifest.repository
+    # The commit of the Blick repository, not of the model that produced the run.
     head = "no git commit"
     if repository is not None:
-        head = f"HEAD {repository.commit[:7]}{' (dirty)' if repository.dirty else ''}"
+        head = f"blicks at {repository.commit[:7]}{' (dirty)' if repository.dirty else ''}"
     milliseconds = manifest.build.loader_ms
     loaded = f"{milliseconds:.0f} ms" if milliseconds < 1000 else f"{milliseconds / 1000:.1f} s"
     where = display_path(result.path, Path.cwd())

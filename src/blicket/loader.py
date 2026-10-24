@@ -1,5 +1,8 @@
-"""The loader protocol: the run selection a loader receives, and the call of the project's loader
-named in ``[tool.blicket] loader``. The ``RunInfo`` it returns is part of the manifest."""
+"""The loader protocol: the run selection a loader receives, and the call of the project's loader.
+
+The loader is ``load_run`` in ``blicketconf.py`` next to the project's ``pyproject.toml``, like
+pytest's ``conftest.py``, unless ``[tool.blicket] loader`` names another function. The ``RunInfo``
+it returns is part of the manifest."""
 
 import hashlib
 import importlib
@@ -15,6 +18,8 @@ from pydantic import ValidationError
 from blicket.errors import LoaderError
 from blicket.manifest import RunInfo
 from blicket.tracebacks import project_traceback, raised_at
+
+DEFAULT_LOADER_MODULE = "blicketconf"
 
 
 @dataclass(frozen=True)

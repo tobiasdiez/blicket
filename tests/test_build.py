@@ -1,6 +1,7 @@
 """The headless build: entries and files, build ids, repository state, the manifest's schema."""
 
 import json
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -8,7 +9,7 @@ import jsonschema
 import pytest
 
 import blicket as bk
-from blicket import manifest
+from blicket import builder, manifest
 from blicket.builder import NothingToBuild
 from blicket.errors import BlicketError
 from blicket.manifest import BuildConfig, Manifest
@@ -147,8 +148,22 @@ def test_the_same_inputs_give_the_same_build(project: Path) -> None:
     first = bk.build(project, ["runs/a"])
     second = bk.build(project, ["runs/a"])
     assert (first.existed, second.existed, second.path) == (False, True, first.path)
-    assert second.manifest == first.manifest  # the existing directory was left alone
+    assert second.manifest.build.id == first.manifest.build.id
+    assert manifest.read(first.path) == first.manifest  # the existing directory was left alone
     assert [p.name for p in first.path.parent.iterdir()] == [first.path.name]
+
+
+def test_a_rebuild_reports_its_own_run_and_load_time(
+    project: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = bk.build(project, ["runs/a"])
+    shutil.copytree("runs/a", "runs/b")  # the same content, so the same build id
+    load = builder.load
+    monkeypatch.setattr(builder, "load", lambda *args: (*load(*args)[:2], 1234.5))
+    second = bk.build(project, ["runs/b"])
+    assert (second.existed, second.manifest.build.id) == (True, first.manifest.build.id)
+    assert (second.manifest.run.id, second.manifest.build.loader_ms) == ("b", 1234.5)
+    assert manifest.read(second.path) == first.manifest
 
 
 def test_moving_a_blick_keeps_the_id(tmp_path: Path) -> None:

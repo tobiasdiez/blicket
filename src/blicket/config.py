@@ -52,7 +52,10 @@ class Config(BaseModel):
     loader: str | None = Field(
         default=None,
         pattern=r"^\w+(\.\w+)*:\w+(\.\w+)*$",
-        description='Import path of the function that loads a run, as "package.module:function".',
+        description=(
+            'Import path of the function that loads a run, as "package.module:function". '
+            "Default: load_run in blicketconf.py next to pyproject.toml."
+        ),
     )
     store: str = Field(
         default=".blicket/store", description="Directory of the store, relative to the project."

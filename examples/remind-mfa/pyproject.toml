@@ -1,0 +1,20 @@
+[project]
+name = "remind-mfa-blicks"
+version = "0"
+description = "Blicks on remind-mfa plastics runs, an example blicket project."
+requires-python = ">=3.14"
+dependencies = ["blicket", "pandas", "remind-mfa"]
+
+[tool.uv]
+# remind-mfa → ixmp4 → scse-toolkit pins polars below 2.0, which blicket needs.
+override-dependencies = ["polars>=2.0"]
+
+[tool.uv.sources]
+# Not editable: uv rebuilds blicket when a file named in its [tool.uv] cache-keys changes.
+blicket = { path = "../.." }
+# The remind-mfa checkout next to this repository, editable: a run unpickles with the code of
+# the commit checked out there.
+remind-mfa = { path = "../../../remind-mfa", editable = true }
+
+[tool.blicket]
+# Empty: the loader is load_run in blicketconf.py next to this file, the Blicks are under blicks/.

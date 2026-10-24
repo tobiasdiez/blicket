@@ -46,6 +46,8 @@ dev = [
 [tool.uv]
 no-build-isolation-package = ["blicket"]
 default-groups = ["build", "dev"]
+# What uv watches to rebuild blicket where it is a path dependency, as in examples/remind-mfa.
+cache-keys = [{ file = "pyproject.toml" }, { file = "meson.build" }, { file = "src/**/*.py" }]
 
 [tool.ruff]
 line-length = 100
@@ -58,6 +60,12 @@ select = ["E", "W", "F", "I", "UP", "B", "SIM", "RUF", "PT", "C4"]
 [tool.ty.src]
 # meson's build directory
 exclude = ["build"]
+
+[[tool.ty.overrides]]
+# The examples import their models, which blicket's environment lacks; their blicket calls are
+# still checked.
+include = ["examples/**"]
+rules.unresolved-import = "ignore"
 
 [tool.pytest]
 testpaths = ["tests"]

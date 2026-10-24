@@ -1,0 +1,2 @@
+# meson dist packs the sdist from git; the examples stay out of it.
+examples/ export-ignore

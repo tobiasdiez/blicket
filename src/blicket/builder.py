@@ -23,7 +23,7 @@ from blicket import manifest, tables
 from blicket.config import PYPROJECT, load_config
 from blicket.discovery import discover
 from blicket.errors import NOWHERE, BlicketError, ConfigError, Kind, Problem
-from blicket.loader import RunSelection, load
+from blicket.loader import DEFAULT_LOADER_MODULE, RunSelection, load
 from blicket.manifest import BuildConfig, BuildInfo, Manifest, Repository, Run
 from blicket.model import Blick, BlickEntry, Registry
 from blicket.tracebacks import locate, project_traceback, raised_at
@@ -39,9 +39,11 @@ class NothingToBuild(BlicketError):
 
 @dataclass(frozen=True)
 class Build:
-    """A build directory, its manifest as written, and the project root it was built from.
+    """A build directory, the manifest this build computed, and the project root it was built from.
 
-    ``existed`` when a build of the same id was there already; ``manifest`` then is that one's.
+    ``existed`` when a build of the same id was there already. That directory is left as it was,
+    so its manifest may hold another run id, paths, branch, dirty flag and timings than
+    ``manifest``, which has this build's, with its sources relative to the root as written.
     """
 
     path: Path
@@ -66,11 +68,15 @@ def build(
     """
     root = Path(project).resolve()
     config = load_config(root)
-    if config.loader is None:
-        raise ConfigError(
-            f"{root / PYPROJECT}: no loader in [tool.blicket]; "
-            'add loader = "package.module:function"'
-        )
+    target = config.loader
+    if target is None:
+        if not (root / f"{DEFAULT_LOADER_MODULE}.py").is_file():
+            raise ConfigError(
+                f"{root}: no loader; add {DEFAULT_LOADER_MODULE}.py with a load_run(selection) "
+                f'next to {PYPROJECT}, or set loader = "package.module:function" in '
+                "[tool.blicket]"
+            )
+        target = f"{DEFAULT_LOADER_MODULE}:load_run"
     registry = discover(root, config)
     if not registry.blicks:
         raise NothingToBuild(registry)
@@ -84,7 +90,7 @@ def build(
         shown.append(path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path))
 
     with contextlib.redirect_stdout(sys.stderr):
-        run, info, loader_ms = load(config.loader, RunSelection(paths=tuple(resolved)), root)
+        run, info, loader_ms = load(target, RunSelection(paths=tuple(resolved)), root)
         repository, problems = _repository(root)
         destination = Path(out).resolve() if out is not None else root / ".blicket" / "build"
         temporary = destination / f".tmp-{os.getpid()}-{secrets.token_hex(4)}"
@@ -120,12 +126,14 @@ def build(
             (temporary / manifest.MANIFEST).write_text(text + "\n")
             final = destination / built.build.id
             existed = final.exists()
-            if not existed:
+            if existed:
+                manifest.read(final)  # raises when the existing build is damaged
+            else:
                 temporary.rename(final)
         finally:
             if temporary.exists():
                 shutil.rmtree(temporary, ignore_errors=True)
-    return Build(final, manifest.read(final), existed, root)
+    return Build(final, Manifest.model_validate_json(text), existed, root)
 
 
 def _git(root: Path, *args: str) -> str:

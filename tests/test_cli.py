@@ -11,7 +11,7 @@ import pytest
 import typer
 from typer.testing import CliRunner, Result
 
-from blicket import cli
+from blicket import builder, cli, manifest
 from tests.support import (
     PROJECTS,
     VALUES,
@@ -258,12 +258,27 @@ def test_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert result.exit_code == 0, result.output
     (build_id,) = build_ids()
     assert result.stdout == (
-        f"run a · profile test · HEAD {commit} · loaded in 5 ms\n"
+        f"run a · profile test · blicks at {commit} · loaded in 5 ms\n"
         "1 Blick: 1 built\n"
         f"build {build_id} → .blicket/build/{build_id}\n"
     )
     again = build("runs/a").stdout.splitlines()[2]
     assert again == f"build {build_id} → .blicket/build/{build_id} (built before, left as it was)"
+
+
+def test_a_rebuild_prints_its_own_load_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build_project(tmp_path, monkeypatch)
+    assert invoke("build", "runs/a").exit_code == 0
+    (build_id,) = build_ids()
+    stored = manifest.read(Path(".blicket/build", build_id)).build.loader_ms
+    load = builder.load
+    monkeypatch.setattr(builder, "load", lambda *args: (*load(*args)[:2], 2500.0))
+    lines = invoke("build", "runs/a").stdout.splitlines()
+    assert lines[0].endswith("· loaded in 2.5 s")
+    assert lines[2].endswith("(built before, left as it was)")
+    assert manifest.read(Path(".blicket/build", build_id)).build.loader_ms == stored
 
 
 def test_build_with_errors_and_warnings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -274,7 +289,7 @@ def test_build_with_errors_and_warnings(tmp_path: Path, monkeypatch: pytest.Monk
     result = build("runs/a")
     assert result.exit_code == 2
     lines = result.stdout.splitlines()
-    assert lines[0] == f"run a · profile test · HEAD {commit} (dirty) · loaded in 5 ms"
+    assert lines[0] == f"run a · profile test · blicks at {commit} (dirty) · loaded in 5 ms"
     assert lines[1] == (
         "2 Blicks: 1 built · 1 error · 1 import error · 1 warning · incomplete (Blicks missing)"
     )

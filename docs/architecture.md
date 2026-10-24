@@ -50,7 +50,7 @@ push → copies the build into the store (immutable, keyed by build id)
 <store>/
   builds/<build-id>/
     manifest.json             spec version, RunInfo, commit, branch, dirty flag, timestamp, tolerance, per-Blick definitions, schemas and hashes
-    compare/<baseline-id>/    flags, magnitude and the baseline tables of changed Blicks, per baseline (amendment of 2026-10-23); if `push` copies it (M0.7)
+    compare/<baseline-id>/    flags, magnitude and the baseline tables of changed Blicks, per baseline (amendment of 2026-10-23); copied by the first `push` (M0.7)
     blicks/<id>.parquet       canonical tables, zstd
 ```
 
@@ -60,20 +60,31 @@ push → copies the build into the store (immutable, keyed by build id)
   Every pushed build is kept, since storage is no constraint. This also gives run-against-run
   comparison for free: `blicket diff <build-a> <build-b>`. Amendment of 2026-10-24 (M0.6): `diff`
   prints the comparison, as a summary or as the comparison file (`--json`), writes nothing, and
-  exits 0 when it finds changes; `check` is the guard. `check` (M0.7) writes the comparison into
-  the build directory's `compare/<baseline-id>/` and decides whether `push` copies it; `push`
-  copies the manifest and the tables.
+  exits 0 when it finds changes; `check` is the guard. Amendment of 2026-10-24 (M0.7): `check`
+  writes the comparison into the build directory's `compare/<baseline-id>/`, and `push` copies
+  `compare/` along with the manifest and the tables on the build's first push; a build the store
+  holds already is left as it is, comparisons included.
 - **Baseline resolution** matches builds by run profile and follows git ancestry. The commit that
   anchors ancestry is HEAD of the repository holding the Blick code, read at build time; the
   model commit in the run info is informational. Among candidate builds whose commit is HEAD or
-  an ancestor (`git merge-base --is-ancestor`) and whose profile matches, the most recent wins. Per Blick, the baseline is that build's table, with fallback to
-  older candidates if the Blick is missing there; no candidate means `new`. A feature branch
-  starts from main's build; after a merge, main sees the branch's build as an ancestor. This is
-  Chromatic's carry-over with one git command.
-- **Which builds are candidates is the deferred decision.** Until the accept design exists, a build
-  is compared against an explicit baseline (`--against <build-id>`) or against the most recent
-  build of a branch by ancestry (`--against main`). Once acceptance exists, candidates are the
-  accepted builds, and the resolution rule stays as it is.
+  an ancestor (`git merge-base --is-ancestor`) and whose profile matches, the most recent by the
+  manifest's `created_at` wins. The current build itself, incomplete builds and builds without a
+  commit are not candidates, dirty builds are, so a retry after a failed `check --push` finds the
+  same baseline (amendment of 2026-10-24, M0.7). Per Blick, the baseline is that build's table; a
+  Blick it lacks is `new`. Amendment of 2026-10-24 (M0.7): the fallback to older candidates for a
+  Blick the newest lacks is deferred to the accept design, where carry-over over accepted
+  baselines pays off. A feature branch starts from main's build; after a merge, main sees the
+  branch's build as an ancestor. Candidates whose commits the clone does not have (`git cat-file
+  -e`) are skipped with a warning naming them when a baseline is found, so that one build pushed
+  from a laptop at an unpushed commit does not fail every other clone; when none is found, they
+  make `check` fail rather than pass, since one of them may be the baseline, as in a shallow
+  clone. The message names them with their commits and suggests the full history (`git fetch
+  --unshallow`, `fetch-depth: 0` in GitHub Actions) or `--against <id>`.
+- **Which builds are candidates is the deferred decision.** Until the accept design exists, the
+  candidates are the pushed builds of the profile, but the exceptions above: by default the most
+  recent on the history of the build's own commit wins; `--against` names the baseline (a build id or directory) or a ref whose history is
+  searched instead (`--against origin/main`, which keeps a branch compared with main). Once
+  acceptance exists, candidates are the accepted builds, and the resolution rule stays as it is.
 - The store is a plain directory. Everything reads and writes through one small `Store` class, so
   an fsspec backend (SFTP, S3) can be added when the review flow needs it.
 
@@ -255,6 +266,7 @@ my-model/
       compare/<baseline-id>/      comparison result and the baseline tables of changed Blicks, so the
                                   site is self-contained but small; additive, never changes the manifest;
                                   written by `check`, not `diff` (amendment of 2026-10-24)
+      compare/index.json          the baselines compared against, regenerated by `check` (M0.7)
       <viewer assets>
     store/                        default store location
 ```
@@ -341,10 +353,14 @@ same controls and plot types.
 
 ## Guard
 
-`blicket check <run dir> [--against <build|branch>] [--push]` builds, resolves the baseline,
-prints the summary, writes `report.md` (to the GitHub step summary when present) and
-`report.json` (whether that is the comparison file under `compare/<baseline-id>/` is M0.7's to
-decide, amendment of 2026-10-24), and exits 0 when nothing is flagged, 1 when something is, 2 on errors. It runs as a
+`blicket check <run dir> [--against <build|ref>] [--push]` builds, resolves the baseline,
+prints the summary, writes the comparison file `compare/<baseline-id>/comparison.json`, which is
+the record of the comparison, appends its Markdown summary to the GitHub step summary when
+present, and exits 0 when nothing is flagged, 1 when something is, 2 on errors, a baseline that
+cannot be resolved among them; no baseline is not an error, so the first `check` of a profile
+exits 0 and writes no comparison. Amendment of 2026-10-24 (M0.7): the comparison file is the
+`report.json` of earlier drafts, and the Markdown, `report.md` before, is written to the step
+summary only. It runs as a
 post-run step on the cluster or in CI for models that run there. It never changes the store beyond
 pushing its own build. Whether a flagged-but-reviewed change still exits 1 is part of the deferred
 design.
@@ -399,13 +415,14 @@ loops. TypeScript types for the manifest are hand-written for now.
   canonical form,
   `PlotType` contract with built-in line, stacked area, bar (Python halves only), store with push
   and baseline resolution by profile and git ancestry against an explicit or branch baseline, flags
-  and magnitude, `blicket check`, `blicket diff <build> <build>`, `report.md`, exit codes. No
-  viewer. Dogfood on remind-mfa under `examples/remind-mfa/` with the pickled runs in
+  and magnitude, `blicket check`, `blicket diff <build> <build>`, the Markdown step summary,
+  exit codes. No viewer. Dogfood on remind-mfa under `examples/remind-mfa/` with the pickled runs in
   `data_out/`, with two measurements: loader time, and the noise level across reruns and
   machines, which sets the tolerance default.
 - **M1 Catalog.** Nuxt viewer with overview, Blick page with controls and comparison toggle,
   browser halves of the built-ins, `blicket build`, `blicket serve <dir>`. Amendment of
-  2026-10-24: built ahead of M0.5–M0.7, so without the comparison toggle, which comes with them.
+  2026-10-24: built ahead of M0.5–M0.7, so without the comparison toggle, which comes with the
+  task after M0.7 (M0.7b), since M0.7 writes what it reads.
 - **M2 Dev loop.** `blicket dev` with code reload, SSE, run-directory polling. Scatter and table
   plot types. The Blick builder with run picker, variable picker, channel mapping and item
   selection, on the remind-mfa adapter. This completes job 1.
@@ -477,18 +494,29 @@ the loader takes a run directory and returns the run object plus `RunInfo`.
 2. A post-run step runs the guard on the cluster, with the store on the cluster filesystem:
 
    ```
-   $ blicket check output/pr-142 --against main --push
-   baseline: build 9c1d (main, 2026-10-21) · profile baseline
-   48 Blicks: 42 unchanged · 6 value · 0 schema · 0 new · 0 errors
-   build 4e8a pushed to /p/projects/remind-mfa/blicket-store
-   exit 1
+   $ blicket check output/pr-142 --against origin/main --push
+   run pr-142 · profile baseline · blicks at 3f9a2c1 · loaded in 1.4 s
+   48 Blicks: 48 built
+   build 4e8a91c07b3d5f26 → .blicket/build/4e8a91c07b3d5f26
+
+   baseline 9c1d0e7f3a2b4c58 · run main-2026-10-21 · blicks at 81b0d4e · built 2026-10-21 22:05 UTC
+   vs baseline: 42 unchanged · 6 value
+   top movers: flows/steel-by-process 0.31 (region=EU, year=2050)
+               stocks/buildings 0.12 (region=CHA, year=2100)
+               flows/scrap 0.04 (region=USA, year=2030)
+               … and 3 more
+   flagged: 6 of 48 Blicks
+   comparison → .blicket/build/4e8a91c07b3d5f26/compare/9c1d0e7f3a2b4c58
+   build 4e8a91c07b3d5f26 → /p/projects/remind-mfa/blicket-store/builds/4e8a91c07b3d5f26 (with the comparisons against 9c1d0e7f3a2b4c58)
+   $ echo $?
+   1
    ```
 
 3. You copy the build to the laptop and look at it with the same viewer as in walkthrough 1:
 
    ```
-   $ rsync -a cluster:/p/projects/remind-mfa/blicket-store/builds/4e8a .blicket/build/
-   $ blicket serve .blicket/build/4e8a
+   $ rsync -a cluster:/p/projects/remind-mfa/blicket-store/builds/4e8a91c07b3d5f26 .blicket/build/
+   $ blicket serve .blicket/build/4e8a91c07b3d5f26
    ```
 
 4. Review, acceptance, the PR comment and the commit status: the deferred design, direction UI

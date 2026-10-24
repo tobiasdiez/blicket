@@ -142,16 +142,21 @@ class Manifest(BaseModel):
         return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
 
+class OtherSpec(BlicketError):
+    """A manifest of another ``spec`` than this blicket reads."""
+
+
 def read(directory: Path) -> Manifest:
     """The manifest of the build directory ``directory``.
 
-    Raises ``BlicketError`` when it cannot be read, is of another ``spec``, or is invalid.
+    Raises ``OtherSpec`` when it is of another ``spec``, and ``BlicketError`` when it cannot be
+    read or is invalid.
     """
     try:
         data = json.loads((directory / MANIFEST).read_bytes())
         spec = data.get("spec") if isinstance(data, dict) else None
         if isinstance(spec, str) and spec != SPEC:
-            raise BlicketError(
+            raise OtherSpec(
                 f"{directory / MANIFEST} is spec {spec}; this blicket reads {SPEC}: rebuild the run"
             )
         return Manifest.model_validate(data)

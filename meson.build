@@ -9,6 +9,7 @@ py.install_sources(
   'src/blicket/__init__.py',
   'src/blicket/_validation.py',
   'src/blicket/assembly.py',
+  'src/blicket/baseline.py',
   'src/blicket/builder.py',
   'src/blicket/cli.py',
   'src/blicket/comparison.py',

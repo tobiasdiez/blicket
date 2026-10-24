@@ -1,10 +1,12 @@
 """The ``blicket`` command line.
 
-Exit codes: 0 success, 2 errors of any kind. typer alone exits 1 on an uncaught exception, so
-``_App`` maps those to 2 for every command; click's usage errors exit 2 by themselves.
+Exit codes: 0 success, 1 a Blick flagged by ``check``, 2 errors of any kind. typer alone exits 1
+on an uncaught exception, so ``_App`` maps those to 2 for every command; click's usage errors exit
+2 by themselves.
 
 Streams: a command's result is the report on stdout, as text or, with ``--json``, as JSON; every
-problem found in the project is part of it. What blicket cannot work around (a missing project,
+problem found in the project is part of it. ``check --json`` prints the comparison, or ``null``,
+and its text report on stderr. What blicket cannot work around (a missing project,
 an invalid ``[tool.blicket]``, a failing loader, a build that cannot be written) is one
 ``error: ...`` line on stderr instead, with the project's traceback under ``-v``; an unexpected
 exception is an ``error:`` line, the traceback under ``-v``, and a line asking for a bug report.
@@ -22,17 +24,28 @@ from typing import Annotated, Any
 import typer
 from typer.core import TyperGroup
 
-from blicket import serve
-from blicket.builder import NothingToBuild, build
-from blicket.comparison import compare_builds
+from blicket import comparison, serve
+from blicket.baseline import resolve
+from blicket.builder import Build, NothingToBuild, build
 from blicket.config import find_project_root, load_config
 from blicket.discovery import discover
 from blicket.errors import BlicketError, ConfigError, display_path
 from blicket.model import Registry
-from blicket.report import render_build, render_diff, render_list, render_list_json
+from blicket.report import (
+    render_build,
+    render_check,
+    render_diff,
+    render_list,
+    render_list_json,
+    render_markdown,
+    render_markdown_no_baseline,
+    render_push,
+)
 from blicket.store import Store
 
+FLAGGED_EXIT_CODE = 1
 ERROR_EXIT_CODE = 2
+STEP_SUMMARY_ENV = "GITHUB_STEP_SUMMARY"
 _VERBOSE = "blicket.verbose"
 
 
@@ -78,6 +91,23 @@ ProjectOption = Annotated[
 ]
 VerboseOption = Annotated[
     bool, typer.Option("-v", "--verbose", help="Show tracebacks.", callback=_remember_verbose)
+]
+
+RunsArgument = Annotated[
+    list[Path],
+    typer.Argument(
+        help="A model run's output directory (several only if the project's loader combines them).",
+        metavar="RUN_PATH...",
+        show_default=False,
+    ),
+]
+OutOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--out",
+        help="Where build directories go (default: .blicket/build in the project).",
+        show_default=False,
+    ),
 ]
 
 app = typer.Typer(
@@ -126,26 +156,9 @@ def list_command(
 
 @app.command("build")
 def build_command(
-    runs: Annotated[
-        list[Path],
-        typer.Argument(
-            help=(
-                "A model run's output directory (several only if the project's loader combines "
-                "them)."
-            ),
-            metavar="RUN_PATH...",
-            show_default=False,
-        ),
-    ],
+    runs: RunsArgument,
     project: ProjectOption = None,
-    out: Annotated[
-        Path | None,
-        typer.Option(
-            "--out",
-            help="Where build directories go (default: .blicket/build in the project).",
-            show_default=False,
-        ),
-    ] = None,
+    out: OutOption = None,
     as_json: Annotated[bool, typer.Option("--json", help="Print the manifest as JSON.")] = False,
     verbose: VerboseOption = False,
 ) -> None:
@@ -154,12 +167,7 @@ def build_command(
     Writes to .blicket/build/<id>/ (under --out if given) and prints the id; show it with
     blicket serve.
     """
-    try:
-        built = build(_root(project), runs, out=out)
-    except NothingToBuild as error:
-        typer.echo(f"error: {error}", err=True)
-        finish(_list_report(error.registry, as_json, verbose), failed=True)
-        return
+    built = _build_or_exit(_root(project), runs, out, as_json, verbose)
     if as_json:
         text = built.manifest.model_dump_json(indent=2)
     else:
@@ -210,14 +218,13 @@ def push_command(
     project: ProjectOption = None,
     verbose: VerboseOption = False,
 ) -> None:
-    """Copy a build's manifest and tables into the project's store.
+    """Copy a build's manifest, tables and comparisons into the project's store.
 
     The store is .blicket/store unless the store setting of the project names another directory.
     A build already in the store is left as it is.
     """
     pushed = _store(_root(project)).push(serve.build_directory(directory))
-    already = " (in the store already)" if pushed.existed else ""
-    finish(f"build {pushed.id} → {display_path(pushed.path, Path.cwd())}{already}", failed=False)
+    finish(render_push(pushed), failed=False)
 
 
 @app.command("diff")
@@ -245,9 +252,123 @@ def diff_command(
     Each top mover shows its magnitude and the row where it occurs.
     The magnitude is its largest change relative to the chart's scale, 0 to 1.
     """
-    comparison = compare_builds(_build_path(baseline, project), _build_path(current, project))
-    text = comparison.model_dump_json(indent=2) if as_json else render_diff(comparison)
-    finish(text, failed=comparison.has_errors)
+    compared = comparison.compare_builds(
+        _build_path(baseline, project), _build_path(current, project)
+    )
+    text = compared.model_dump_json(indent=2) if as_json else render_diff(compared)
+    finish(text, failed=compared.has_errors)
+
+
+@app.command("check")
+def check_command(
+    runs: RunsArgument,
+    against: Annotated[
+        str | None,
+        typer.Option(
+            "--against",
+            help=(
+                "The baseline: a build id in the store or a build directory; or a git ref whose "
+                "history is searched instead of the build's commit."
+            ),
+            metavar="BUILD|REF",
+            show_default=False,
+        ),
+    ] = None,
+    push: Annotated[
+        bool, typer.Option("--push", help="Push the build into the store, comparison included.")
+    ] = False,
+    as_json: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help=(
+                "Print the comparison as JSON on stdout (null without baseline); the report goes "
+                "to stderr."
+            ),
+        ),
+    ] = False,
+    project: ProjectOption = None,
+    out: OutOption = None,
+    verbose: VerboseOption = False,
+) -> None:
+    """Build a run, compare it with its baseline, write the comparison.
+
+    The baseline is the newest pushed build of the run's profile at the
+    build's commit or an ancestor. --against names another baseline, or a
+    git ref whose history is searched instead (in CI: --against origin/main).
+
+    The comparison goes to compare/<baseline id>/ in the build directory, a
+    Markdown summary to the file GITHUB_STEP_SUMMARY names. A Blick is
+    flagged value, schema, new, removed or error; the magnitude is its
+    largest change relative to the chart's scale, 0 to 1.
+
+    Exit codes: 0 nothing flagged or no baseline yet; 1 value, schema, new
+    or removed; 2 errors or a baseline that cannot be resolved.
+    """
+    root = _root(project)
+    built = _build_or_exit(root, runs, out, as_json, verbose, null=True)
+    store = _store(root)
+    listing = store.list()
+    resolution = resolve(listing, built.manifest, root, against)
+    compared = None
+    if (found := resolution.baseline) is not None:
+        compared = comparison.write(
+            comparison.compare_builds(found.path, built.path), found.path, built.path
+        )
+    pushed = store.push(built.path) if push else None
+    warnings = [f"skipped a build in the store: {damaged}" for damaged in listing.damaged]
+    text = render_check(built, resolution, compared, pushed, warnings, verbose=verbose)
+    markdown = (
+        render_markdown(compared)
+        if compared is not None
+        else render_markdown_no_baseline(built.manifest, resolution)
+    )
+    if (problem := _append_step_summary(markdown)) is not None:
+        text += f"\nwarning: {problem}"
+    if as_json:
+        _echo(text, err=True)
+        text = compared.model_dump_json(indent=2) if compared is not None else "null"
+    failed = (
+        built.manifest.has_errors
+        or resolution.failed
+        or (compared is not None and compared.has_errors)
+    )
+    finish(text, failed=failed, flagged=compared is not None and compared.flagged > 0)
+
+
+def _build_or_exit(
+    root: Path,
+    runs: list[Path],
+    out: Path | None,
+    as_json: bool,
+    verbose: bool,
+    *,
+    null: bool = False,
+) -> Build:
+    """The build of ``runs``; when no Blick can be built, the report of why, and exit 2. With
+    ``null``, ``--json`` prints ``null`` and the report goes to stderr, as ``check`` does."""
+    try:
+        return build(root, runs, out=out)
+    except NothingToBuild as error:
+        typer.echo(f"error: {error}", err=True)
+        if as_json and null:
+            _echo(render_list(error.registry, verbose=verbose), err=True)
+            _echo("null")
+        else:
+            _echo(_list_report(error.registry, as_json, verbose))
+        raise typer.Exit(ERROR_EXIT_CODE) from None
+
+
+def _append_step_summary(markdown: str) -> str | None:
+    """Append ``markdown`` to the file ``GITHUB_STEP_SUMMARY`` names, if set; why not, if not."""
+    if not (summary := os.environ.get(STEP_SUMMARY_ENV)):
+        return None
+    try:
+        with open(summary, "a", encoding="utf-8") as file:
+            file.write(markdown)
+    except OSError as error:
+        return f"cannot append to {STEP_SUMMARY_ENV} {summary}: {error.strerror or error}"
+    return None
 
 
 def _store(root: Path) -> Store:
@@ -273,18 +394,25 @@ def _build_path(given: str, project: Path | None) -> Path:
     raise BlicketError(f"{neither} the id of a build in {where} (blicket push adds one)")
 
 
-def finish(text: str, *, failed: bool) -> None:
-    """Print a command's report on stdout and exit 2 if it holds an error.
-
-    A reader that stops reading early, such as ``head``, ends the output without an error.
-    """
-    try:
-        typer.echo(text)
-    except BrokenPipeError:
-        # Python flushes stdout again on exit; devnull keeps that quiet.
-        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+def finish(text: str, *, failed: bool, flagged: bool = False) -> None:
+    """Print a command's report on stdout; exit 2 if it holds an error, else 1 if it flags a
+    Blick."""
+    _echo(text)
     if failed:
         raise typer.Exit(ERROR_EXIT_CODE)
+    if flagged:
+        raise typer.Exit(FLAGGED_EXIT_CODE)
+
+
+def _echo(text: str, *, err: bool = False) -> None:
+    """Print ``text``; a reader that stops reading early, such as ``head``, ends the output
+    without an error."""
+    try:
+        typer.echo(text, err=err)
+    except BrokenPipeError:
+        # Python flushes the stream again on exit; devnull keeps that quiet.
+        stream = sys.stderr if err else sys.stdout
+        os.dup2(os.open(os.devnull, os.O_WRONLY), stream.fileno())
 
 
 def _list_report(registry: Registry, as_json: bool, verbose: bool) -> str:

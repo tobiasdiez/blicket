@@ -339,7 +339,7 @@ def test_a_manifest_of_another_spec_says_so(project: Path) -> None:
 
 @pytest.mark.parametrize("data", ["../x.parquet", "blicks/../../x.parquet", "/x.parquet", "x\0"])
 def test_a_table_path_stays_in_the_build_directory(data: str) -> None:
-    with pytest.raises(ValidationError, match="data must be a path inside the build directory"):
+    with pytest.raises(ValidationError, match="must be a path inside the build directory"):
         bk.BlickEntry(id="a/x", name="a/x", group="a", data=data)
 
 

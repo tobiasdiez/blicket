@@ -3,8 +3,9 @@
 A request is answered from the installed viewer when it has the path, else from the build
 directory, so a directory that carries an older copy of the viewer shows the current one. Nothing
 outside the two directories is served, not through a symbolic link either, and directories are
-not listed. ``index.html`` and ``manifest.json`` are sent with ``Cache-Control: no-cache``; the
-viewer fetches tables by their content hash and its assets are named by their content.
+not listed. ``index.html``, ``manifest.json`` and the JSON files under ``compare/``, which
+``check`` rewrites, are sent with ``Cache-Control: no-cache``; the viewer fetches tables by their
+content hash and its assets are named by their content.
 """
 
 import errno
@@ -19,6 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from blicket import viewer
+from blicket.comparison import COMPARE
 from blicket.errors import BlicketError
 from blicket.manifest import MANIFEST
 
@@ -82,7 +84,8 @@ class _Handler(SimpleHTTPRequestHandler):
         self.send_error(HTTPStatus.NOT_FOUND, "File not found")
 
     def end_headers(self) -> None:
-        if urllib.parse.urlsplit(self.path).path in _NO_CACHE:
+        path = urllib.parse.urlsplit(self.path).path
+        if path in _NO_CACHE or (path.startswith(f"/{COMPARE}/") and path.endswith(".json")):
             self.send_header("Cache-Control", "no-cache")
         super().end_headers()
 

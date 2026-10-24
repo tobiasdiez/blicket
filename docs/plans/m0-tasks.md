@@ -153,46 +153,52 @@ Blick is in error or removed was not judged. The renderers of `list`, `build` an
 functions in `report.py`; the `Report` protocol carried over from the M0.2 review was declined.
 `diff` writes nothing: writing the comparison next to a build moved to M0.7.
 
-### M0.7 Baseline resolution, `blicket check`, reports and exit codes
+### M0.7 Baseline resolution, `blicket check`, reports and exit codes (built on 2026-10-24)
 
-Carried over from the M0.2 architecture review: `compare/<baseline-id>/` cannot be enumerated over
-HTTP on static hosting, so `check` also writes `compare/index.json` additively, listing the
-baselines a build was compared against, for the viewer. From M0.3: one example project will hold
-Blicks for several models (plastics, steel, cement) with one loader and one profile per model, so
-a Blick that does not apply to a run (a plastics Blick on a steel run) needs a status distinct
-from `error` and `removed`; design it together with `removed`.
+The plan is `m0-7-check-baselines-and-reports.md`. `Store.list` reads the manifests in the store,
+counting and skipping builds of another spec and skipping damaged ones with a warning.
+`baseline.resolve` picks the newest stored build (by `created_at`) of the run's profile, other
+than the current build, complete and with a commit, whose commit is the tip or an ancestor of it
+(`git merge-base --is-ancestor`); the tip is the current build's commit or the commit of
+`--against <ref>`, and `--against` also names a baseline by its id in the store or its build
+directory. No build of the profile, or none on the tip's history, means no baseline and exit 0.
+Candidates whose commits the clone does not have (`git cat-file -e`) are skipped with a warning
+naming them when a baseline is found; when none is found, they mean exit 2, naming them with their
+commits and suggesting the full history (`git fetch --unshallow`, `fetch-depth: 0` in GitHub
+Actions) or `--against <id>`. `blicket check RUN...
+[--against] [--push] [--json]` builds, resolves, compares, and writes the comparison into the
+build directory's `compare/<baseline id>/`: `comparison.json` (the `report.json` of the
+architecture) and the baseline tables of the Blicks flagged `value` or `schema` as
+`blicks/<current id>.parquet`, named in the comparison's `baseline_data` with their
+`baseline_hash`; `compare/index.json` is regenerated from the directory, by modification time.
+The Markdown summary (the `report.md` of the architecture) goes to `$GITHUB_STEP_SUMMARY` only;
+`--push` pushes the build, `compare/` included on its first push; `--json` puts the comparison on
+stdout and the report on stderr; exit codes 0, 1 on flags, 2 on errors or a baseline that cannot
+be resolved. `serve` sends the comparison JSON with `no-cache`. The README's `check` walkthrough,
+listed under M0.8, came with this task. Deferred: the per-Blick fallback to older candidates (to
+the accept design); adding comparisons to a build already in the store; and the status of a Blick
+that does not apply to a run (a plastics Blick on a steel run), which waits for the multi-model
+example, with the constraint that such a Blick stays in the manifest with a status of its own,
+neither `error` nor `removed`, and that a Blick that built in the baseline but is skipped now, in
+the same profile, is reported.
 
-From M0.6: `check` writes the comparison (a `Comparison` from `compare_builds`) into the build
-directory's `compare/<baseline-id>/`, with the baseline tables of the changed Blicks and
-`compare/index.json`, and decides whether `push` copies `compare/` and what a user copying a build
-from the cluster takes along; `report.md` is one more function over `Comparison` in `report.py`,
-and whether `report.json` is the comparison file under `compare/<baseline-id>/` or another one is
-to decide here.
-Resolution reads the manifests in the store (profile, commit, `created_at`), skipping the
-temporary `.tmp-*` directories; `Store` has no listing yet.
+### M0.7b The comparison in the viewer
 
-Candidates by run profile and git ancestry of the Blick repository's HEAD
-(`git merge-base --is-ancestor`), `--against <build-id>` and `--against <branch>`, most recent
-candidate wins, per-Blick fallback to older candidates, `new` when none.
-`blicket check <run dir> [--against ...] [--push]` as build, resolve, diff and report in one
-command, with the baseline tables of changed Blicks copied into the build directory's comparison
-output. `report.md`, appended to the GitHub step summary when that variable is set, and
-`report.json`. Exit codes 0, 1 and 2 as set by the M0.1 policy.
-
-Done when a feature branch resolves main's latest build as baseline, a second profile resolves its
-own, `check` on an unchanged run against its own previous build exits 0, and a deliberate
-transformation change is flagged with the expected flags and a sensible magnitude.
-
-From M0.5, for the task that adds the viewer's comparison toggle (here) or M4's first plot type
-that does not facet: a colour dimension with many values offered as a split by the plot type's
-`controls`, and a plot type's veto of a `split` the author asked for.
+The viewer's half of M0.7, split off on 2026-10-24 so that each half has one implementer. The
+viewer reads `compare/index.json` and the comparisons it lists from the build directory: the
+overview ranks the Blicks by magnitude and colours them by flag, with filters by flag; the Blick
+page gets the comparison toggle, which draws the baseline table (`baseline_data`, cached by
+`baseline_hash`) as a ghost layer (see the M1 review's "M0.7 start" note below), and the
+diagnostics strip at `where`, which sets the controls there. From M0.5, here or in M4's first plot
+type that does not facet: a colour dimension with many values offered as a split by the plot
+type's `controls`, and a plot type's veto of a `split` the author asked for.
 
 ### M0.8 Measurements, defaults and M0 verification
 
 A fresh remind-mfa run from the current checkout on this machine, checked against a build of an
 older run, confirming or correcting the `tolerance` default; measurements recorded in `docs/`. Walk
 the M0 verification list of the architecture, with the cross-machine item waived. A README with
-installation and the `check` walkthrough.
+installation (the `check` walkthrough came with M0.7).
 
 Done when the fresh rerun produces zero `value` flags at the defaults, and every other M0 item in
 the verification list holds.
@@ -208,9 +214,9 @@ the verification list holds.
 ## M1, pulled ahead (2026-10-24)
 
 Tobias chose to build the viewer before the comparison tasks; the plan is `m1-viewer.md`. The
-comparison tasks M0.5–M0.7 follow it and add the overview's change colouring and the comparison
-toggle to the viewer. Feature suggestion recorded there: a switch to turn off the copying of the
-viewer into build directories.
+comparison tasks M0.5–M0.7 follow it, and M0.7b adds the overview's change colouring and the
+comparison toggle to the viewer. Feature suggestion recorded there: a switch to turn off the
+copying of the viewer into build directories.
 
 Notes from the M1 architecture review for the tasks that follow:
 

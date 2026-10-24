@@ -1,15 +1,18 @@
 """Comparing two builds: matching their Blicks, the flags, the reasons, and the movers."""
 
+import json
+import os
 import shutil
 import tempfile
 from pathlib import Path
 
 import polars as pl
 import pytest
+from pydantic import ValidationError
 
 import blicket as bk
 from blicket import manifest
-from blicket.comparison import compare_builds
+from blicket.comparison import BlickComparison, compare_builds, write
 from blicket.errors import BlicketError, Problem, Source
 from blicket.model import BlickEntry, PlotDefinition
 from blicket.schema import Flag
@@ -85,6 +88,16 @@ def test_the_tolerance_of_a_blick_decides_value(scaled: bk.Comparison) -> None:
 def test_the_movers_are_the_largest_values_first(scaled: bk.Comparison) -> None:
     _, strict, big = scaled.blicks
     assert (scaled.movers(3), scaled.movers(1)) == ([big, strict], [big])
+
+
+def test_movers_equal_to_two_digits_go_by_name(scaled: bk.Comparison) -> None:
+    def mover(name: str, magnitude: float) -> BlickComparison:
+        change = bk.Change(flags=frozenset({"value"}), magnitude=magnitude)
+        return scaled.blicks[0].model_copy(update={"name": name, "change": change})
+
+    blicks = (mover("b", 0.0914), mover("a", 0.0911), mover("c", 0.2))
+    movers = scaled.model_copy(update={"blicks": blicks}).movers(3)
+    assert [blick.name for blick in movers] == ["c", "a", "b"]
 
 
 # Cases on a copy of a build whose manifest is edited; the comparison checks neither the id nor
@@ -177,7 +190,7 @@ def test_nothing_is_removed_from_an_incomplete_build(build: Path) -> None:
     comparison = compare_builds(build, edited(build, problems=(IMPORT_FAILED,)))
     assert (comparison.blicks, comparison.incomplete) == (
         (),
-        ("blicks/broken.py failed to import",),
+        ("blicks/broken.py failed to import: ModuleNotFoundError",),
     )
     assert comparison.current.incomplete
     assert comparison.has_errors
@@ -203,7 +216,10 @@ def test_a_blick_without_an_id_disables_removed(build: Path) -> None:
     nameless = failed(build, id=None, name="'Bad'", definition=None)
     comparison = compare_builds(build, edited(build, nameless, problems=(IMPORT_FAILED,)))
     assert flags(comparison) == [(None, ["error"])]
-    assert comparison.incomplete == ("blicks/broken.py failed to import", "'Bad' has no usable id")
+    assert comparison.incomplete == (
+        "blicks/broken.py failed to import: ModuleNotFoundError",
+        "'Bad' has no usable id",
+    )
 
 
 def test_an_unknown_plot_type_is_error_with_a_message(build: Path) -> None:
@@ -243,3 +259,84 @@ def test_a_missing_table_is_an_error(build: Path) -> None:
     (copy / "blicks" / "a" / "values.parquet").unlink()
     with pytest.raises(BlicketError, match=r": file missing$"):
         compare_builds(build, copy)
+
+
+# Writing a comparison into the build directory
+
+
+def written(tmp_path: Path) -> tuple[Path, Path, bk.Comparison]:
+    """SCALED, then with the factor changed and ``big`` renamed to ``bigger`` with an alias:
+    the baseline and current build directories and their comparison as written."""
+    after = SCALED.replace("1.0", "1.000001").replace(
+        "@bk.blick(plot=LINE)\ndef big(", '@bk.blick(plot=LINE, aliases=["a/big"])\ndef bigger('
+    )
+    baseline, current = builds(tmp_path, SCALED, after)
+    return baseline, current, write(compare_builds(baseline, current), baseline, current)
+
+
+def test_write_copies_the_baseline_tables_of_changed_blicks(tmp_path: Path) -> None:
+    baseline, current, comparison = written(tmp_path)
+    baseline_id = comparison.baseline.id
+    directory = current / "compare" / baseline_id
+    files = [path for path in directory.rglob("*") if path.is_file()]
+    assert sorted(path.relative_to(directory).as_posix() for path in files) == [
+        "blicks/a/bigger.parquet",
+        "blicks/a/strict.parquet",
+        "comparison.json",
+    ]
+    assert bk.Comparison.model_validate_json((directory / "comparison.json").read_text()) == (
+        comparison
+    )
+    entries = {entry.id: entry for entry in manifest.read(baseline).blicks}
+    plain, strict, bigger = comparison.blicks
+    assert (plain.baseline_data, plain.baseline_hash) == (None, None)
+    assert (strict.baseline_data, strict.baseline_hash) == (
+        f"compare/{baseline_id}/blicks/a/strict.parquet",
+        entries["a/strict"].hash,
+    )
+    assert (bigger.matched, bigger.baseline_data, bigger.baseline_hash) == (
+        "a/big",
+        f"compare/{baseline_id}/blicks/a/bigger.parquet",
+        entries["a/big"].hash,
+    )
+    copy = (directory / "blicks" / "a" / "bigger.parquet").read_bytes()
+    assert copy == (baseline / "blicks" / "a" / "big.parquet").read_bytes()
+
+
+def test_a_second_write_replaces_the_directory(tmp_path: Path) -> None:
+    baseline, current, comparison = written(tmp_path)
+    directory = current / "compare" / comparison.baseline.id
+    (directory / "stray.txt").write_text("stray")
+    write(comparison, baseline, current)
+    assert not (directory / "stray.txt").exists()
+
+
+def test_the_index_lists_the_comparisons_by_modification_time(tmp_path: Path) -> None:
+    baseline, current, comparison = written(tmp_path)
+    compare = current / "compare"
+    later = (compare / comparison.baseline.id / "comparison.json").stat().st_mtime + 60
+    os.utime(compare / comparison.baseline.id / "comparison.json", (later, later))
+    (compare / "notes").mkdir()  # not named by a build id
+    (compare / "notes" / "comparison.json").write_text("{}")
+    other = comparison.baseline.model_copy(update={"id": "0123456789abcdef"})
+    write(comparison.model_copy(update={"baseline": other}), baseline, current)
+    assert json.loads((compare / "index.json").read_text()) == [
+        "0123456789abcdef",
+        comparison.baseline.id,
+    ]
+
+
+@pytest.mark.parametrize("side", ["baseline", "current"])
+def test_write_refuses_an_id_that_is_no_build_id(tmp_path: Path, side: str) -> None:
+    baseline, current = builds(tmp_path, VALUES, VALUES)
+    comparison = compare_builds(baseline, current)
+    crafted = getattr(comparison, side).model_copy(update={"id": ".."})
+    with pytest.raises(BlicketError, match=r" has an invalid build id '\.\.'$"):
+        write(comparison.model_copy(update={side: crafted}), baseline, current)
+    assert not (current / "compare").exists()
+    assert (current / "manifest.json").is_file()
+
+
+def test_a_baseline_table_path_stays_in_the_build_directory() -> None:
+    with pytest.raises(ValidationError, match="must be a path inside the build directory"):
+        BlickComparison(id="a/x", name="a/x", change=bk.Change(), baseline_data="../x.parquet")

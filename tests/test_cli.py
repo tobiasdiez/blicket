@@ -202,7 +202,14 @@ def test_abort_and_click_errors_are_no_bugs(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_every_command_maps_failures_to_exit_2(monkeypatch: pytest.MonkeyPatch) -> None:
-    arguments = {"list": [], "build": ["run"], "serve": [], "push": ["dir"], "diff": ["a", "b"]}
+    arguments = {
+        "list": [],
+        "build": ["run"],
+        "serve": [],
+        "push": ["dir"],
+        "diff": ["a", "b"],
+        "check": ["run"],
+    }
     group: Any = typer.main.get_command(cli.app)
     assert set(group.commands) == set(arguments), "add the new command here"
     monkeypatch.setattr(cli, "_root", _raise(RuntimeError("boom")))
@@ -458,7 +465,10 @@ def test_push_prints_where_the_build_went(commit: str) -> None:
 def test_push_again_says_the_build_is_in_the_store(commit: str) -> None:
     a = built("runs/a")
     invoke("push", a)
-    expected = f"build {name(a)} → .blicket/store/builds/{name(a)} (in the store already)\n"
+    expected = (
+        f"build {name(a)} → .blicket/store/builds/{name(a)} (in the store already, left as it "
+        "was; comparisons are not added to a stored build)\n"
+    )
     assert invoke("push", a).stdout == expected
 
 
@@ -623,7 +633,8 @@ def test_diff_exits_2_for_an_incomplete_current_build(commit: str) -> None:
     assert lines[1].endswith(f"blicks at {commit} (dirty) · incomplete (Blicks missing)")
     assert lines[2:] == [
         "1 Blick: 1 unchanged · removed not judged",
-        "removed not judged: blicks/broken.py failed to import",
+        "removed not judged: blicks/broken.py failed to import: ModuleNotFoundError: No module "
+        "named 'nothere'",
     ]
 
 

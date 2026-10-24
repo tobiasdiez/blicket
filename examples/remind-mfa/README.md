@@ -141,6 +141,33 @@ y axis. Run 28 against run 31, an unchanged rerun, gives `10 Blicks: 10 unchange
 `uv run blicket push .blicket/build/<id>` copies a build into `.blicket/store`, after which `diff`
 takes its id alone; `--json` prints the comparison as JSON.
 
+## Checking a run
+
+`check` builds a run and compares it with its baseline in one go: the newest pushed build of the
+run's profile whose commit is the one checked out or an ancestor of it. With the builds of runs 28,
+31 and 34 pushed, checking run 34 finds run 28's build, the newest of the three (commits and ids
+differ on your checkout):
+
+```console
+$ uv run blicket check ../../data_out/2026-10-24--01-25-34_plastics_SSP2_h12
+run 2026-10-24--01-25-34_plastics_SSP2_h12 · profile plastics_SSP2_h12 · blicks at 604e20c (dirty) · loaded in 953 ms
+10 Blicks: 10 built
+build c6317235ed070309 → .blicket/build/c6317235ed070309
+
+baseline bfa7f61fc79b65c2 · run 2026-10-24--01-25-28_plastics_SSP2_h12 · blicks at fe4d2dd (dirty) · built 2026-10-24 13:28 UTC
+vs baseline: 9 unchanged · 1 value
+top movers: flows/production_by_source 0.021 (Flow=Primary, Time=2100, Region=SSA)
+flagged: 1 of 10 Blicks
+comparison → .blicket/build/c6317235ed070309/compare/bfa7f61fc79b65c2
+```
+
+It exits 1, since a Blick is flagged. The comparison in `compare/bfa7f61fc79b65c2/` holds
+`comparison.json` and run 28's table of production by source, 35 KB next to the build's 594 KB
+of manifest and tables. `--against <branch>` searches that branch's history instead of the commit
+checked out, `--against <id>` compares with that build, and `--push` pushes the build afterwards,
+its comparisons included; without a pushed build of the profile, `check` says `baseline: none
+(...)` and exits 0.
+
 ## Looking at a build
 
 `uv run blicket serve` serves the build made last; a build made with an older viewer gets the

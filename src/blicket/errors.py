@@ -65,6 +65,11 @@ def did_you_mean(word: str, options: Iterable[str]) -> str | None:
     return close[0] if close else None
 
 
+def os_reason(error: OSError) -> str:
+    """What an ``OSError`` says, with the file it concerns when it names one."""
+    return f"{error.strerror}: {error.filename}" if error.filename else str(error)
+
+
 def display_path(path: str | Path, root: Path | None) -> str:
     """``path`` relative to ``root`` in POSIX form when it lies inside, else as it is."""
     path = Path(path)

@@ -6,9 +6,18 @@ are those of ``Flag``: ``schema`` from the plot type, ``value`` when the magnitu
 Blick's tolerance, ``new`` for a Blick without a baseline table, ``removed`` for a baseline Blick
 with a table that no current Blick claims, and ``error`` for a Blick that has no table or cannot
 be compared.
+
+``write`` puts a comparison into the current build directory, under ``compare/<baseline id>/``:
+``comparison.json`` and the baseline tables of the Blicks flagged ``value`` or ``schema`` as
+``blicks/<current id>.parquet``. ``compare/index.json`` lists the baseline ids of the comparisons
+there, since a directory cannot be listed over HTTP; nothing in blicket reads it.
 """
 
 import importlib.metadata
+import json
+import os
+import secrets
+import shutil
 from collections import Counter
 from datetime import UTC, datetime
 from pathlib import Path
@@ -17,11 +26,15 @@ import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from blicket import manifest
-from blicket.errors import BlicketError, Kind
+from blicket.errors import BlicketError, Kind, os_reason
 from blicket.manifest import Manifest, Repository
-from blicket.model import BlickEntry
+from blicket.model import BlickEntry, BuildPath
 from blicket.plots import builtin
 from blicket.schema import Change, Flag
+
+COMPARE = "compare"
+COMPARISON = "comparison.json"
+INDEX = "index.json"
 
 
 class BuildRef(BaseModel):
@@ -45,6 +58,9 @@ class BlickComparison(BaseModel):
     Blick without a usable id; ``name`` is the entry's name. ``matched`` is the id of the baseline
     Blick whose table was compared when it differs from the current one, as for a Blick matched
     through an alias. ``message`` says why an ``error`` Blick has no table or was not compared.
+    ``baseline_data`` is the copy of the baseline table that ``write`` makes for a Blick flagged
+    ``value`` or ``schema``, relative to the build directory, and ``baseline_hash`` that table's
+    hash in the baseline manifest; both are ``None`` for the other Blicks and before ``write``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -54,6 +70,8 @@ class BlickComparison(BaseModel):
     matched: str | None = None
     change: Change
     message: str | None = None
+    baseline_data: BuildPath | None = None
+    baseline_hash: str | None = None
 
 
 class Comparison(BaseModel):
@@ -82,14 +100,20 @@ class Comparison(BaseModel):
         return Counter(flag for blick in self.blicks for flag in blick.change.flags)
 
     @property
+    def flagged(self) -> int:
+        """How many Blicks carry a flag."""
+        return sum(bool(blick.change.flags) for blick in self.blicks)
+
+    @property
     def has_errors(self) -> bool:
         """Whether removed Blicks were not judged or a Blick is flagged ``error``."""
         return bool(self.incomplete) or self.counts["error"] > 0
 
     def movers(self, n: int) -> list[BlickComparison]:
-        """The ``n`` Blicks flagged ``value`` with the largest magnitudes, the first on a tie."""
+        """The ``n`` Blicks flagged ``value`` with the largest magnitudes, by name when they are
+        equal to two significant digits, as reports show them."""
         flagged = [blick for blick in self.blicks if "value" in blick.change.flags]
-        return sorted(flagged, key=lambda blick: blick.change.magnitude or 0.0, reverse=True)[:n]
+        return sorted(flagged, key=lambda b: (-float(f"{b.change.magnitude or 0:.2g}"), b.name))[:n]
 
 
 def compare_builds(baseline: Path, current: Path) -> Comparison:
@@ -155,6 +179,61 @@ def compare_builds(baseline: Path, current: Path) -> Comparison:
     )
 
 
+def write(comparison: Comparison, baseline: Path, current: Path) -> Comparison:
+    """Write ``comparison`` of the build directory ``current`` with the one in ``baseline`` into
+    ``current/compare/<baseline id>/`` and return it as written, with ``baseline_data`` and
+    ``baseline_hash`` set for the copied tables.
+
+    The directory is assembled next to its destination and replaces what an earlier write put
+    there. ``compare/index.json`` is then regenerated from the directories in ``compare/`` that
+    hold a ``comparison.json``, ordered by that file's modification time, the newest last.
+    Raises ``BlicketError`` when a build id of the comparison is not shaped like one, the baseline
+    manifest cannot be read, or writing fails.
+    """
+    for build in (comparison.baseline, comparison.current):
+        if not manifest.BUILD_ID.fullmatch(build.id):
+            raise BlicketError(f"build {build.run} has an invalid build id {build.id!r}")
+    compare = current / COMPARE
+    baseline_id = comparison.baseline.id
+    built = manifest.read(baseline).blicks
+    tables = {e.id: (e.data, e.hash) for e in built if e.id is not None and e.data is not None}
+    temporary = compare / f".tmp-{os.getpid()}-{secrets.token_hex(4)}"
+    blicks: list[BlickComparison] = []
+    try:
+        temporary.mkdir(parents=True)
+        for blick in comparison.blicks:
+            if blick.id is not None and blick.change.flags & {"value", "schema"}:
+                data, digest = tables[blick.matched or blick.id]
+                name = f"blicks/{blick.id}.parquet"
+                (temporary / name).parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(baseline / data, temporary / name)
+                relative = f"{COMPARE}/{baseline_id}/{name}"
+                blick = blick.model_copy(
+                    update={"baseline_data": relative, "baseline_hash": digest}
+                )
+            blicks.append(blick)
+        written = comparison.model_copy(update={"blicks": tuple(blicks)})
+        (temporary / COMPARISON).write_text(written.model_dump_json(indent=2) + "\n")
+        final = compare / baseline_id
+        if final.exists():
+            shutil.rmtree(final)
+        temporary.rename(final)
+        modified = {
+            path.name: (path / COMPARISON).stat().st_mtime_ns
+            for path in compare.iterdir()
+            if manifest.BUILD_ID.fullmatch(path.name) and (path / COMPARISON).is_file()
+        }
+        ordered = sorted(modified, key=lambda name: (modified[name], name))
+        (compare / INDEX).write_text(json.dumps(ordered) + "\n")
+    except OSError as error:
+        raise BlicketError(
+            f"cannot write the comparison into {compare}: {os_reason(error)}"
+        ) from error
+    finally:
+        shutil.rmtree(temporary, ignore_errors=True)
+    return written
+
+
 def _flagged(entry: BlickEntry, flag: Flag, message: str | None = None) -> BlickComparison:
     change = Change(flags=frozenset({flag}))
     return BlickComparison(id=entry.id, name=entry.name, change=change, message=message)
@@ -175,7 +254,9 @@ def _incomplete(built: Manifest) -> tuple[str, ...]:
             where = problem.source.file.as_posix() if problem.source else "the project"
             first = problem.message.splitlines()[0]
             reasons.append(
-                f"{where} failed to import" if problem.kind == Kind.IMPORT else f"{where}: {first}"
+                f"{where} failed to import: {first}"
+                if problem.kind == Kind.IMPORT
+                else f"{where}: {first}"
             )
     reasons += [f"{entry.name} has no usable id" for entry in built.blicks if entry.id is None]
     return tuple(reasons)

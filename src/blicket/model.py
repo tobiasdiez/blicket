@@ -4,15 +4,26 @@ record them in: definitions and entries."""
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, computed_field, field_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, computed_field
 
 from blicket.errors import Problem, Source
 from blicket.plots import PlotSpec
 from blicket.schema import Control, ControlKind, TableSchema
 
 type Transform = Callable[[Any], Any]
+
+
+def _inside_the_build(path: str) -> str:
+    parsed = PurePosixPath(path)
+    if parsed.is_absolute() or ".." in parsed.parts or "\0" in path:
+        raise ValueError(f"must be a path inside the build directory, got {path!r}")
+    return path
+
+
+# A path relative to a build directory that stays inside it: not absolute, without "..".
+BuildPath = Annotated[str, AfterValidator(_inside_the_build)]
 
 
 class Group(BaseModel):
@@ -77,22 +88,13 @@ class BlickEntry(BaseModel):
     module: str | None = None
     source: Source | None = None
     definition: BlickDefinition | None = None
-    data: str | None = None
+    data: BuildPath | None = None
     hash: str | None = None
     rows: int | None = None
     columns: TableSchema | None = None
     controls: tuple[Control, ...] = ()
     timing_ms: float | None = None
     problems: tuple[Problem, ...] = ()
-
-    @field_validator("data")
-    @classmethod
-    def _inside_the_build(cls, data: str | None) -> str | None:
-        if data is not None:
-            path = PurePosixPath(data)
-            if path.is_absolute() or ".." in path.parts or "\0" in data:
-                raise ValueError(f"data must be a path inside the build directory, got {data!r}")
-        return data
 
     @computed_field
     @property

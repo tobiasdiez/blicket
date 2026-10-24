@@ -3,7 +3,8 @@
 Storybook for scientific model outputs. A *Blick* is a named view on a model run: a function that
 turns the run into a table, and how to plot that table. blicket discovers a project's Blicks,
 lists them with every problem it finds in their definitions, builds their tables for a model run,
-shows them in a web viewer, and compares two builds. The idea behind it is in
+shows them in a web viewer, compares two builds, and checks a run against its baseline. The idea
+behind it is in
 [docs/concept.md](docs/concept.md), the design in [docs/architecture.md](docs/architecture.md).
 
 ## Defining Blicks
@@ -51,7 +52,8 @@ flows  Material flows  [mfa]
 names the project directory instead. `-v` shows tracebacks, `--json` prints the report as JSON.
 
 Exit codes, for every command: 0 success (for `serve`, stopped with Ctrl-C; for `diff`, changes
-found included), 2 errors of any kind, a Blick that fails to build included.
+found included), 1 for `check` when a Blick is flagged, 2 errors of any kind, a Blick that fails
+to build included.
 
 ## Building a run
 
@@ -192,7 +194,9 @@ ones, each with its `id`, `name`, `matched`, the id of the baseline Blick when i
 Blick matched through an alias, `change` (the flags, the magnitude, the columns and values added and
 removed, and `where`, the row that changed most; `bk.Change` describes the fields) and `message`,
 why an `error` Blick has no table or was not compared, or that a `new` Blick did not build in the
-baseline.
+baseline. `baseline_data` and `baseline_hash`, the path of the copied baseline table in the build
+directory and its hash in the baseline manifest, are set by `check` (below) for the Blicks flagged
+`value` or `schema`, and are `null` otherwise.
 
 `blicket push` copies a build into the store, where it is never changed again:
 
@@ -203,11 +207,70 @@ build 5d0c3f1e2a9b8c47 → .blicket/store/builds/5d0c3f1e2a9b8c47
 
 Then `blicket diff 5d0c3f1e2a9b8c47 ...` finds it by id. The store is `.blicket/store` in the
 project, or the directory `store` in `[tool.blicket]` names, relative to the project, such as a
-directory on a cluster's file system that a team shares. It holds a build's manifest and tables
-under `builds/<id>/`, not the viewer, so `blicket serve .blicket/store/builds/<id>` serves it with
-the installed one. Pushing a build that is there already does nothing and says so
-(`(in the store already)`). The first push gives `builds/` a `.gitignore`, so the builds never show
-up in `git status`.
+directory on a cluster's file system that a team shares. It holds a build's manifest, tables and
+the comparisons `check` wrote into it (below) under `builds/<id>/`, not the viewer, so
+`blicket serve .blicket/store/builds/<id>` serves it with the installed one. Pushing a build that
+is there already does nothing and says so (`(in the store already, left as it was; comparisons
+are not added to a stored build)`), also when the build directory has gained comparisons since.
+The first push gives `builds/` a `.gitignore`, so the builds never show up in `git status`.
+
+## Checking a run
+
+`blicket check` builds a run, finds its baseline in the store, compares the two as `diff` does,
+and writes the comparison into the build directory:
+
+```console
+$ blicket check runs/2026-10-23
+run 2026-10-23 · profile baseline · blicks at 0a6b858 · loaded in 12 ms
+1 Blick: 1 built
+build 8e21b7c04f6a9d35 → .blicket/build/8e21b7c04f6a9d35
+
+baseline 5d0c3f1e2a9b8c47 · run 2026-10-22 · blicks at 0a6b858 · built 2026-10-22 09:14 UTC
+vs baseline: 1 value
+top movers: flows/steel_by_process 0.032 (year=2021, process=EAF)
+flagged: 1 of 1 Blick
+comparison → .blicket/build/8e21b7c04f6a9d35/compare/5d0c3f1e2a9b8c47
+```
+
+The baseline is the newest build in the store (by the time it was built, on the baseline line)
+of the run's profile whose commit, the one after "blicks at", is the current build's commit
+or an ancestor of it in the repository holding the Blicks. The current build itself, builds whose
+manifest says they are incomplete, and builds without a commit are never the baseline; builds with
+uncommitted changes (`dirty`) are. On a branch this finds the branch's own previous pushed build,
+so a change shows once and reads as unchanged at the next commit; `--against origin/main` keeps
+comparing with main's builds until the merge, after which main finds the branch's builds, which
+is what CI wants. `--against` takes a git ref, whose commit then replaces the current build's, or
+names the baseline itself: the id of a build in the store or a build directory, of any profile.
+
+Without a baseline, `check` says why (`baseline: none (no other pushed build of profile
+baseline)`, or that none of the pushed builds is at the commit or its ancestors), writes no
+comparison and exits 0: nothing to compare is not a change. It exits 2 with `error: no baseline:
+…` when the baseline named by `--against` cannot be found, and when no pushed build of the profile
+is on the history while the clone lacks the commits of some, since one of them may be the
+baseline, as in a shallow clone; GitHub Actions clones one commit by default. The message names
+those builds with their commits and says what helps: fetch the full history, with `git fetch
+--unshallow` or `fetch-depth: 0` in GitHub Actions, or name the baseline with `--against <id>`.
+When a baseline is found, newer builds at commits the clone lacks, such as one pushed from a
+laptop at a commit never pushed to git, are skipped with a warning that names them. A build made
+outside git records no commit; it needs `--against` once builds of its profile have been pushed.
+
+The comparison goes into `compare/<baseline id>/` in the build directory: `comparison.json`, the
+comparison file that `diff --json` prints, with `baseline_data` and `baseline_hash` set for the
+Blicks flagged `value` or `schema`, and their baseline tables under `blicks/`, so that the build
+directory shows what changed without the store. `compare/index.json` lists the baselines a build
+was compared with, the latest written last. Checking against the same baseline again replaces its
+directory. When `GITHUB_STEP_SUMMARY` is set, as in GitHub Actions, `check` appends a Markdown
+summary to the file it names, which GitHub shows as the job's summary: the two builds, the
+counts, a table of the flagged Blicks with their magnitudes and where they changed most, the
+values that appeared or vanished, and the errors; or why there is no baseline. A summary that
+cannot be appended is a warning.
+
+`check` exits 0 when no Blick is flagged, 1 when one is flagged `value`, `schema`, `new` or
+`removed`, and 2 on errors: a Blick in error, removed Blicks not judged, a baseline that cannot be
+resolved. `--push` pushes the build afterwards, its comparisons included, whatever the exit code,
+so that CI keeps what it checked; the push line names the comparisons. `--json` prints the
+comparison file on stdout instead of the report, `null` without a baseline, and the report on
+stderr. `--out` and `--project` work as for `build`.
 
 ## Example
 

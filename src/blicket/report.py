@@ -1,20 +1,25 @@
-"""The reports of the commands: what ``list``, ``build`` and ``diff`` print, as plain functions
-of what the commands computed."""
+"""The reports of the commands: what ``list``, ``build``, ``push``, ``diff`` and ``check``
+print, and the Markdown report of a comparison, as plain functions of what the commands
+computed."""
 
 import importlib.metadata
 import json
 from collections import Counter, defaultdict
 from collections.abc import Sequence
+from datetime import UTC
 from pathlib import Path
-from typing import Any
+from typing import Any, get_args
 
 from pydantic import BaseModel
 
+from blicket.baseline import Resolution
 from blicket.builder import Build
-from blicket.comparison import BlickComparison, BuildRef, Comparison
+from blicket.comparison import COMPARE, BlickComparison, BuildRef, Comparison
 from blicket.errors import NOWHERE, Kind, Problem, Source, display_path
 from blicket.manifest import Manifest, Repository
 from blicket.model import Blick, BlickEntry, Registry
+from blicket.schema import Flag
+from blicket.store import Pushed
 
 
 def render_list_json(registry: Registry) -> str:
@@ -55,6 +60,8 @@ def _count(number: int, noun: str) -> str:
 type _Block = tuple[Source | None, list[str]]
 
 _INCOMPLETE = "incomplete (Blicks missing)"
+_EMPTY = "\N{EN DASH}"  # an empty cell of a Markdown table
+_POINTER = " (all in --json)"  # after a shortened list in the text of diff
 
 
 def _section(title: str, blocks: Sequence[_Block]) -> list[str]:
@@ -229,12 +236,95 @@ def _build_summary(manifest: Manifest) -> str:
     return " · ".join(parts)
 
 
+def render_push(pushed: Pushed) -> str:
+    """The text of ``blicket push``: the build, where it went in the store, and the comparisons
+    that went with it."""
+    line = f"build {pushed.id} → {display_path(pushed.path, Path.cwd())}"
+    if pushed.existed:
+        return (
+            f"{line} (in the store already, left as it was; comparisons are not added to a stored "
+            "build)"
+        )
+    if pushed.comparisons:
+        return f"{line} (with the comparisons against {', '.join(pushed.comparisons)})"
+    return line
+
+
 def render_diff(comparison: Comparison) -> str:
     """The text of ``blicket diff``: the two builds, the counts, why removed Blicks were not
     judged, the top movers, then the Blicks whose values appeared or vanished, the new and the
     removed Blicks, and the errors."""
+    return "\n".join(
+        [
+            _build_line("baseline", comparison.baseline),
+            _build_line("current", comparison.current),
+            _counts_line(comparison, _count(len(comparison.blicks), "Blick")),
+            *_incomplete_lines(comparison),
+            *_mover_lines(comparison, _POINTER),
+            *_detail_lines(comparison, pointer=_POINTER),
+        ]
+    )
+
+
+def render_no_baseline(resolution: Resolution) -> str:
+    """Why there is no baseline; an error when that is one, see ``Resolution.failed``."""
+    if resolution.failed:
+        return f"error: no baseline: {resolution.reason}"
+    return f"baseline: none ({resolution.reason})"
+
+
+def render_check(
+    result: Build,
+    resolution: Resolution,
+    comparison: Comparison | None,
+    pushed: Pushed | None,
+    warnings: Sequence[str] = (),
+    *,
+    verbose: bool = False,
+) -> str:
+    """The text of ``blicket check``: the build's report, the warnings, the baseline or why there
+    is none, the comparison's summary and verdict, where it was written, the push, and the
+    comparison's details.
+
+    What the build's report says is not repeated: the current build, and the errors of Blicks
+    that did not build; errors only the comparison finds remain.
+    """
+    manifest = result.manifest
+    lines = [f"warning: {warning}" for warning in warnings]
+    if resolution.warning:
+        lines.append(f"warning: {resolution.warning}")
+    details: list[str] = []
+    if comparison is None:
+        lines.append(render_no_baseline(resolution))
+    else:
+        found = comparison.baseline
+        created = found.created_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+        parts = _build_parts(found, profile=found.profile != manifest.run.profile)
+        verdict = (
+            f"flagged: {comparison.flagged} of {_count(len(comparison.blicks), 'Blick')}"
+            if comparison.flagged
+            else "nothing flagged, but the build is incomplete"
+            if comparison.has_errors
+            else "nothing flagged"
+        )
+        lines += [
+            " · ".join([f"baseline {found.id}", *parts, f"built {created}"]),
+            _counts_line(comparison, "vs baseline"),
+            *_incomplete_lines(comparison),
+            *_mover_lines(comparison),
+            verdict,
+            f"comparison → {display_path(result.path / COMPARE / found.id, Path.cwd())}",
+        ]
+        details = _detail_lines(comparison, manifest)
+    if pushed is not None:
+        lines.append(render_push(pushed))
+    return render_build(result, verbose=verbose) + "\n\n" + "\n".join([*lines, *details])
+
+
+def _counts_line(comparison: Comparison, label: str) -> str:
+    """``label``, then the Blicks per flag, the unchanged ones, and whether removed was judged."""
     blicks, counts = comparison.blicks, comparison.counts
-    unchanged = sum(not blick.change.flags for blick in blicks)
+    unchanged = len(blicks) - comparison.flagged
     numbers = [
         ("unchanged", unchanged),
         *((flag, counts[flag]) for flag in ("value", "schema", "new", "removed")),
@@ -244,70 +334,149 @@ def render_diff(comparison: Comparison) -> str:
         parts.append("removed not judged")
     if counts["error"]:
         parts.append(_count(counts["error"], "error"))
-    summary = _count(len(blicks), "Blick") + (f": {' · '.join(parts)}" if parts else "")
-    lines = [
-        _build_line("baseline", comparison.baseline),
-        _build_line("current", comparison.current),
-        summary,
-    ]
-    if comparison.incomplete:
-        lines.append(f"removed not judged: {'; '.join(comparison.incomplete)}")
+    return f"{label}: {' · '.join(parts)}" if parts else label
+
+
+def _incomplete_lines(comparison: Comparison) -> list[str]:
+    if not comparison.incomplete:
+        return []
+    return [f"removed not judged: {'; '.join(comparison.incomplete)}"]
+
+
+def _mover_lines(comparison: Comparison, pointer: str = "") -> list[str]:
+    """The top three movers, then how many more Blicks are flagged ``value``, and ``pointer``."""
     lead = "top movers: "
     movers = comparison.movers(3)
+    lines: list[str] = []
     for index, mover in enumerate(movers):
         change = mover.change
         where = f" ({_where(change.where)})" if change.where else ""
         start = lead if index == 0 else " " * len(lead)
         lines.append(f"{start}{mover.name} {change.magnitude:.2g}{where}")
-    if (more := counts["value"] - len(movers)) > 0:
-        lines.append(f"{' ' * len(lead)}… and {more} more (all in --json)")
+    if (more := comparison.counts["value"] - len(movers)) > 0:
+        lines.append(f"{' ' * len(lead)}… and {more} more{pointer}")
+    return lines
 
+
+def _detail_lines(
+    comparison: Comparison, built: Manifest | None = None, *, pointer: str = ""
+) -> list[str]:
+    """The Blicks whose values appeared or vanished, the new, the removed, and the errors;
+    without the errors of Blicks that have no table in ``built``, when given. ``pointer`` follows
+    a shortened list of values."""
+    blicks = comparison.blicks
+    tables = None if built is None else {e.id for e in built.blicks if e.data is not None}
     sections = {
-        "schema": [_schema_lines(b) for b in blicks if "schema" in b.change.flags],
+        "schema": [_schema_lines(b, pointer) for b in blicks if "schema" in b.change.flags],
         "new": [
             [f"  {b.name}  {b.message}" if b.message else f"  {b.name}"]
             for b in blicks
             if "new" in b.change.flags
         ],
         "removed": [[f"  {b.name}"] for b in blicks if "removed" in b.change.flags],
-        "errors": [[f"  {b.name}  {b.message}"] for b in blicks if "error" in b.change.flags],
+        "errors": [
+            [f"  {b.name}  {b.message}"]
+            for b in blicks
+            if "error" in b.change.flags and (tables is None or b.id in tables)
+        ],
     }
+    lines: list[str] = []
     for title, blocks in sections.items():
         lines += _section(title, [(None, block) for block in blocks])
-    return "\n".join(lines)
+    return lines
+
+
+def render_markdown(comparison: Comparison) -> str:
+    """The Markdown summary of a comparison: a heading with the two builds, the counts, a table
+    of the flagged Blicks, the largest magnitude first, then the columns and values that
+    appeared or vanished, the new Blicks that did not build in the baseline, and the errors,
+    those of the files of an incomplete build first."""
+    current, baseline = comparison.current, comparison.baseline
+    lines = [
+        f"### blicket: run {current.run} (`{current.id[:8]}`) against run {baseline.run} "
+        f"(`{baseline.id[:8]}`)",
+        "",
+        " · ".join([f"- baseline `{baseline.id}`", *_build_parts(baseline)]),
+        " · ".join([f"- current `{current.id}`", *_build_parts(current)]),
+        "",
+        _counts_line(comparison, _count(len(comparison.blicks), "Blick")),
+    ]
+    flagged = sorted(
+        (blick for blick in comparison.blicks if blick.change.flags),
+        key=lambda blick: blick.change.magnitude or 0.0,
+        reverse=True,
+    )
+    if flagged:
+        lines += ["", "| Blick | flags | magnitude | where |", "|---|---|---|---|"]
+    for blick in flagged:
+        change = blick.change
+        cells = [
+            f"`{blick.name}`",
+            ", ".join(flag for flag in get_args(Flag) if flag in change.flags),
+            _EMPTY if change.magnitude is None else f"{change.magnitude:.2g}",
+            _where(change.where) if change.where else _EMPTY,
+        ]
+        lines.append("| " + " | ".join(cell.replace("|", "\\|") for cell in cells) + " |")
+    schema = [b for b in comparison.blicks if "schema" in b.change.flags]
+    new = [b for b in comparison.blicks if "new" in b.change.flags and b.message]
+    errors = [b for b in comparison.blicks if "error" in b.change.flags]
+    if schema:
+        lines += ["", "#### schema", ""]
+    for blick in schema:
+        lines += [f"- `{blick.name}`", *(f"  - {line}" for line in _schema_details(blick))]
+    if new:
+        lines += ["", "#### new", ""]
+        lines += [f"- `{blick.name}`: {blick.message}" for blick in new]
+    if errors or comparison.incomplete:
+        lines += ["", "#### errors", ""]
+        lines += [f"- {reason}" for reason in comparison.incomplete]
+        lines += [f"- `{blick.name}`: {blick.message}" for blick in errors]
+    return "\n".join(lines) + "\n"
+
+
+def render_markdown_no_baseline(built: Manifest, resolution: Resolution) -> str:
+    """The Markdown summary of a check without a baseline: the heading with the build, and why."""
+    heading = f"### blicket: run {built.run.id} (`{built.build.id[:8]}`)"
+    return f"{heading}\n\n{render_no_baseline(resolution)}\n"
 
 
 def _build_line(label: str, build: BuildRef) -> str:
-    parts = [
-        f"{label:<8} {build.id}",
-        f"run {build.run}",
-        f"profile {build.profile}",
-        _head(build.repository),
-    ]
+    return " · ".join([f"{label:<8} {build.id}", *_build_parts(build)])
+
+
+def _build_parts(build: BuildRef, *, profile: bool = True) -> list[str]:
+    """The run, the profile unless left out, the commit, and whether the build is incomplete."""
+    parts = [f"run {build.run}", *([f"profile {build.profile}"] if profile else [])]
+    parts.append(_head(build.repository))
     if build.incomplete:
         parts.append(_INCOMPLETE)
-    return " · ".join(parts)
+    return parts
 
 
 def _where(where: dict[str, Any]) -> str:
     return ", ".join(f"{dimension}={value}" for dimension, value in where.items())
 
 
-def _listing(items: Sequence[object]) -> str:
-    """The first five items, then how many more there are."""
-    more = f" … and {len(items) - 5} more (all in --json)" if len(items) > 5 else ""
+def _listing(items: Sequence[object], pointer: str) -> str:
+    """The first five items, then how many more there are, and ``pointer``."""
+    more = f" … and {len(items) - 5} more{pointer}" if len(items) > 5 else ""
     return ", ".join(map(str, items[:5])) + more
 
 
-def _schema_lines(blick: BlickComparison) -> list[str]:
-    """The columns and dimension values that appeared or vanished in a Blick."""
+def _schema_lines(blick: BlickComparison, pointer: str) -> list[str]:
+    return [f"  {blick.name}", *(f"    {line}" for line in _schema_details(blick, pointer))]
+
+
+def _schema_details(blick: BlickComparison, pointer: str = "") -> list[str]:
+    """The columns and dimension values that appeared or vanished in a Blick, ``pointer`` after
+    a shortened list."""
     change = blick.change
-    lines = [f"  {blick.name}"]
+    lines: list[str] = []
     for verb, columns in (("added", change.columns_added), ("removed", change.columns_removed)):
         if columns:
             named = [f"{column} ({dtype})" for column, dtype in columns.items()]
-            lines.append(f"    columns {verb}: {_listing(named)}")
+            lines.append(f"columns {verb}: {_listing(named, pointer)}")
     for verb, values in (("added", change.values_added), ("removed", change.values_removed)):
         for dimension, found in values.items():
-            lines.append(f"    {dimension} {verb}: {_listing(found)}")
+            lines.append(f"{dimension} {verb}: {_listing(found, pointer)}")
     return lines

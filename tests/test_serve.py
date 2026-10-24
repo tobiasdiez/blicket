@@ -66,12 +66,23 @@ def test_the_installed_viewer_comes_first(tmp_path: Path, monkeypatch: pytest.Mo
 
 
 def test_headers(tmp_path: Path) -> None:
-    with serving(make_build(tmp_path / "build")) as server:
-        for path in ("/", "/index.html", "/manifest.json"):
+    build = make_build(tmp_path / "build")
+    compared = build / "compare" / "0123456789abcdef"
+    (compared / "blicks" / "flows").mkdir(parents=True)
+    for name in ("index.json", "0123456789abcdef/comparison.json"):
+        (build / "compare" / name).write_text("{}")
+    (compared / "blicks" / "flows" / "steel.parquet").write_bytes(b"PAR1")
+    with serving(build) as server:
+        rewritten = ["/compare/index.json", "/compare/0123456789abcdef/comparison.json"]
+        for path in ("/", "/index.html", "/manifest.json", *rewritten):
             response, _ = fetch(server, path)
             assert (response.status, response.headers["Cache-Control"]) == (200, "no-cache")
-        response, _ = fetch(server, "/blicks/flows/steel.parquet")
-        assert (response.status, response.headers["Cache-Control"]) == (200, None)
+        for path in (
+            "/blicks/flows/steel.parquet",
+            "/compare/0123456789abcdef/blicks/flows/steel.parquet",
+        ):
+            response, _ = fetch(server, path)
+            assert (response.status, response.headers["Cache-Control"]) == (200, None)
         assert (response.version, response.headers["Content-Length"]) == (11, "4")  # HTTP/1.1
 
 

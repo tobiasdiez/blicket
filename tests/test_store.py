@@ -12,6 +12,7 @@ import pytest
 
 import blicket as bk
 from blicket import store
+from blicket.comparison import compare_builds, write
 from blicket.errors import BlicketError
 from blicket.store import Store
 from tests.support import VALUES, commit_all, git, make_build_project, make_run
@@ -44,27 +45,119 @@ def files(directory: Path) -> dict[str, str]:
     }
 
 
-def test_push_copies_the_manifest_and_tables_with_the_umask_modes(
+def test_push_copies_the_manifest_tables_and_comparisons_with_the_umask_modes(
     built: bk.Build, tmp_path: Path, umask_022: None
 ) -> None:
-    (built.path / "compare" / "0123456789abcdef").mkdir(parents=True)
-    (built.path / "compare" / "index.json").write_text("{}")
+    write(compare_builds(built.path, built.path), built.path, built.path)
+    (built.path / "compare" / ".tmp-1-abc").mkdir()  # a write in progress
+    (built.path / "compare" / ".tmp-1-abc" / "comparison.json").write_text("{}")
     for path in built.path.rglob("*"):
         path.chmod(0o700 if path.is_dir() else 0o600)
     pushed = Store(tmp_path / "store").push(built.path)
     build_id = built.manifest.build.id
-    assert pushed == store.Pushed(build_id, tmp_path / "store" / "builds" / build_id, False)
-    # Neither the viewer nor compare/.
+    final = tmp_path / "store" / "builds" / build_id
+    assert pushed == store.Pushed(build_id, final, False, (build_id,))
+    # Not the viewer.
     assert files(pushed.path) == {
         "blicks": "0o755",
         "blicks/a": "0o755",
         "blicks/a/values.parquet": "0o644",
+        "compare": "0o755",
+        f"compare/{build_id}": "0o755",
+        f"compare/{build_id}/comparison.json": "0o644",
+        "compare/index.json": "0o644",
         "manifest.json": "0o644",
     }
     assert (pushed.path / "manifest.json").read_bytes() == (
         built.path / "manifest.json"
     ).read_bytes()
     assert sorted(os.listdir(tmp_path / "store" / "builds")) == [".gitignore", build_id]
+
+
+@pytest.fixture
+def compared(tmp_path: Path) -> tuple[Path, Path]:
+    """Two builds of a project with one Blick, the second with a changed value, and the
+    comparison of the second with the first written into it."""
+    root = make_build_project(tmp_path, {"blicks/a.py": VALUES})
+    before = bk.build(root, [make_run(tmp_path / "a")]).path
+    after = bk.build(root, [make_run(tmp_path / "b", "1 2 3.3")]).path
+    write(compare_builds(before, after), before, after)
+    return before, after
+
+
+def test_push_copies_the_baseline_tables_of_a_comparison(
+    compared: tuple[Path, Path], tmp_path: Path
+) -> None:
+    before, after = compared
+    pushed = Store(tmp_path / "store").push(after)
+    assert pushed.comparisons == (before.name,)
+    copy = pushed.path / "compare" / before.name / "blicks" / "a" / "values.parquet"
+    assert copy.read_bytes() == (before / "blicks" / "a" / "values.parquet").read_bytes()
+
+
+def test_a_file_linked_from_outside_the_comparisons_is_refused(
+    compared: tuple[Path, Path], tmp_path: Path
+) -> None:
+    before, after = compared
+    table = after / "compare" / before.name / "blicks" / "a" / "values.parquet"
+    table.unlink()
+    (tmp_path / "secret.parquet").write_text("secret")
+    table.symlink_to(tmp_path / "secret.parquet")
+    with pytest.raises(BlicketError, match=r"values\.parquet is not a regular file inside "):
+        Store(tmp_path / "store").push(after)
+    assert not (tmp_path / "store").exists()
+
+
+def test_comparisons_written_after_the_first_push_stay_out(
+    compared: tuple[Path, Path], tmp_path: Path
+) -> None:
+    _, after = compared
+    shutil.rmtree(after / "compare")
+    the_store = Store(tmp_path / "store")
+    first = the_store.push(after)
+    write(compare_builds(after, after), after, after)
+    assert the_store.push(after).existed
+    assert not (first.path / "compare").exists()
+
+
+def test_list_of_a_store_not_created_yet_is_empty(tmp_path: Path) -> None:
+    assert Store(tmp_path / "store").list() == store.Listing((), 0, ())
+
+
+def test_list_reads_the_builds_in_the_order_of_their_ids(
+    compared: tuple[Path, Path], tmp_path: Path
+) -> None:
+    the_store = Store(tmp_path / "store")
+    pushed = [the_store.push(build) for build in compared]
+    listing = the_store.list()
+    assert [(s.id, s.path) for s in listing.builds] == sorted((p.id, p.path) for p in pushed)
+    assert [s.manifest.build.id for s in listing.builds] == [s.id for s in listing.builds]
+
+
+def unreadable(the_store: Store, name: str, text: str) -> None:
+    (the_store.builds / name).mkdir(parents=True)
+    (the_store.builds / name / "manifest.json").write_text(text)
+
+
+def test_list_counts_and_skips_builds_of_another_spec(tmp_path: Path) -> None:
+    the_store = Store(tmp_path / "store")
+    unreadable(the_store, "0" * 16, '{"spec": "0.1"}')
+    assert the_store.list() == store.Listing((), 1, ())
+
+
+def test_list_describes_and_skips_damaged_builds(tmp_path: Path) -> None:
+    the_store = Store(tmp_path / "store")
+    unreadable(the_store, "1" * 16, "not json")
+    assert the_store.list().damaged == (
+        f"build directory {the_store.builds / ('1' * 16)} has no readable manifest.json (not "
+        "valid JSON); delete it and rebuild",
+    )
+
+
+def test_list_skips_names_that_are_no_build_ids(tmp_path: Path) -> None:
+    the_store = Store(tmp_path / "store")
+    unreadable(the_store, ".tmp-1-abc", "not json")  # a push in progress
+    assert the_store.list() == store.Listing((), 0, ())
 
 
 def test_pushing_twice_is_a_no_op(built: bk.Build, tmp_path: Path) -> None:

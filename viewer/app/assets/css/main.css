@@ -1,14 +1,21 @@
 @import "tailwindcss";
 @import "@nuxt/ui";
 
-/* Primary as text (the active tab, the current breadcrumb) a shade darker in light mode, for
-   4.5:1 on the surface. */
+/* Primary as text (the active tab, the current breadcrumb), and info, warning and error, the
+   text of alerts and flag badges, darker in light mode, for 4.5:1 on the surface and on a badge's
+   tint (warning needs a second shade). */
 :root {
   --ui-primary: var(--ui-color-primary-700);
+  --ui-info: var(--ui-color-info-700);
+  --ui-warning: var(--ui-color-warning-800);
+  --ui-error: var(--ui-color-error-700);
 }
 
 .dark {
   --ui-primary: var(--ui-color-primary-400);
+  --ui-info: var(--ui-color-info-400);
+  --ui-warning: var(--ui-color-warning-400);
+  --ui-error: var(--ui-color-error-400);
 }
 
 /* The export menu of a chart: room above the chart, so it never covers the legend, and its button

@@ -490,7 +490,7 @@ def test_diff(commit: str) -> None:
         f"baseline {name(a)} · run a · profile test · blicks at {commit}\n"
         f"current  {name(b)} · run b · profile test · blicks at {commit}\n"
         "1 Blick: 1 value\n"
-        "top movers: a/values 0.091 (year=2022)\n",
+        "top movers: a/values 9.1% of scale (year=2022)\n",
     )
 
 
@@ -594,9 +594,9 @@ def test_diff_says_how_many_more_blicks_moved(commit: str) -> None:
     lines = invoke("diff", before, built("runs/a")).stdout.splitlines()
     assert lines[2:] == [
         "4 Blicks: 4 value",
-        "top movers: a/m4 0.038 (year=2022)",
-        "            a/m3 0.029 (year=2022)",
-        "            a/m2 0.02 (year=2022)",
+        "top movers: a/m4 3.8% of scale (year=2022)",
+        "            a/m3 2.9% of scale (year=2022)",
+        "            a/m2 2% of scale (year=2022)",
         "            … and 1 more (all in --json)",
     ]
 

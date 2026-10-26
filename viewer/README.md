@@ -17,9 +17,10 @@ $ cd examples/remind-mfa && uv run blicket serve       # terminal 1, the data
 $ cd viewer && pnpm install && pnpm dev                # terminal 2, the app
 ```
 
-The dev server forwards `/manifest.json` and `/blicks/` to `blicket serve` at
+The dev server forwards `/manifest.json`, `/blicks/` and `/compare/` to `blicket serve` at
 `http://127.0.0.1:8765`, or the address in `BLICKET_SERVE`, so the app reads `./manifest.json`
-as it does in a build directory, and nothing else on the machine can read the data.
+as it does in a build directory, and nothing else on the machine can read the data. To work on
+the comparison, serve a build directory that `blicket check` wrote comparisons into.
 
 ```console
 $ pnpm test         # vitest on app/lib and app/plots, without Nuxt
@@ -33,7 +34,24 @@ bundles it, is in the [root README](../README.md#development).
 
 `app/lib/manifest.ts` describes the manifest of the spec in its `SPEC` by hand; the Python models in
 `src/blicket/manifest.py` and `model.py` are its source of truth, and the viewer refuses a build
-of another spec. A plot type's browser half (`app/plots/`) is a Vega-Lite specification built from
-the rows the controls select; its colours are the validated palette in `app/plots/theme.ts`.
+of another spec. `app/lib/comparison.ts` describes `compare/<baseline id>/comparison.json` the
+same way, after `src/blicket/comparison.py`. A build that was never checked has no
+`compare/index.json`, and the browser's console logs the request's 404, as every static host
+answers it.
+
+A plot type's browser half (`app/plots/`) is a Vega-Lite specification built from the rows the
+controls select, and from the baseline's rows after the same filters when the chart is compared
+(`PlotArgs.baseline`): the built-ins draw them behind the current marks, faded and broader, in the
+series' colours, and solid whatever the line style, as remind-mfa draws its reference run; the
+legend click and the tooltip tell lines of a repeated hue apart. Their colours are the validated
+palette in `app/plots/theme.ts`.
+
+While "Compare with baseline" is on, `app/plots/change.ts` draws two charts under a built-in
+type's chart: the change of each row, absolute and relative, through the type's own specification
+builder, which each built-in module exports next to its `definePlot` and `app/plots/index.ts`
+collects. Rows are compared as the Python diff routine compares them: a row missing from one table
+counts as 0, and a row with a dimension value only one table has gets no change drawn. A value
+counts as present when a row of the selection carries it, while the routine looks at the whole
+tables, so a sparse table under a filter can differ from the comparison's verdict.
 `tests/table.parquet` is the one checked-in file: the Parquet reader must read a real zstd file,
 and the test says how polars wrote it.

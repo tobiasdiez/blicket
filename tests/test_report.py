@@ -38,6 +38,8 @@ def test_the_summary_has_the_builds_counts_flagged_blicks_and_sections() -> None
             blick("a/same", magnitude=0.0),
             blick("a/schema", flags={"schema"}, magnitude=0.0, values_added={"year": [2023]}),
             blick("a/value", flags={"value"}, magnitude=0.25, where={"region": "EU|US"}),
+            blick("a/all", flags={"value"}, magnitude=1.0),
+            blick("a/tiny", flags={"value"}, magnitude=0.00012),
             blick("a/missing", "did not build in the baseline", flags={"new"}),
             blick("a/odd", "no built-in plot type 'custom'", flags={"error"}),
         ),
@@ -49,12 +51,14 @@ def test_the_summary_has_the_builds_counts_flagged_blicks_and_sections() -> None
         "- current `fedcba9876543210` · run b · profile test · blicks at 0a6b858 · incomplete "
         "(Blicks missing)\n"
         "\n"
-        "5 Blicks: 1 unchanged · 1 value · 1 schema · 1 new · removed not judged · 1 error\n"
+        "7 Blicks: 1 unchanged · 3 value · 1 schema · 1 new · removed not judged · 1 error\n"
         "\n"
-        "| Blick | flags | magnitude | where |\n"
+        "| Blick | flags | largest change (of the chart's scale) | where |\n"
         "|---|---|---|---|\n"
-        "| `a/value` | value | 0.25 | region=EU\\|US |\n"
-        f"| `a/schema` | schema | 0 | {DASH} |\n"
+        f"| `a/all` | value | 100% | {DASH} |\n"
+        "| `a/value` | value | 25% | region=EU\\|US |\n"
+        f"| `a/tiny` | value | 0.012% | {DASH} |\n"
+        f"| `a/schema` | schema | 0% | {DASH} |\n"
         f"| `a/missing` | new | {DASH} | {DASH} |\n"
         f"| `a/odd` | error | {DASH} | {DASH} |\n"
         "\n"

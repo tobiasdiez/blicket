@@ -153,7 +153,7 @@ $ blicket diff .blicket/build/5d0c3f1e2a9b8c47 .blicket/build/8e21b7c04f6a9d35
 baseline 5d0c3f1e2a9b8c47 · run 2026-10-22 · profile baseline · blicks at 0a6b858
 current  8e21b7c04f6a9d35 · run 2026-10-23 · profile baseline · blicks at 0a6b858
 1 Blick: 1 value
-top movers: flows/steel_by_process 0.032 (year=2021, process=EAF)
+top movers: flows/steel_by_process 3.2% of scale (year=2021, process=EAF)
 ```
 
 The output comes from a toy project with the one Blick above, built for the run above and for a
@@ -170,7 +170,8 @@ but `value`:
   lacks counts as 0. Here it is EAF's change in 2021, 0.07, relative to the highest stack of the
   panel, 2.17. Each value of a dimension that a control filters on has a scale of its own, and so
   has each value of a split of a Blick with `independent_y=True`. The top movers are the three
-  Blicks flagged `value` with the largest magnitudes, with the row that changed most.
+  Blicks flagged `value` with the largest magnitudes, as percents of the scale (`3.2% of scale`),
+  with the row that changed most.
 - `schema`: columns or dimension values appeared or vanished; the summary names them, five
   values per dimension at most. The magnitude covers the rows both tables have.
 - `new`: the baseline has no table for the Blick; the summary says when the Blick did not build
@@ -227,7 +228,7 @@ build 8e21b7c04f6a9d35 → .blicket/build/8e21b7c04f6a9d35
 
 baseline 5d0c3f1e2a9b8c47 · run 2026-10-22 · blicks at 0a6b858 · built 2026-10-22 09:14 UTC
 vs baseline: 1 value
-top movers: flows/steel_by_process 0.032 (year=2021, process=EAF)
+top movers: flows/steel_by_process 3.2% of scale (year=2021, process=EAF)
 flagged: 1 of 1 Blick
 comparison → .blicket/build/8e21b7c04f6a9d35/compare/5d0c3f1e2a9b8c47
 ```
@@ -261,9 +262,9 @@ directory shows what changed without the store. `compare/index.json` lists the b
 was compared with, the latest written last. Checking against the same baseline again replaces its
 directory. When `GITHUB_STEP_SUMMARY` is set, as in GitHub Actions, `check` appends a Markdown
 summary to the file it names, which GitHub shows as the job's summary: the two builds, the
-counts, a table of the flagged Blicks with their magnitudes and where they changed most, the
-values that appeared or vanished, and the errors; or why there is no baseline. A summary that
-cannot be appended is a warning.
+counts, a table of the flagged Blicks with their largest change as a percent of the chart's scale
+and where they changed most, the values that appeared or vanished, and the errors; or why there is
+no baseline. A summary that cannot be appended is a warning.
 
 `check` exits 0 when no Blick is flagged, 1 when one is flagged `value`, `schema`, `new` or
 `removed`, and 2 on errors: a Blick in error, removed Blicks not judged, a baseline that cannot be
@@ -271,6 +272,29 @@ resolved. `--push` pushes the build afterwards, its comparisons included, whatev
 so that CI keeps what it checked; the push line names the comparisons. `--json` prints the
 comparison file on stdout instead of the report, `null` without a baseline, and the report on
 stderr. `--out` and `--project` work as for `build`.
+
+`blicket serve` on a checked build directory shows the comparison. The overview names the baseline's
+run in a selector over the baselines the build was checked against, the one checked last first,
+each with its commit and time, and "No baseline", which shows the build as if it was never
+checked; a baseline of the same run is not offered. Then come the counts per flag and the values
+and columns that appeared or vanished across Blicks, and "Changed since the baseline": the flagged
+Blicks ranked as `check` ranks its movers, each with badges such as `Δ 2.1% of scale` (the largest
+change, as a percent of the chart's scale), `schema` or `new`.
+
+A Blick's page says what changed: its flags, the largest change, where it is and against which
+baseline (`largest change 2.1% of the chart's scale at Region SSA, Flow Primary, Time 2100,
+against run …`), with a "Show where" button when that is another filter setting, and the values or
+columns that appeared or vanished. "Compare with baseline", on by default, draws the baseline
+behind the chart, faded and broader in each series' colour: wide lines behind the lines, the
+baseline's stack as faded areas under the current one drawn as lines, wider bars behind the bars.
+The tooltip shows the baseline's number where it differs, as `−60.1M (baseline −48.1M)`.
+
+While the switch is on, two charts under the chart, in its panels, colours and legend, draw the
+change of each row against the baseline, in the Blick's unit and relative to the baseline's value:
+lines, grouped bars for bars, and stacked bars for the change of stacked bars, gains up and losses
+down. As in `check`, a row missing from one table counts as 0; a row with a dimension value only
+one table has gets no change drawn, and when the selection has nothing to compare, the page says
+so instead of drawing the two charts. A build that was never checked looks as before.
 
 ## Example
 

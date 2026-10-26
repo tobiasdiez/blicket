@@ -182,16 +182,25 @@ example, with the constraint that such a Blick stays in the manifest with a stat
 neither `error` nor `removed`, and that a Blick that built in the baseline but is skipped now, in
 the same profile, is reported.
 
-### M0.7b The comparison in the viewer
+### M0.7b The comparison in the viewer (built on 2026-10-25)
 
-The viewer's half of M0.7, split off on 2026-10-24 so that each half has one implementer. The
-viewer reads `compare/index.json` and the comparisons it lists from the build directory: the
-overview ranks the Blicks by magnitude and colours them by flag, with filters by flag; the Blick
-page gets the comparison toggle, which draws the baseline table (`baseline_data`, cached by
-`baseline_hash`) as a ghost layer (see the M1 review's "M0.7 start" note below), and the
-diagnostics strip at `where`, which sets the controls there. From M0.5, here or in M4's first plot
-type that does not facet: a colour dimension with many values offered as a split by the plot
-type's `controls`, and a plot type's veto of a `split` the author asked for.
+The viewer's half of M0.7, split off on 2026-10-24 so that each half has one implementer; the plan
+is `m0-7b-comparison-in-the-viewer.md`. The viewer reads `compare/index.json` and each comparison
+it lists (one that cannot be read is skipped; a missing index means no comparison). The overview
+names the baseline in a selector over the baselines of other runs and "No baseline", the counts
+per flag and the schema summary across Blicks, then opens with "Changed since the baseline": the
+flagged Blicks ranked as the terminal ranks its movers, each with its flag badges (`Δ 2.1% of
+scale`), removed ones as plain rows; the groups follow with badges. A Blick page gets a strip with
+the flags, the largest change and where it is, a "Show where" button when that is another view,
+and the schema details; and the switch "Compare with baseline", on by default, which draws the
+baseline table (`baseline_data`, cached by `baseline_hash`) after the same filters behind the
+chart, and under it two charts of the change, absolute and relative. The plot type contract passes
+it to `render` as `baseline`; the built-ins draw it faded (0.3, 0.4 on the dark surface) and
+broader in the series' colours, as remind-mfa's run comparison draws its reference run, and name
+the baseline's number in the tooltip where it differs. The reports write the magnitude as a
+percent of the chart's scale, as the viewer does. Left to M4's first plot type that does not
+facet: a colour dimension with many values offered as a split by the plot type's `controls`, and
+a plot type's veto of a `split` the author asked for.
 
 ### M0.8 Measurements, defaults and M0 verification
 
@@ -233,16 +242,20 @@ Notes from the M1 architecture review for the tasks that follow:
   inside a facet); `frame`/`prepare`/`magnitude` in `viewer/app/plots/layout.ts` read
   `args.table`, so the comparison passes the concatenated rows there, with no signature change. The
   viewer fetches tables as `./<data>?<hash>` already, which content-addresses baseline tables
-  under `compare/` too.
+  under `compare/` too. Superseded in part by M0.7b: the baseline rows reach `render` as their own
+  argument, `baseline`, and `prepare` concatenates them with `__source`, since a plot type unaware
+  of the comparison would draw rows passed in `table` as data.
 - **M2 start.** `serve.py`'s handler, server and runner are replaced by the Starlette dev app
   (`serve` becomes `dev` without the watcher); `build_directory`, `newest_build`, the lookup rule
   (installed viewer first) and the no-cache set survive. `useManifest` gains `reload()` for the
-  SSE refetch that keeps control state.
+  SSE refetch that keeps control state, and `useComparison` beside it, which keeps the chosen
+  baseline when the reload still lists it.
 - **M4 start.** The plot module contract passes `theme` as a tokens object (mode, categorical
   palette, ink, Vega config) and the registry becomes `resolvePlotType(name): Promise`, so a module
   loaded from the build directory needs no bundled import. Whether the helpers in `layout.ts` and
   `encodings.ts` become public waits for the second project plot type; rendering and its queue
-  live in `BlickChart.vue`.
+  live in `BlickChart.vue`. A project plot type will have to say whether it draws a comparison
+  (`baseline` in `render`), or the Blick page offers it no "Compare with baseline" switch.
 
 ## Backlog from Tobias's first look at the viewer (2026-10-24)
 

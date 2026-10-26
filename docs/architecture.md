@@ -174,8 +174,7 @@ class StackedArea(bk.PlotType):
 ```ts
 // stacked_area.js — browser half, loaded by dynamic import; framework-agnostic, never sees Vue
 export default {
-  render({ el, table, schema, mapping, unit, state, theme, name }) { ...; return cleanup },
-  renderComparison({ el, current, baseline, mapping, state, change }) { ... },
+  render({ el, table, baseline, schema, mapping, unit, state, theme, name }) { ...; return cleanup },
 }
 ```
 
@@ -202,6 +201,17 @@ export default {
   whose value combinations each get their own scale. The core derives them, since it lays out the
   panels (the filters, and the splits when the Blick sets `independent_y`); the plot type scales
   and compares within them.
+- Amendment of 2026-10-25 (M0.7b): the comparison is an argument of `render`, not a second
+  method: `baseline` holds the baseline's rows after the same filters as `table`, or `null` when
+  the chart is not compared, and a plot type without a comparison ignores it. The rows stay apart
+  from `table`, so a plot type unaware of the comparison never draws baseline rows as data. The
+  built-ins draw the baseline behind the current marks, faded (opacity 0.3, 0.4 on the dark
+  surface) and broader, in the series' own colours: wide lines behind the lines, the baseline's
+  stack as faded areas under the current layers drawn as lines, wider bars behind the bars;
+  tooltips add the baseline's number where it reads differently. The built-ins also name how
+  their change against the baseline is drawn, in the charts under the chart; a browser half may
+  later declare that too, so that a project plot type opts into those charts through the
+  contract.
 
 ## Change detection, as implemented by the built-in diff routine
 
@@ -286,10 +296,20 @@ one `BLICKET_VIEWER` names in a checkout.
   default of `nuxt.config.ts` outside the dev server); the
   generated `.output/public` is installed into the wheel by a meson custom target. Node and Nuxt
   are maintainer-only dependencies.
-- Overview: Blicks ranked by magnitude and coloured by flags, filters by flag, tag and group, the
-  schema summary across Blicks.
-- Blick page: chart, controls derived by the plot type, URL-carried control state, comparison
-  toggle, diagnostics strip with the control combination where the change is largest.
+- Overview: the baseline, with a selector over the baselines of other runs and "No baseline"; the
+  counts per flag and the schema summary across Blicks; a section of the flagged Blicks ranked as the
+  terminal ranks its movers (`value` by magnitude, then `schema`, `new`, `removed`, `error`), each
+  with its flag badges, which is the filter by flag; then the groups, with badges; search, tag and
+  group filters apply to both.
+- Blick page: chart, controls derived by the plot type, URL-carried control state, a comparison
+  switch on by default, a strip with the flags, the largest change (as a percent of the chart's
+  scale), where it is and against which baseline, with a button that sets the controls there.
+  While the switch is on, two charts under the chart draw the change of each row, absolute and
+  relative, in the chart's panels, colours and legend.
+- Amendment of 2026-10-25 (M0.7b): the viewer reads `compare/index.json` and the comparisons it
+  lists; a build without it looks as before. The switch draws the baseline's table behind the
+  chart when its columns did not change. The chosen baseline is not in the URL, so a link or a
+  reload shows the one checked last.
 - Builder page, dev mode only: see the Blick builder section.
 - The viewer's own dev server proxies a Python-built build directory during viewer development.
 - Opening from `file://` is blocked by browsers for `fetch`; `blicket serve` is the answer, a
@@ -464,20 +484,20 @@ the loader takes a run directory and returns the run object plus `RunInfo`.
    $ blicket dev output/baseline-2026-10-23
    run baseline-2026-10-23 · profile baseline · blicks at a1b2c3 (dirty) · baseline: build 7f3e (main, 2026-10-20)
    48 Blicks: 41 unchanged · 5 value · 1 schema · 1 new · 0 errors
-   top movers: flows/steel-by-process 0.31 · stocks/buildings 0.12 · flows/scrap 0.04
+   top movers: flows/steel-by-process 31% of scale · stocks/buildings 12% of scale · flows/scrap 4% of scale
    viewer: http://127.0.0.1:8765/#/
    ```
 
    Behind this: discovery imports the Blick modules, the loader runs once and stays in memory,
    every transformation runs, tables go to canonical form, the store is searched for the baseline
    build, each plot type's diff runs against it, and a build directory with a fresh id is written.
-3. The overview lists Blicks ranked by magnitude and coloured by flag, with filters by flag, tag and
-   group. The schema summary says which value appeared, for example "process 'EAF-DRI' added in 3
-   Blicks".
+3. The overview opens with the flagged Blicks ranked by magnitude, each with its flags, then the
+   groups, with search, tag and group filters. The schema summary says which value appeared, for
+   example "process 'EAF-DRI' appeared in 3 Blicks".
 4. You open the top mover. The chart has the controls the plot type derived: a scenario dropdown, a
    region split toggle. The URL carries the control state, so a link reproduces the view. A toggle
-   shows the plot type's comparison, for the built-ins a ghost of the baseline. A diagnostics strip
-   shows counts and the control combination where the change is largest; clicking it sets the
+   shows the plot type's comparison, for the built-ins a ghost of the baseline, on by default. A
+   strip names the flags, the largest change and where it is; its "Show where" button sets the
    controls there.
 5. Two outcomes. If the Blick's transformation is at fault, you edit its code; saving reloads the
    project code without reloading the run data, only that Blick is rebuilt, and the chart updates
@@ -501,9 +521,9 @@ the loader takes a run directory and returns the run object plus `RunInfo`.
 
    baseline 9c1d0e7f3a2b4c58 · run main-2026-10-21 · blicks at 81b0d4e · built 2026-10-21 22:05 UTC
    vs baseline: 42 unchanged · 6 value
-   top movers: flows/steel-by-process 0.31 (region=EU, year=2050)
-               stocks/buildings 0.12 (region=CHA, year=2100)
-               flows/scrap 0.04 (region=USA, year=2030)
+   top movers: flows/steel-by-process 31% of scale (region=EU, year=2050)
+               stocks/buildings 12% of scale (region=CHA, year=2100)
+               flows/scrap 4% of scale (region=USA, year=2030)
                … and 3 more
    flagged: 6 of 48 Blicks
    comparison → .blicket/build/4e8a91c07b3d5f26/compare/9c1d0e7f3a2b4c58

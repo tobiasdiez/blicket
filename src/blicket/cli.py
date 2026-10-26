@@ -249,8 +249,8 @@ def diff_command(
 
     A build is a build directory or the id of a build in the project's store.
     A Blick is flagged value, schema, new, removed or error.
-    Each top mover shows its magnitude and the row where it occurs.
-    The magnitude is its largest change relative to the chart's scale, 0 to 1.
+    Each top mover shows its largest change as a percent of the chart's
+    scale, and the row where it occurs (--json: the magnitude, 0 to 1).
     """
     compared = comparison.compare_builds(
         _build_path(baseline, project), _build_path(current, project)
@@ -299,8 +299,9 @@ def check_command(
 
     The comparison goes to compare/<baseline id>/ in the build directory, a
     Markdown summary to the file GITHUB_STEP_SUMMARY names. A Blick is
-    flagged value, schema, new, removed or error; the magnitude is its
-    largest change relative to the chart's scale, 0 to 1.
+    flagged value, schema, new, removed or error; each top mover shows its
+    largest change as a percent of the chart's scale (--json: the
+    magnitude, 0 to 1).
 
     Exit codes: 0 nothing flagged or no baseline yet; 1 value, schema, new
     or removed; 2 errors or a baseline that cannot be resolved.

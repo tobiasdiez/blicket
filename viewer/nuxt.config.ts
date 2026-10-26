@@ -45,6 +45,7 @@ export default defineNuxtConfig({
     devProxy: {
       '/manifest.json': { target: `${serve}/manifest.json` },
       '/blicks': { target: `${serve}/blicks` },
+      '/compare': { target: `${serve}/compare` },
     },
     hooks: {
       // Copies of index.html for servers that route every path to a page; hash routing needs

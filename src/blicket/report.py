@@ -352,7 +352,7 @@ def _mover_lines(comparison: Comparison, pointer: str = "") -> list[str]:
         change = mover.change
         where = f" ({_where(change.where)})" if change.where else ""
         start = lead if index == 0 else " " * len(lead)
-        lines.append(f"{start}{mover.name} {change.magnitude:.2g}{where}")
+        lines.append(f"{start}{mover.name} {change.percent} of scale{where}")
     if (more := comparison.counts["value"] - len(movers)) > 0:
         lines.append(f"{' ' * len(lead)}… and {more} more{pointer}")
     return lines
@@ -388,7 +388,7 @@ def _detail_lines(
 
 def render_markdown(comparison: Comparison) -> str:
     """The Markdown summary of a comparison: a heading with the two builds, the counts, a table
-    of the flagged Blicks, the largest magnitude first, then the columns and values that
+    of the flagged Blicks, the largest change first, then the columns and values that
     appeared or vanished, the new Blicks that did not build in the baseline, and the errors,
     those of the files of an incomplete build first."""
     current, baseline = comparison.current, comparison.baseline
@@ -407,13 +407,17 @@ def render_markdown(comparison: Comparison) -> str:
         reverse=True,
     )
     if flagged:
-        lines += ["", "| Blick | flags | magnitude | where |", "|---|---|---|---|"]
+        lines += [
+            "",
+            "| Blick | flags | largest change (of the chart's scale) | where |",
+            "|---|---|---|---|",
+        ]
     for blick in flagged:
         change = blick.change
         cells = [
             f"`{blick.name}`",
             ", ".join(flag for flag in get_args(Flag) if flag in change.flags),
-            _EMPTY if change.magnitude is None else f"{change.magnitude:.2g}",
+            change.percent or _EMPTY,
             _where(change.where) if change.where else _EMPTY,
         ]
         lines.append("| " + " | ".join(cell.replace("|", "\\|") for cell in cells) + " |")

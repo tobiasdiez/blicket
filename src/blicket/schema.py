@@ -5,6 +5,7 @@ This module imports nothing from blicket, so that ``blicket.model`` and ``blicke
 can import it.
 """
 
+from decimal import Decimal
 from typing import Any, Literal, get_args
 
 import polars as pl
@@ -94,6 +95,16 @@ class Change(BaseModel):
     values_added: dict[str, list[Any]] = {}
     values_removed: dict[str, list[Any]] = {}
     where: dict[str, Any] | None = None
+
+    @property
+    def percent(self) -> str | None:
+        """The magnitude as the percent of the chart's scale it is, to two significant digits
+        and without an exponent: ``2.1%``, ``100%``, ``0.012%``; ``None`` when no row was
+        compared. The viewer's ``percent`` in viewer/app/lib/comparison.ts writes the same, but
+        the two differ on exact ties, which Python rounds half to even."""
+        if self.magnitude is None:
+            return None
+        return f"{Decimal(f'{self.magnitude * 100:.2g}'):f}%"
 
     @field_serializer("flags", when_used="json")
     def _flags_in_order(self, flags: frozenset[Flag]) -> list[Flag]:

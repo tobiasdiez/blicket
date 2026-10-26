@@ -3,6 +3,9 @@ import type { Theme } from './types'
 /** The number of categorical slots; past it the hues repeat. */
 export const SLOTS = 8
 
+/** The opacity of the baseline's marks, stronger on the dark surface, where faded hues dull. */
+export const GHOST: Record<Theme, number> = { light: 0.3, dark: 0.4 }
+
 // The chart tokens of the dataviz palette, light and dark. The categorical slots are assigned in
 // this order, which keeps neighbours apart under colour-vision deficiencies; it is validated as
 // a set, so slots are never reordered or generated.
@@ -20,6 +23,13 @@ export const INK: Record<Theme, { surface: string, primary: string, secondary: s
 const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 
 /**
+ * The least room a y axis's labels take, in px. It is a floor, which keeps the plot areas of the
+ * charts stacked on a page aligned while their labels fit it; a wider label still shifts its chart,
+ * since separate views line up by floors and clips, not by construction.
+ */
+export const Y_LABEL_EXTENT = 48
+
+/**
  * The Vega-Lite config of a theme: recessive hairline axes, text in ink, never in series colour,
  * on the surface colour, which an exported image keeps.
  */
@@ -32,9 +42,10 @@ export function config(theme: Theme) {
     view: { stroke: null },
     axis: { ...text, labelColor: ink.tick, domainColor: ink.baseline, tickColor: ink.baseline, gridColor: ink.grid, gridWidth: 1, domainWidth: 1, tickSize: 4, labelPadding: 4 },
     axisX: { grid: false },
-    axisY: { domain: false, ticks: false, titlePadding: 8 },
+    axisY: { domain: false, ticks: false, titlePadding: 8, minExtent: Y_LABEL_EXTENT },
     legend: { ...text, orient: 'top', direction: 'horizontal', symbolStrokeWidth: 2, columnPadding: 12, labelLimit: 220 },
     header: { labelColor: ink.primary, labelFontSize: 12, labelAnchor: 'start', labelPadding: 6, title: null },
+    title: { color: ink.secondary, fontSize: 12, fontWeight: 'normal', anchor: 'start', offset: 8 },
     line: { strokeWidth: 2, strokeCap: 'round', strokeJoin: 'round' },
   }
 }

@@ -19,7 +19,7 @@ export function definePlot(build: (args: PlotArgs, width: number) => TopLevelSpe
         // Errors only: the hover layers of line charts start without data, which Vega warns about.
         logLevel: vega.Error,
       })
-      el.querySelector('.vega-embed summary')?.setAttribute('aria-label', 'Export')
+      el.querySelector('.vega-embed summary')?.setAttribute('aria-label', `Export ${args.name}`)
       return () => result.finalize()
     },
   }

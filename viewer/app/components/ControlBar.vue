@@ -3,7 +3,7 @@ import { withFilter, withSplit, withoutSplit, parseValue, type ControlState } fr
 import type { Control, Dimension, TableSchema } from '~/lib/manifest'
 import { valueKey } from '~/lib/table'
 
-// `axes` shows the y axis switch, which only the chart needs.
+// `axes` shows the y axis switch, which only the chart needs; the slot holds the page's switches.
 const props = defineProps<{ controls: Control[], schema: TableSchema, state: ControlState, axes: boolean }>()
 const emit = defineEmits<{ update: [state: ControlState] }>()
 
@@ -26,7 +26,7 @@ function choose(dimension: Dimension, key: string | undefined) {
 
 <template>
   <div class="flex flex-wrap items-center gap-x-5 gap-y-3">
-    <div v-for="row in rows" :key="row.dimension.name" class="flex items-center gap-1.5">
+    <div v-for="row in rows" :key="row.dimension.name" class="flex flex-wrap items-center gap-1.5">
       <span class="text-sm text-muted">{{ row.dimension.name }}</span>
       <span v-if="row.split" class="flex h-8 min-w-36 items-center text-sm">all (panels)</span>
       <USelectMenu
@@ -59,5 +59,6 @@ function choose(dimension: Dimension, key: string | undefined) {
       size="sm"
       @update:model-value="(own: boolean) => emit('update', { ...state, y: own ? 'independent' : 'shared' })"
     />
+    <slot />
   </div>
 </template>

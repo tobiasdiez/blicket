@@ -96,6 +96,13 @@ export interface Group {
   modules: string[]
 }
 
+/** The state of the git repository holding the Blick code when the build ran. */
+export interface Repository {
+  commit: string
+  branch: string | null
+  dirty: boolean
+}
+
 export interface Manifest {
   spec: string
   blicket: string
@@ -111,7 +118,7 @@ export interface Manifest {
     dirty: boolean | null
     paths: string[]
   }
-  repository: { commit: string, branch: string | null, dirty: boolean } | null
+  repository: Repository | null
   groups: Group[]
   blicks: BlickEntry[]
   problems: Problem[]

@@ -133,7 +133,7 @@ def test_a_changed_transformation_is_flagged(commit: str) -> None:
     assert lines[4:] == [
         f"baseline {a} · run a · blicks at {commit} · built {made(a)}",
         "vs baseline: 1 value",
-        "top movers: a/values 0.091 (year=2022)",
+        "top movers: a/values 9.1% of scale (year=2022)",
         "flagged: 1 of 1 Blick",
         f"comparison → .blicket/build/{current}/compare/{a}",
     ]
@@ -269,7 +269,7 @@ def test_the_step_summary_receives_the_markdown(
         f"blicket: run a (`{a[:8]}`)\n\nbaseline: none (no other pushed build of profile test)\n",
     ]
     assert entries[2].startswith(f"blicket: run b (`{b[:8]}`) against run a (`{a[:8]}`)\n")
-    assert entries[2].endswith("| `a/values` | value | 0.091 | year=2022 |\n")
+    assert entries[2].endswith("| `a/values` | value | 9.1% | year=2022 |\n")
 
 
 def test_the_step_summary_receives_a_failed_resolution(

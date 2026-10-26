@@ -173,9 +173,10 @@ panels share a y axis by default, independent axes are a toggle; a per-Blick def
 A plot type module exports `render({ el, table, schema, mapping, state, theme })` returning a
 cleanup function (vega-embed's `finalize`, so a control change does not leak a view), and nothing
 Vue-specific, as the architecture's contract sketches (`renderComparison` comes with the
-comparison). `schema` carries the dimension dtypes and display order the spec needs, `theme` is
-`light` or `dark` and a theme switch re-renders. The four built-ins build a Vega-Lite spec and hand
-it to vega-embed (`actions: false`, tooltips on):
+comparison; M0.7b replaced it with `baseline`, an argument of `render`). `schema` carries the
+dimension dtypes and display order the spec needs, `theme` is `light` or `dark` and a theme switch
+re-renders. The four built-ins build a Vega-Lite spec and hand it to vega-embed (`actions: false`,
+tooltips on):
 
 | plot type | encoding |
 |---|---|
@@ -184,19 +185,19 @@ it to vega-embed (`actions: false`, tooltips on):
 | bar | x, y, color, `xOffset` by color for grouped bars |
 | stacked_bar | x, y stacked, color |
 
-Encoding types follow the dimension's dtype: an `integer` x on line and area charts is
-quantitative with `format: "d"`, `nice` and `zero` off (so years read 1950, not 1,950, and the
-axis starts at the data); on bar charts x is ordinal; `date` and `datetime` are temporal on a UTC
-scale (hyparquet yields UTC midnight); strings are nominal with the display order from `columns`
-as the domain. Measures are quantitative with an SI number format and the measure's name as axis
-title (units are not in the manifest yet; the description shows them). Split dimensions become a
-top-level `facet` around the `spec` (not an `encoding.facet`, so the comparison's ghost layer of
-M0.7 can be added as a layer) with wrapped columns and a header per panel; `state.y` chooses
-`resolve.scale.y` shared or independent. Colours, axis formatting, the theme for light and dark
-mode and the tooltip follow the dataviz skill; colours consistent per dimension value across
-Blicks are deferred. A plot type without a module (a project plot type, M4) shows a placeholder
-naming it; dynamic import of `plot_types/<name>.js` from the build directory is M4, and bundling
-the built-ins skips that plugin path for now, deliberately.
+Encoding types follow the dimension's dtype: an `integer` x on line and area charts is quantitative
+with `format: "d"`, `nice` and `zero` off (so years read 1950, not 1,950, and the axis starts at
+the data); on bar charts x is ordinal; `date` and `datetime` are temporal on a UTC scale (hyparquet
+yields UTC midnight); strings are nominal with the display order from `columns` as the domain.
+Measures are quantitative with an SI number format and the measure's name as axis title (units are
+not in the manifest yet; the description shows them). Split dimensions become a top-level `facet`
+around the `spec` (not an `encoding.facet`, so the comparison's ghost layer of M0.7 can be added as
+a layer; M0.7b draws it from the `baseline` rows that `render` receives) with wrapped columns and a
+header per panel; `state.y` chooses `resolve.scale.y` shared or independent. Colours, axis
+formatting, the theme for light and dark mode and the tooltip follow the dataviz skill; colours
+consistent per dimension value across Blicks are deferred. A plot type without a module (a project
+plot type, M4) shows a placeholder naming it; dynamic import of `plot_types/<name>.js` from the
+build directory is M4, and bundling the built-ins skips that plugin path for now, deliberately.
 
 ### The pages
 

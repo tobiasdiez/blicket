@@ -154,7 +154,7 @@ def test_nothing_is_written_without_a_viewer(
 ) -> None:
     root = make_build_project(tmp_path, {"blicks/a.py": VALUES})
     monkeypatch.delenv(viewer.VIEWER_ENV)
-    with pytest.raises(BlicketError, match="no viewer found: install a blicket release"):
+    with pytest.raises(BlicketError, match="no viewer found: install blicket with its viewer"):
         bk.build(root, [make_run(tmp_path / "run")])
     assert not (root / ".blicket").exists()
 

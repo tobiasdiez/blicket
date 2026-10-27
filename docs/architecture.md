@@ -239,7 +239,13 @@ same relative-to-panel-scale units as the magnitude. A row is *same* when
 |current − baseline| / s ≤ tolerance, with s the panel scale. Amendment of 2026-10-24: nothing
 rounds and nothing is flushed to zero, so the `digits` key is gone; the tolerance alone absorbs
 solver noise and must be positive and below 1. The defaults are validated in M0: a rerun of remind-mfa on another machine must produce
-zero `value` flags. Small changes are never hidden; they rank low.
+zero `value` flags. Small changes are never hidden; they rank low. Amendment of 2026-10-26: the
+default was validated on one machine; the run on a second machine was waived. Two reruns of
+remind-mfa gave identical tables (magnitude 0 in all ten Blicks), so 1e-5 stays: far below what a
+chart resolves, and ten to eleven orders of magnitude above the largest float-rounding difference
+seen in any comparison (1.2e-16 as a magnitude, 1.3e-15 per value against a column's scale). The
+numbers, and the risk left unmeasured (remind-mfa's fits), are in
+[plans/m0-8-measurements-and-verification.md](plans/m0-8-measurements-and-verification.md).
 
 **Magnitude** (built-in routine), of the measure on `y`, bounded to [0, 1]:
 
@@ -416,7 +422,7 @@ loops. TypeScript types for the manifest are hand-written for now.
 
 ## Project basics (decided 2026-10-23)
 
-- Licence MIT. The repository lives under Tobias's own GitHub account for now, later under
+- Licence MIT. The repository is public at https://github.com/tobiasdiez/blicket, later under
   pik-piam. The GitHub organisation `blicket` is taken; the PyPI name was free on 2026-10-22 and
   is to be reserved.
 - Python floor: the latest stable release at the time, 3.15. Tooling: uv, ruff, pytest,
@@ -469,6 +475,11 @@ loops. TypeScript types for the manifest are hand-written for now.
   sign flip gives 1, an added value gives `schema`, near-zero and sign-crossing cases).
 - Hot reload (M2): editing a transformation updates the chart without reloading the page, control
   state preserved; editing a helper does not reload the run data.
+
+Amendment of 2026-10-26: M0 walked this list on one machine, the cross-machine items waived
+(decision 3 of 2026-10-23 in [plans/m0-tasks.md](plans/m0-tasks.md)); each item with what shows
+it and its result is in
+[plans/m0-8-measurements-and-verification.md](plans/m0-8-measurements-and-verification.md).
 
 ## Two walkthroughs
 

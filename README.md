@@ -7,6 +7,53 @@ shows them in a web viewer, compares two builds, and checks a run against its ba
 behind it is in
 [docs/concept.md](docs/concept.md), the design in [docs/architecture.md](docs/architecture.md).
 
+## Installation
+
+blicket is not yet on PyPI; [uv](https://docs.astral.sh/uv/) builds it from its repository and
+fetches Python 3.14 when the machine lacks it. The project's `pyproject.toml` needs
+`requires-python = ">=3.14"`, a `[tool.blicket]` table, which may be empty, and a build setting
+for the viewer:
+
+```toml
+[tool.uv.config-settings-package]
+blicket = { setup-args = "-Dviewer=enabled" }
+```
+
+```console
+$ uv add git+https://github.com/tobiasdiez/blicket
+$ uv run blicket --version
+```
+
+uv records the commit in `uv.lock`; `uv lock --upgrade-package blicket` moves to the newest one.
+The build generates the viewer and bundles it, which takes Node 24 or newer,
+[pnpm](https://pnpm.io/installation) and network access on every machine that syncs the project,
+since each builds blicket. Without the setting the build needs neither, but `blicket build` and
+`blicket serve` stop with an error, as both need a viewer. [Defining Blicks](#defining-blicks)
+leads to the first `blicket list`.
+
+### From a wheel
+
+For machines without Node, such as a cluster, one person builds a wheel and hands the file
+around. In a clone of the repository, with uv, Node 24 or newer, pnpm and network access:
+
+```console
+$ uv sync
+$ uv build --wheel -Csetup-args=-Dviewer=enabled
+```
+
+Without the `uv sync` before it, the build fails with `No module named 'mesonpy'`;
+[Development](#development) says why. The wheel is `dist/blicket-<version>-py3-none-any.whl`, one
+wheel for every platform, with the viewer inside. In the project, with the wheel copied to
+`wheels/`:
+
+```console
+$ uv add wheels/blicket-<version>-py3-none-any.whl
+```
+
+`uv add` records the wheel's path under `[tool.uv.sources]` and in `uv.lock`, so a wheel kept
+inside the project is one that colleagues can `uv sync` as well; an absolute path works on one
+machine only.
+
 ## Defining Blicks
 
 ```toml
@@ -307,6 +354,8 @@ a run.
 
 ## Development
 
+In a clone of the repository (`git clone https://github.com/tobiasdiez/blicket`):
+
 ```console
 uv sync
 uv run pytest
@@ -326,11 +375,12 @@ $ export BLICKET_VIEWER=../../viewer/.output/public
 
 `blicket build` then copies it into build directories and `blicket serve` serves it; both need a
 viewer and stop with an error without one. `BLICKET_VIEWER` wins over a bundled viewer, so a new
-viewer can be tried with a release install. The release wheel bundles the viewer: after
-`uv sync`, `uv build --wheel -Csetup-args=-Dviewer=enabled` runs `pnpm install --frozen-lockfile`
-and `pnpm generate` and installs the site as `blicket/_viewer`. The meson option `viewer` (in
-`meson.options`) is off by default, so `uv sync` and the editable install need no Node; a wheel
-built from the sdist without the option, or without network for pnpm, has no viewer.
+viewer can be tried with an installed wheel. The meson option `viewer` (in `meson.options`)
+bundles the viewer: with it, as in [Installation](#installation), the build runs
+`pnpm install --frozen-lockfile` and `pnpm generate` and installs the site as `blicket/_viewer`,
+and it fails when pnpm is missing or cannot fetch. The option is off by default, so `uv sync` and
+the editable install need no Node, and a wheel built without it, as from the sdist, has no
+viewer.
 
 blicket is built with meson-python without build isolation, so that the editable install made by
 `uv sync` can rebuild on import. The build tools therefore live in the `build` dependency group,

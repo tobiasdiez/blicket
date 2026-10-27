@@ -54,7 +54,7 @@ def test_the_bundled_viewer_is_found_on_disk(
     package = tmp_path / "blicket"
     package.mkdir()
     monkeypatch.setattr(importlib.resources, "files", lambda name: package)
-    with pytest.raises(bk.BlicketError, match="no viewer found: install a blicket release"):
+    with pytest.raises(bk.BlicketError, match="no viewer found: install blicket with its viewer"):
         viewer.find()
     make_viewer(package / "_viewer")
     assert viewer.find() == package / "_viewer"

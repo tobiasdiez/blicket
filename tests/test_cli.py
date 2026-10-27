@@ -385,7 +385,7 @@ def test_build_needs_a_viewer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.delenv(viewer.VIEWER_ENV)
     result = invoke("build", "runs/a")
     assert (result.exit_code, result.stdout) == (2, "")
-    assert result.stderr.startswith("error: no viewer found: install a blicket release")
+    assert result.stderr.startswith("error: no viewer found: install blicket with its viewer")
 
 
 def test_loader_failure_is_one_line_on_stderr(

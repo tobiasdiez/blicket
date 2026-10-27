@@ -8,44 +8,35 @@ data, which is not public (it lives on the PIK cluster).
 ## Prerequisites
 
 - [uv](https://docs.astral.sh/uv/); it fetches Python 3.14 if the machine lacks it.
-- remind-mfa checked out next to the blicket checkout, which the example depends on by path. Clone
-  the fork the example runs were made from, run in the blicket checkout so that the two checkouts
-  sit side by side:
+- Node 24 or newer and [pnpm](https://pnpm.io/installation), to generate the viewer that `build`
+  copies into every build directory (see [Building](#building)); `blicket list` needs neither.
+- remind-mfa checked out next to the blicket checkout, which the example depends on by path.
+  Clone it from the blicket checkout, so that the two sit side by side:
 
   ```console
-  $ git clone https://github.com/tobiasdiez/remind-mfa ../remind-mfa
+  $ git clone https://github.com/pik-piam/remind-mfa ../remind-mfa
   ```
 
 - Runs. A run is the folder remind-mfa's pickle export writes,
   `<prefix>_<model>_<scenario>_<regions>/` with a `model.pickle`. They go into `data_out/` at the
   root of the blicket checkout (`mkdir data_out`), which git ignores; any other place works too,
-  since `blicket build` takes the run folder as an argument.
+  since `blicket build` takes the run folder as an argument. [Producing a run](#producing-a-run)
+  says how to make one.
 
-A run loads only with the remind-mfa commit that wrote it: the pickle holds remind-mfa's own
-classes, and the pickle does not record that commit. The example runs come with
-`data_out/RUNS.md`, which names it (`a7c389a`) and the config layers, `default` and `blicket`.
-Check out that commit in `../remind-mfa` before building; the loader says so when a run does not
-unpickle. Unpickling runs code from the checkout, so build only runs you trust.
+The example runs are of two generations: three of 2026-10-24, made at remind-mfa `a7c389a` on
+input data 2.8.0, and two of 2026-10-26, made at `710302d`, eight commits later, on input data
+2.9.1. Below, a run goes by the seconds of its timestamp: run 28 is
+`2026-10-24--01-25-28_plastics_SSP2_h12`, run 00 is `2026-10-26--11-25-00_plastics_SSP2_h12`.
+Runs 31 and 13 are unchanged reruns of runs 28 and 00; run 34 has `collection_rate` scaled by
+0.9. `data_out/RUNS.md` is a note kept next to the runs, outside the repository like the runs
+themselves; it names each run's commit, input data revision and config layers, `default` and
+`blicket`.
 
-## Producing a run
-
-With remind-mfa's input data in place (remind-mfa's README says how to fetch it), in
-`../remind-mfa`, write the layer `config/blicket.toml`, which turns the figures off (the pickle
-export is on in the default config):
-
-```toml
-[base.visualization]
-do_visualize = false
-```
-
-Then run the plastics model and move the run folder it writes into `data_out/`:
-
-```console
-$ uv run remind_mfa.py --config default --config blicket --model plastics
-$ mv data_out/<prefix>_plastics_SSP2_h12 ../blicket/data_out/
-```
-
-This reproduces the layers `data_out/RUNS.md` names.
+A run loads with the remind-mfa commit that wrote it, or with one whose classes still match: the
+pickle holds remind-mfa's own classes and does not record the commit. The runs of `a7c389a` load
+at `710302d` and give the same tables there. When a run does not unpickle, the loader says so;
+check out the commit `RUNS.md` names, as in `git -C ../remind-mfa checkout a7c389a`. Unpickling
+runs code from the checkout, so build only runs you trust.
 
 ## The project
 
@@ -93,6 +84,54 @@ that pin for blicket, in this environment only.
 a commit whose `pyproject.toml` differs, `uv run` rewrites `uv.lock` (do not commit that),
 `uv run --frozen` uses the lock as it is, and `uv run --locked` fails instead.
 
+## Producing a run
+
+Building and comparing need runs, and producing one needs the input data from the PIK cluster. In
+`../remind-mfa`:
+
+1. Check out the commit the run is to come from; a fresh clone sits at `main`:
+
+   ```console
+   $ git checkout 710302d
+   ```
+
+   `710302d` made the second generation of the example runs, `a7c389a` the first.
+
+2. Fetch the input data. remind-mfa reads it from an archive in `madrat_output/`, of the revision
+   that `input_data_revision` in `config/default.toml` names: 2.8.0 at `a7c389a`, 2.9.1 at
+   `710302d`. `<host>` is the cluster's SSH target, `user@host` or a host alias from
+   `~/.ssh/config`, as remind-mfa's README says:
+
+   ```console
+   $ uv run scripts/fetch_from_hpc.py mfa-archive --config default <host>
+   ```
+
+3. Write the layer `config/blicket.toml`, which turns the figures off (the pickle export is on in
+   the default config):
+
+   ```toml
+   [base.visualization]
+   do_visualize = false
+   ```
+
+4. Run the plastics model:
+
+   ```console
+   $ uv run remind_mfa --config default --config blicket --model plastics
+   ```
+
+   remind-mfa runs as a package; at `a7c389a` and before, it ran as the script `remind_mfa.py`,
+   with the same options. A run takes a few seconds; the first one on a new input data revision
+   unpacks the archive into `data_in/`.
+
+5. Move the run folder it wrote into `data_out/`:
+
+   ```console
+   $ mv data_out/<prefix>_plastics_SSP2_h12 ../blicket/data_out/
+   ```
+
+The layers `default` and `blicket` are the ones `RUNS.md` names.
+
 ## Building
 
 `build` copies the viewer into every build directory, and blicket installed from a checkout has
@@ -124,8 +163,8 @@ the repository.
 
 ## Comparing runs
 
-With the three example runs built, `diff` compares two of them Blick by Blick, here run 28 with
-run 34, in which `collection_rate` is scaled by 0.9:
+With runs 28, 31 and 34 built, `diff` compares two of them Blick by Blick, here run 28 with run
+34:
 
 ```console
 $ uv run blicket diff .blicket/build/<id of run 28> .blicket/build/<id of run 34>
@@ -145,8 +184,8 @@ takes its id alone; `--json` prints the comparison as JSON.
 
 `check` builds a run and compares it with its baseline in one go: the newest pushed build of the
 run's profile whose commit is the one checked out or an ancestor of it. With the builds of runs 28,
-31 and 34 pushed, checking run 34 finds run 28's build, the newest of the three (commits and ids
-differ on your checkout):
+31 and 34 pushed, checking run 34 finds the newest of the pushed builds, here run 28's (commits
+and ids differ on your checkout):
 
 ```console
 $ uv run blicket check ../../data_out/2026-10-24--01-25-34_plastics_SSP2_h12
@@ -167,6 +206,15 @@ of manifest and tables. `--against <branch>` searches that branch's history inst
 checked out, `--against <id>` compares with that build, and `--push` pushes the build afterwards,
 its comparisons included; without a pushed build of the profile, `check` says `baseline: none
 (...)` and exits 0.
+
+A profile does not know the model version, so the newest pushed build is the baseline whatever
+run produced it: with run 00's build the newest, checking run 13 finds it, and run 34 is compared
+with run 00 unless `--against` names another build. Checking run 13 then reports `vs baseline:
+10 unchanged` and exits 0, an unchanged rerun again; checking run 34 reports the model change, the
+data change and the lower `collection_rate` together. Between the generations alone, `diff` of
+run 28's build and run 00's, both pushed, so that their ids alone name them, gives `10 Blicks: 3
+unchanged · 7 value`: the drivers stay as they were, and every flow and stock Blick moves, by 13%
+to 22% of the chart's scale, the most in SSA in 2100.
 
 ## Looking at a build
 

@@ -162,7 +162,7 @@ def test_serve_needs_a_viewer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.chdir(root)
     result = invoke()  # the build line comes only once the server is up
     assert (result.exit_code, result.stdout) == (2, "")
-    assert result.stderr.startswith("error: no viewer found: install a blicket release")
+    assert result.stderr.startswith("error: no viewer found: install blicket with its viewer")
 
 
 def test_serve_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

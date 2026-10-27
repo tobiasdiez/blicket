@@ -1,10 +1,11 @@
 # M0 in tasks
 
-Status: proposed on 2026-10-23, before any code, revised the same day after an independent review.
-Splits milestone M0 of [architecture.md](../architecture.md) ("Headless build and compare on
-remind-mfa") into tasks sized for one plan → review → implement → review loop each. The order
-follows the dependencies, and every task leaves something runnable. Each task gets its own plan
-file in this directory when it starts; the first one is
+Status: proposed on 2026-10-23, before any code, revised the same day after an independent review;
+M0 closed on 2026-10-26 (see "M0 closed" after the tasks). Splits milestone M0 of
+[architecture.md](../architecture.md) ("Headless build and compare on remind-mfa") into tasks
+sized for one plan → review → implement → review loop each. The order follows the dependencies,
+and every task leaves something runnable. Each task gets its own plan file in this directory when
+it starts; the first one is
 [m0-1-skeleton-and-registry.md](m0-1-skeleton-and-registry.md).
 
 ## Facts gathered on 2026-10-23 that shape the split
@@ -29,7 +30,8 @@ file in this directory when it starts; the first one is
 - The pickled model exposes `future_mfa` and `historical_mfa`, flodym `MFASystem`s with 52 flows,
   5 stocks and 8 dimensions (Time, Historical Time, Region, Element, Polymer, Polymer Type, End
   Use, Driver Scenario). `FlodymArray.to_df()` yields a long table with a named MultiIndex, and
-  blicket accepts the array itself. A pickle loads only with the remind-mfa version that wrote it.
+  blicket accepts the array itself. A pickle loads only with the remind-mfa version that wrote it;
+  the runs of `a7c389a` also load at `710302d`, whose classes still match.
 - Toolchain on this machine: uv 0.13.5, meson and ninja installed, CPython 3.14.8 as system
   Python.
 
@@ -174,9 +176,9 @@ architecture) and the baseline tables of the Blicks flagged `value` or `schema` 
 The Markdown summary (the `report.md` of the architecture) goes to `$GITHUB_STEP_SUMMARY` only;
 `--push` pushes the build, `compare/` included on its first push; `--json` puts the comparison on
 stdout and the report on stderr; exit codes 0, 1 on flags, 2 on errors or a baseline that cannot
-be resolved. `serve` sends the comparison JSON with `no-cache`. The README's `check` walkthrough,
-listed under M0.8, came with this task. Deferred: the per-Blick fallback to older candidates (to
-the accept design); adding comparisons to a build already in the store; and the status of a Blick
+be resolved. `serve` sends the comparison JSON with `no-cache`. The README's `check` walkthrough
+came with this task. Deferred: the per-Blick fallback to older candidates (to the accept design);
+adding comparisons to a build already in the store; and the status of a Blick
 that does not apply to a run (a plastics Blick on a steel run), which waits for the multi-model
 example, with the constraint that such a Blick stays in the manifest with a status of its own,
 neither `error` nor `removed`, and that a Blick that built in the baseline but is skipped now, in
@@ -202,15 +204,49 @@ percent of the chart's scale, as the viewer does. Left to M4's first plot type t
 facet: a colour dimension with many values offered as a split by the plot type's `controls`, and
 a plot type's veto of a `split` the author asked for.
 
-### M0.8 Measurements, defaults and M0 verification
+### M0.8 Measurements, defaults and M0 verification (built on 2026-10-26)
 
-A fresh remind-mfa run from the current checkout on this machine, checked against a build of an
-older run, confirming or correcting the `tolerance` default; measurements recorded in `docs/`. Walk
-the M0 verification list of the architecture, with the cross-machine item waived. A README with
-installation (the `check` walkthrough came with M0.7).
+The plan is `m0-8-measurements-and-verification.md`; its Measurements and Verification walk hold
+the numbers. Three outcomes: the `tolerance` default stays 1e-5, since two fresh reruns of
+remind-mfa at `710302d` on input data 2.9.1 give identical tables and a `check` of one against
+the other reports `10 unchanged`; no loader cache, since a run loads in 0.6 to 1 s; and every M0
+item of the verification list holds on this machine, the cross-machine items waived. The README
+gained an Installation section, checked by installing the wheel, and on 2026-10-27 the git source
+of the public repository, into scratch projects, and the
+example's README gained the run command per remind-mfa commit and the second generation of
+runs. No change to `src/`.
 
-Done when the fresh rerun produces zero `value` flags at the defaults, and every other M0 item in
-the verification list holds.
+## M0 closed (2026-10-26)
+
+All M0 tasks are built except M0.4, which was dropped; M1 was built along the way. The M0 items
+of the verification list hold on this machine, the cross-machine items waived. Open from M0 and
+M1, each where its entry put it:
+
+- The per-Blick fallback to older baseline candidates, and comparisons added to a build already
+  in the store: with the accept design (M3).
+- The status of a Blick that does not apply to a run: with the multi-model example.
+- Hiding dimensions that others determine: when a project needs it.
+- The trade Blick, which waits for a sign convention, a plot-type question (M4).
+- Plot factories derived from the channel declarations, a colour dimension with many values
+  offered as a split by the plot type's `controls`, and a plot type's veto of a split (M4).
+- M1's out-of-scope list in `m1-viewer.md`: thumbnails on the overview, a `file://` folder
+  picker, end-to-end browser tests (Playwright), the switch to turn off the copying of the viewer
+  into build directories, and consistent colours per dimension value across Blicks.
+- The backlog below.
+
+What M2 starts from:
+
+- The "M2 start" note under M1 below, for the dev server and the viewer's reload.
+- The discovery primitives listed under "Not in M0" at the end, for reloading a module.
+- For the Blick builder: the dataset protocol sketched in `m0-3-remind-mfa-adapter.md`. The run
+  picker has nothing to build on yet: the adapter has no `discover(root)` and no labels, and the
+  example's loader takes one path.
+- Scatter and table plug into the shared diff routine and `controls_for`, as the built-ins do.
+- The measurements: a remind-mfa run loads in 0.6 to 1 s and its ten Blicks build in about 0.1 s
+  together, so the dev server can hold the run in memory and rebuild a Blick per edit.
+- The hot-reload item of the verification list, M2's own check; and two backlog items that need
+  the dev server: "Viewer test data", served when no project is running, and the IDE link from
+  "defined at", which needs the project root the dev server knows.
 
 ## Decisions taken on 2026-10-23
 

@@ -4,7 +4,7 @@ The web viewer of a blicket build directory: a Nuxt 4 app in client-only mode wi
 and a relative base URL, generated to static files and shipped inside the blicket wheel. What it
 shows and how a build directory is served is in the [root README](../README.md#looking-at-a-build);
 the design is in [docs/plans/m1-viewer.md](../docs/plans/m1-viewer.md). Node and pnpm are needed
-only to work on the viewer.
+only to work on the viewer and to build the wheel that bundles it.
 
 ## Developing
 
@@ -29,7 +29,7 @@ $ pnpm lint         # oxlint; unused variables in .vue files are pnpm typecheck'
 $ pnpm generate     # the site, in .output/public
 ```
 
-How blicket from a checkout uses a generated viewer (`BLICKET_VIEWER`), and how the release wheel
+How blicket from a checkout uses a generated viewer (`BLICKET_VIEWER`), and how an installation
 bundles it, is in the [root README](../README.md#development).
 
 `app/lib/manifest.ts` describes the manifest of the spec in its `SPEC` by hand; the Python models in

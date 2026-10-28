@@ -1,14 +1,12 @@
 <script setup lang="ts">
 import { baselineTable } from '~/lib/comparison'
-import { queryFromState, stateFromQuery, type ControlState, type YAxis } from '~/lib/controls'
-import { toCsv } from '~/lib/csv'
+import { TAB, queryFromState, stateFromQuery, type ControlState, type YAxis } from '~/lib/controls'
+import { downloadCsv } from '~/lib/csv'
 import { sourceText } from '~/lib/manifest'
 import { select } from '~/lib/select'
 import { nothingToCompare } from '~/plots'
 import { CATEGORICAL, GHOST } from '~/plots/theme'
 
-// The query key of the tab; like every key with an underscore, it is not a dimension.
-const TAB = '_tab'
 // The charts of the change against the baseline, under the chart while it is compared.
 const CHANGE_KINDS = ['change', 'relative'] as const
 
@@ -48,15 +46,7 @@ const compare = ref(true)
 const { rows: baselineRows, error: baselineError } = useTable(() => (compare.value ? baselineFile.value : null))
 const baseline = computed(() => (baselineRows.value && schema.value && state.value ? select(baselineRows.value, schema.value, state.value.filters) : null))
 
-const tabs = [
-  { label: 'Chart', value: 'chart', icon: 'i-lucide-chart-line' },
-  { label: 'Data', value: 'data', icon: 'i-lucide-table' },
-]
-// The tab is in the URL too, so a link can open the data.
-const tab = computed({
-  get: () => (route.query[TAB] === 'data' ? 'data' : 'chart'),
-  set: (value: string | number) => void router.replace({ query: { ...route.query, [TAB]: value === 'data' ? 'data' : undefined } }),
-})
+const tab = useTab()
 
 // The switch shows on the chart of a Blick with a baseline table; the chart waits for the
 // comparisons and the baseline's rows, so it is drawn once.
@@ -98,14 +88,8 @@ async function showWhere(next: ControlState) {
   controlBar.value?.$el.querySelector<HTMLElement>('button, input')?.focus()
 }
 
-function downloadCsv() {
-  if (!shown.value || !schema.value) return
-  const url = URL.createObjectURL(new Blob([toCsv(shown.value, schema.value, definition.value?.unit ?? null)], { type: 'text/csv' }))
-  const link = document.createElement('a')
-  link.href = url
-  link.download = `${fileName.value}.csv`
-  link.click()
-  URL.revokeObjectURL(url)
+function saveCsv() {
+  if (shown.value && schema.value) downloadCsv(shown.value, schema.value, definition.value?.unit ?? null, fileName.value)
 }
 
 // The overview is the one page above a Blick; the group is a label, not a page. On a narrow
@@ -143,7 +127,7 @@ const source = computed(() => (entry.value?.source ? sourceText(entry.value.sour
         <span v-if="definition?.unit">unit: {{ definition.unit }}</span>
         <span v-if="entry.rows !== null">{{ entry.rows.toLocaleString('en') }} rows</span>
         <a v-if="entry.data" :href="`./${entry.data}`" download class="underline hover:text-default">Parquet file</a>
-        <button v-if="shown?.length" type="button" class="underline hover:text-default" @click="downloadCsv">
+        <button v-if="shown?.length" type="button" class="underline hover:text-default" @click="saveCsv">
           CSV of this selection
         </button>
         <span v-if="source">defined at <span class="font-mono">{{ source }}</span></span>
@@ -177,7 +161,7 @@ const source = computed(() => (entry.value?.source ? sourceText(entry.value.sour
           <span v-else-if="incomparable" class="text-sm text-muted">nothing to compare in this selection</span>
         </template>
       </ControlBar>
-      <UTabs v-model="tab" :items="tabs" variant="link" :content="false" class="w-full" />
+      <ChartTabs v-model="tab" />
       <UAlert v-if="baselineError && comparing" color="warning" variant="subtle" title="The baseline's table cannot be read" :description="baselineError" :ui="{ description: 'wrap-anywhere' }" />
       <UAlert v-if="error" color="error" variant="subtle" title="The table cannot be read" :description="error" />
       <p v-else-if="!shown || waiting" class="text-sm text-muted">

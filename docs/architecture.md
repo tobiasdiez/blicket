@@ -148,6 +148,23 @@ ships with blicket for now; a standard IAMC adapter is a later option.
   with the plus-sign convention), display order, a style registry per dimension value, and
   `select(...)` returning a labelled long table for a set of dimension values. The core's
   generic query transformation is written against this protocol and nothing else.
+  Amendment of 2026-10-27 (M2.1), the protocol as built: `dataset(run)` in the loader's module
+  (`blicketconf` by default; no config key) returns the dataset, a wrapper the adapter writes,
+  since blicket cannot add methods to a model's run object. It has `quantities()`, each a
+  `bk.Quantity` with a unique name, a title, a unit, its dimensions, a group and `additive`
+  (false for rates, shares and prices, which the builder never sums); `dimensions()`, the
+  dataset's dimensions once, as `bk.Dimension` with dtype and values in display order; and
+  `select(quantity, keep, values)`, the quantity's table with the `keep` dimensions as columns,
+  restricted to `values` before the adapter aggregates over the others, which blicket filters
+  once more. The hierarchy, the summation groups and the styles wait for a project that needs
+  them, the IAMC adapter. A project without `dataset` has no builder; one that raises is a
+  warning, and the session goes on without it. Additivity is per quantity; whether it must be per
+  dimension (an IAMC variable summable over regions is never summable over scenarios) is decided
+  with the IAMC adapter, together with the hierarchy. `bk.Frames` (2026-10-28) is the stock
+  dataset: tables, one per quantity, given as frames or as functions that return them; the
+  dimensions declared ahead or read from the tables; `select` as a polars filter and sum, which a
+  subclass overrides for a model's own aggregation. remind-mfa's dataset is one, over the arrays'
+  `to_df()`.
 
 The default id does not depend on the module path, because moving a file would otherwise turn
 every Blick in it into `removed` plus `new` and skip the comparison. A module without a group
@@ -316,7 +333,9 @@ one `BLICKET_VIEWER` names in a checkout.
   lists; a build without it looks as before. The switch draws the baseline's table behind the
   chart when its columns did not change. The chosen baseline is not in the URL, so a link or a
   reload shows the one checked last.
-- Builder page, dev mode only: see the Blick builder section.
+- Builder page, dev mode only: see the Blick builder section. Amendment of 2026-10-27 (M2.1):
+  the viewer is in dev mode when `manifest.json` comes with the header `Blicket-Dev: 1`, which
+  `blicket dev` sends and a static host does not, so dev mode costs a static build no request.
 - The viewer's own dev server proxies a Python-built build directory during viewer development.
 - Opening from `file://` is blocked by browsers for `fetch`; `blicket serve` is the answer, a
   folder picker a later nicety.
@@ -336,8 +355,10 @@ memoised.
 - A changed Blick or helper module reloads **code, not data**: project modules are reloaded in
   import order except the loader, the memoised run object survives, only the affected Blicks are
   rebuilt, the server and the SSE connection stay alive. Only a change to the loader or the config
-  restarts the process.
+  restarts the process. (Amended for M2.2: every Blick is rebuilt, a change to the loader or a
+  new run restarts the session, and there is no event connection; see the amendment below.)
 - A server-sent event tells the browser to refetch the changed Blicks while keeping control state.
+  (Amended for M2.2: the viewer polls `dev/info` instead.)
 - The run directory is polled with a quiet period, because inotify is unreliable on cluster
   filesystems and fires mid-write; `--no-watch-run` and a "reload run" button exist.
 - The loader output is fingerprinted before and after a build, so a transformation that mutates
@@ -347,6 +368,10 @@ memoised.
 - Loader time on remind-mfa is measured in M0; a cached loader output is added only if it exceeds
   about ten seconds. No separate worker process.
 - Target: under one second from save to updated chart for typical transformations.
+- Amendment of 2026-10-27 (M2.1): `blicket dev` exists as a check without the push and a server
+  that keeps the run, on the standard library's server; the loop above is M2.2's, which polls
+  `dev/info` instead of server-sent events and restarts on a run change (see
+  [plans/m2-2-dev-loop.md](plans/m2-2-dev-loop.md)).
 
 ## Blick builder (dev mode)
 
@@ -368,9 +393,28 @@ same controls and plot types.
   transformation over the dataset protocol, canonicalises the table and returns it. The
   browser renders it with the plot type's browser half, exactly like a code Blick. The state
   also lives in the URL, so a link reproduces the ad hoc Blick within the session.
-- **Nothing is saved.** Ad hoc Blicks sit in a scratch group for the session, are not built,  
-  have no snapshot and never reach the guard. There is no declarative definition format. A  
-  saved Blick is Python or R code; "export as code" is a later feature.
+- **Nothing is saved.** Ad hoc Blicks sit in a scratch group for the session, are not built,
+  have no snapshot and never reach the guard. There is no declarative definition format. A
+  saved Blick is Python or R code; "export as code" is a later feature. (Amended in M2.1: there is
+  no scratch group on the overview; an ad hoc Blick lives in the builder page and its URL.)
+- Amendment of 2026-10-27 (M2.1), the builder as built: **one run per session**, the one
+  `blicket dev` loaded; the run picker waits for the adapter's `discover` and a loader that
+  combines runs. Each dimension of the quantities picked has a **role**: a dimension channel of
+  the plot type (x, colour, line type), panels, a filter, or summed (never for a quantity that is
+  not `additive`); choosing a channel another dimension holds swaps the two, and a required
+  channel is never left empty. Every kept dimension, a filter too, has item selection; a summed
+  one has none. **Several quantities** share a chart when they agree on the dimensions kept and
+  on their unit: a dimension `Quantity` holds their titles, on colour at first, and summed adds
+  them up; arithmetic between quantities stays outside the builder. The query carries what
+  shapes the data (quantities, plot type, mapping, the dimensions kept, the values kept), and
+  **the view state stays outside it**: every kept dimension the plot leaves unbound is a filter
+  control of the result, and the split, the filter values and the y axes are URL keys of the
+  Blick page, so changing them runs no query. The result is a manifest entry and a Parquet table,
+  kept by the session by content hash; a table over 100,000 rows is a problem that names the
+  dimensions and their sizes. The session (`dev.py`) holds the build, its comparison, the run and
+  its dataset; the stdlib server answers from it through a narrow protocol. In `dev`, a project
+  with a loader and no Blick yet is no error: its build is complete and empty, and the report
+  says `no Blicks yet` and, as for every project, whether the builder is on (`builder:`).
 - **Later extensions** from the feature list, all deferred: differences relative to a
   reference run and a difference heatmap, run groups as a second label dimension, separate row
   and column facets, several hierarchy levels in one dimension, default years for bar charts,
@@ -414,11 +458,14 @@ that use built-in plot types are the realistic first step.
 
 ## Libraries (reversible)
 
-Python: polars, typer, starlette + uvicorn, watchfiles, pydantic (manifest models and JSON
-Schema). Build backend: meson-python, with the viewer's `nuxt generate` as a meson custom target
-whose output is installed into the wheel. Viewer: Nuxt 4 with Vue, vega-lite + vega-embed,
-hyparquet for reading Parquet in the browser. Sankey (M4): d3-sankey-diagram, which supports
-loops. TypeScript types for the manifest are hand-written for now.
+Python: polars, typer, watchfiles, pydantic (manifest models and JSON Schema); the HTTP server
+is the standard library's threading one (amendment of 2026-10-27, M2.1). Starlette and uvicorn,
+planned for the dev server, are not needed: `blicket serve` and `blicket dev` share the stdlib
+server, whose daemon threads let Ctrl-C end a session with tabs open, and the dev loop polls
+instead of streaming events. Build backend: meson-python, with the viewer's `nuxt generate` as a
+meson custom target whose output is installed into the wheel. Viewer: Nuxt 4 with Vue, vega-lite
++ vega-embed, hyparquet for reading Parquet in the browser. Sankey (M4): d3-sankey-diagram, which
+supports loops. TypeScript types for the manifest are hand-written for now.
 
 ## Project basics (decided 2026-10-23)
 
@@ -451,7 +498,11 @@ loops. TypeScript types for the manifest are hand-written for now.
   task after M0.7 (M0.7b), since M0.7 writes what it reads.
 - **M2 Dev loop.** `blicket dev` with code reload, SSE, run-directory polling. Scatter and table
   plot types. The Blick builder with run picker, variable picker, channel mapping and item
-  selection, on the remind-mfa adapter. This completes job 1.
+  selection, on the remind-mfa adapter. This completes job 1. Amendment of 2026-10-27: in three
+  tasks, the builder first: M2.1 the dataset protocol, the query, `blicket dev` without the watch
+  and the builder page, one run per session and no run picker
+  ([plans/m2-1-blick-builder.md](plans/m2-1-blick-builder.md)); M2.2 the dev loop, polling instead
+  of SSE ([plans/m2-2-dev-loop.md](plans/m2-2-dev-loop.md)); M2.3 scatter and table.
 - **M3 Review and accept.** Its own design session first, in the direction above. Then: the UI,
   the link from a cluster run to a branch or PR, the PR comment and commit status, and the store
   backend that makes the UI reach the builds. This completes job 2.
@@ -565,6 +616,11 @@ the loader takes a run directory and returns the run object plus `RunInfo`.
 4. You copy the URL into a chat message; a colleague with the same dev session state sees the
    same Blick. Nothing is written to the project. If the Blick is worth keeping, you write it
    as code, until "export as code" exists.
+
+Amendment of 2026-10-27 (M2.1): as built, there is no run picker (one run per session, the one
+`blicket dev` loaded), the quantities are a flat list grouped by the adapter, without a tree or
+sub-variables, and "facet" is the role `panels`; the walk as built is flow 1 of
+[plans/m2-1-blick-builder.md](plans/m2-1-blick-builder.md).
 
 ## Decisions taken on 2026-10-23
 

@@ -14,6 +14,11 @@ _BUILTINS: dict[str, PlotType] = {
 }
 
 
+def builtins() -> tuple[PlotType, ...]:
+    """The built-in plot types."""
+    return tuple(_BUILTINS.values())
+
+
 def builtin(name: str) -> PlotType:
     """Return the built-in plot type called ``name``."""
     try:
@@ -31,6 +36,7 @@ __all__ = [
     "PlotType",
     "bar",
     "builtin",
+    "builtins",
     "line",
     "stacked_area",
     "stacked_bar",

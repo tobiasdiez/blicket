@@ -3,7 +3,8 @@
 Storybook for scientific model outputs. A *Blick* is a named view on a model run: a function that
 turns the run into a table, and how to plot that table. blicket discovers a project's Blicks,
 lists them with every problem it finds in their definitions, builds their tables for a model run,
-shows them in a web viewer, compares two builds, and checks a run against its baseline. The idea
+shows them in a web viewer, compares two builds, and checks a run against its baseline; while you
+develop, it keeps a run in memory and charts any quantity of it in a Blick builder. The idea
 behind it is in
 [docs/concept.md](docs/concept.md), the design in [docs/architecture.md](docs/architecture.md).
 
@@ -27,8 +28,8 @@ $ uv run blicket --version
 uv records the commit in `uv.lock`; `uv lock --upgrade-package blicket` moves to the newest one.
 The build generates the viewer and bundles it, which takes Node 24 or newer,
 [pnpm](https://pnpm.io/installation) and network access on every machine that syncs the project,
-since each builds blicket. Without the setting the build needs neither, but `blicket build` and
-`blicket serve` stop with an error, as both need a viewer. [Defining Blicks](#defining-blicks)
+since each builds blicket. Without the setting the build needs neither, but `blicket build`,
+`serve` and `dev` stop with an error, as they need a viewer. [Defining Blicks](#defining-blicks)
 leads to the first `blicket list`.
 
 ### From a wheel
@@ -98,9 +99,9 @@ flows  Material flows  [mfa]
 `blicket list` looks for the project by walking up from the working directory; `--project PATH`
 names the project directory instead. `-v` shows tracebacks, `--json` prints the report as JSON.
 
-Exit codes, for every command: 0 success (for `serve`, stopped with Ctrl-C; for `diff`, changes
-found included), 1 for `check` when a Blick is flagged, 2 errors of any kind, a Blick that fails
-to build included.
+Exit codes, for every command: 0 success (for `serve` and `dev`, stopped with Ctrl-C; for `diff`,
+changes found included), 1 for `check` when a Blick is flagged, 2 errors of any kind, a Blick that
+fails to build included, except in `dev`, which reports it and goes on.
 
 ## Building a run
 
@@ -343,6 +344,101 @@ down. As in `check`, a row missing from one table counts as 0; a row with a dime
 one table has gets no change drawn, and when the selection has nothing to compare, the page says
 so instead of drawing the two charts. A build that was never checked looks as before.
 
+## Developing Blicks
+
+`blicket dev` checks a run as `check` does, without pushing it, then serves the build as `serve`
+does and keeps the run in memory for the [Blick builder](#the-blick-builder):
+
+```console
+$ blicket dev runs/2026-10-23
+run 2026-10-23 · profile baseline · blicks at 0a6b858 · loaded in 12 ms
+1 Blick: 1 built
+build 8e21b7c04f6a9d35 → .blicket/build/8e21b7c04f6a9d35
+
+baseline 5d0c3f1e2a9b8c47 · run 2026-10-22 · blicks at 0a6b858 · built 2026-10-22 09:14 UTC
+vs baseline: 1 value
+top movers: flows/steel_by_process 3.2% of scale (year=2021, process=EAF)
+flagged: 1 of 1 Blick
+comparison → .blicket/build/8e21b7c04f6a9d35/compare/5d0c3f1e2a9b8c47
+builder: 1 quantity, 2 dimensions
+viewer: http://127.0.0.1:8765/#/   (Ctrl-C stops)
+```
+
+The line `builder:` says whether the Blick builder is on, with the size of the project's dataset,
+or why it is off. `dev` takes `--against`, `--out` and `--project` as `check` does and `--port`,
+`--host` and `--open` as `serve` does; it takes the port before it loads the run, so a port in use
+fails at once. It exits 0 when stopped with Ctrl-C, whatever the build holds: flagged Blicks and
+Blicks that fail are in the report and the viewer, and a baseline that `--against` names but
+cannot be found is in the report. Only a session that cannot start exits 2, as `check` would: an invalid
+`[tool.blicket]`, a loader that raises, no viewer, a port in use. `-v` shows tracebacks, of the
+Blicks at the start and of the builder's queries while the session runs. A project with a loader
+and no Blick yet is no error in `dev`: the report says `no Blicks yet`, the build holds no Blick
+and is complete, and the overview offers the builder. The viewer knows it is served by `dev` from
+the header `Blicket-Dev: 1` on `manifest.json`, which `dev` answers from memory.
+
+## The Blick builder
+
+In `blicket dev`, "Build a Blick" on the overview opens the builder, which composes an ad hoc Blick
+from the run: you pick a quantity of the model, a plot type, what each dimension does (an axis or a
+colour, panels, a filter, or summed over) and, for each dimension kept, the values to keep, and
+the chart follows. A dimension on a filter is shown one value at a time, picked above the chart
+as on a Blick's page. The dev server runs the query in Python and checks the table as it checks a
+Blick's; the chart, its controls, the data tab and the exports are those of a Blick's page, and a
+line under the title says what was summed and which values are kept. Picking more quantities of
+one unit puts them into one chart, told apart by a dimension `Quantity` that holds their titles,
+on colour at first; summed over `Quantity`, they add up. The dimension on `x` can only swap with
+one on another channel, since a chart needs an `x`. A query that cannot run, such as one that sums
+a quantity that is not additive, or one whose table exceeds 100,000 rows (the problem names the
+dimensions and their sizes), shows its problem above the last chart, which stays dimmed until
+the next query runs. The builder's state is in the URL
+(`#/builder?_q=flows/steel&_c.x=year&_keep=process&_split=process`), so a link reproduces the
+chart for as long as the session runs; nothing is saved, and a Blick worth keeping is written as
+code.
+
+The builder reads the run through a dataset: `dataset(run)` next to `load_run` in
+`blicketconf.py`, or in the module that `loader` names, returns one. The stock dataset is
+`bk.Frames`, tables that blicket filters and sums itself. For the run of
+[Building a run](#building-a-run):
+
+```python
+# blicketconf.py, below load_run
+def dataset(run):
+    frames = bk.Frames()
+    frames.add("flows/steel", run["flows"], unit="t per year")
+    return frames
+```
+
+`add` takes the quantity's name and its table, a long table as a transformation returns one: the
+dimensions as columns and one measure column, the last. The table may also be a function that
+returns it, called once the quantity is first charted, which leaves a model's arrays as they are
+until then. The other arguments are the quantity's: a `title` for the list and the chart (the name
+without its `group` by default), the `unit` if known, `dimensions` to name the dimension columns
+when the measure is not the last, `additive`, and a `group` the list groups it under. `additive`
+is true by default; a rate, share or price sets it false, and the builder then never sums it over
+a dimension, so its dimensions start as filters. The dimensions come from the tables: the type
+from the column (`string`, `integer`, `boolean`, `date` or `datetime`), the values sorted, strings
+in the order they appear; `bk.Frames(dimensions=[bk.Dimension(name="process", dtype="string",
+values=["BOF", "EAF"])])` gives one its order instead. A subclass that overrides `select` sums its
+own way, say with a model's exact aggregation; `self.frame(quantity)` is the table as polars. The
+last eight tables read stay converted.
+
+Any object with three methods is a dataset, as `bk.Dataset` spells out:
+
+- `quantities()` lists the quantities as `bk.Quantity`: a `name` unique in the dataset, `title`,
+  `unit`, the `dimensions` it has, `additive` and `group`, as above.
+- `dimensions()` lists every dimension once, as `bk.Dimension`: its name, its `dtype` and its
+  values in display order.
+- `select(quantity, keep, values)` returns the table of one quantity, as a transformation returns
+  one: the `keep` dimensions as columns and one measure column, its rows restricted to `values` for
+  the dimensions named there, and summed over the quantity's other dimensions; with no `keep`, one
+  row, the total. A value the quantity lacks gives no rows. blicket asks to sum only an additive
+  quantity, filters the kept dimensions once more, and checks the table.
+
+`dev` reads `quantities()` and `dimensions()` once, when it starts, and checks them: names unique,
+dimensions known, values of their dimension's type. A project without `dataset` has no builder,
+and the builder's page says what to add; a `dataset(run)` that raises, or returns something else
+than such an object, is a warning at start, and the builder is off for the session.
+
 ## Example
 
 [examples/remind-mfa](examples/remind-mfa) is a project on runs of remind-mfa's plastics model: a
@@ -373,14 +469,14 @@ $ (cd ../../viewer && pnpm install && pnpm generate)
 $ export BLICKET_VIEWER=../../viewer/.output/public
 ```
 
-`blicket build` then copies it into build directories and `blicket serve` serves it; both need a
-viewer and stop with an error without one. `BLICKET_VIEWER` wins over a bundled viewer, so a new
-viewer can be tried with an installed wheel. The meson option `viewer` (in `meson.options`)
-bundles the viewer: with it, as in [Installation](#installation), the build runs
-`pnpm install --frozen-lockfile` and `pnpm generate` and installs the site as `blicket/_viewer`,
-and it fails when pnpm is missing or cannot fetch. The option is off by default, so `uv sync` and
-the editable install need no Node, and a wheel built without it, as from the sdist, has no
-viewer.
+`blicket build` then copies it into build directories and `blicket serve` and `blicket dev` serve
+it; the three need a viewer and stop with an error without one. `BLICKET_VIEWER` wins over a
+bundled viewer, so a new viewer can be tried with an installed wheel. The meson option `viewer`
+(in `meson.options`) bundles the viewer: with it, as in [Installation](#installation), the build
+runs `pnpm install --frozen-lockfile` and `pnpm generate` and installs the site as
+`blicket/_viewer`, and it fails when pnpm is missing or cannot fetch. The option is off by
+default, so `uv sync` and the editable install need no Node, and a wheel built without it, as
+from the sdist, has no viewer.
 
 blicket is built with meson-python without build isolation, so that the editable install made by
 `uv sync` can rebuild on import. The build tools therefore live in the `build` dependency group,

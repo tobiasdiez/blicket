@@ -8,6 +8,7 @@ tables from different libraries are equal.
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import polars as pl
@@ -15,6 +16,7 @@ import polars as pl
 from blicket.errors import Kind, Problem
 from blicket.model import Blick
 from blicket.schema import Dimension, Measure, TableSchema, dimension_type
+from blicket.tracebacks import locate, project_traceback, raised_at
 
 _INDEX_HINT = (
     "an unnamed pandas index level was dropped; if it holds data, name it, "
@@ -29,6 +31,19 @@ _UNPIVOT_HINT = (
 
 class TableError(Exception):
     """A transformation returned something that is not a table."""
+
+
+class Raised(Exception):
+    """An exception ``error`` that project code raised while a transformation called it.
+
+    ``action`` names the call, such as ``select('flows/steel') of the dataset``; the problem
+    ``compute`` makes of it names that call instead of the transformation.
+    """
+
+    def __init__(self, action: str, error: BaseException) -> None:
+        super().__init__(f"{action} raised {type(error).__name__}: {error}")
+        self.action = action
+        self.error = error
 
 
 @dataclass(frozen=True)
@@ -401,3 +416,49 @@ def check(frame: pl.DataFrame, blick: Blick, index_dropped: bool = False) -> Che
         dimensions.append(Dimension(name=column, dtype=dtype, values=_values(frame[column], order)))
     measured = [Measure(name=column, dtype="float") for column in measures]
     return Checked(frame, TableSchema(dimensions=dimensions, measures=measured), problems)
+
+
+def ordered(schema: TableSchema, order: Mapping[str, Sequence[Any]]) -> TableSchema:
+    """``schema`` with the values of each dimension named in ``order`` in that order, and the
+    values ``order`` lacks after them; values ``order`` names that the table lacks play no part."""
+    dimensions = []
+    for dimension in schema.dimensions:
+        if (wanted := order.get(dimension.name)) is not None:
+            present = set(dimension.values)
+            first = [value for value in wanted if value in present]
+            chosen = set(first)
+            values = first + [value for value in dimension.values if value not in chosen]
+            dimension = dimension.model_copy(update={"values": values})
+        dimensions.append(dimension)
+    return schema.model_copy(update={"dimensions": dimensions})
+
+
+def compute(blick: Blick, run: object, root: Path) -> Checked:
+    """Run the transformation on ``run``, convert what it returned, and check the table.
+
+    Nothing raised in these steps escapes; it becomes a problem located in the code of the
+    project at ``root``. An exception the transformation wraps in ``Raised`` is reported as raised
+    by the action it names.
+    """
+    action = "transformation"
+    try:
+        value = blick.transform(run)
+        action = f"converting the returned {type(value).__name__}"
+        frame, index_dropped = to_polars(value)
+        action = "checking the table"
+        return check(frame, blick, index_dropped)
+    except TableError as error:
+        return Checked.failed(blick.problem(Kind.TRANSFORMATION, str(error)))
+    except (Exception, SystemExit) as error:
+        cause: BaseException = error
+        if isinstance(error, Raised):
+            action, cause = error.action, error.error
+        prefer = blick.source.file if blick.source else None
+        message = f"{action} raised {type(cause).__name__}: {cause}"
+        problem = blick.problem(
+            Kind.TRANSFORMATION,
+            message + raised_at(cause, root, blick.source),
+            source=locate(cause, root, prefer),
+            traceback=project_traceback(cause, root),
+        )
+        return Checked.failed(problem)

@@ -1,6 +1,6 @@
 // The viewer is a static site that reads one build directory through relative paths: no server
 // rendering, hash routing, and a relative base URL, so that it works from any sub-path. The dev
-// server forwards the build's files to `blicket serve`.
+// server forwards the build's files to `blicket serve`, and the paths under dev/ to `blicket dev`.
 const serve = process.env.BLICKET_SERVE ?? 'http://127.0.0.1:8765'
 
 // Relative asset paths in a generated site; the dev server serves from the root. Setting
@@ -46,6 +46,8 @@ export default defineNuxtConfig({
       '/manifest.json': { target: `${serve}/manifest.json` },
       '/blicks': { target: `${serve}/blicks` },
       '/compare': { target: `${serve}/compare` },
+      // blicket dev checks that a query names it in its Host header.
+      '/dev': { target: `${serve}/dev`, changeOrigin: true },
     },
     hooks: {
       // Copies of index.html for servers that route every path to a page; hash routing needs

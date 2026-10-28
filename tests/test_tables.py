@@ -6,6 +6,8 @@ import math
 import subprocess
 import sys
 import textwrap
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -17,7 +19,7 @@ import xarray as xr
 
 import blicket as bk
 from blicket.plots._base import BuiltinPlotType
-from blicket.tables import Checked, TableError, check, to_polars
+from blicket.tables import Checked, Raised, TableError, check, compute, ordered, to_polars
 
 LINE = bk.plots.line(x="year", y="value")
 FRAME = pl.DataFrame({"year": [2020, 2021], "region": ["a", "b"], "value": [1.0, 2.0]})
@@ -478,3 +480,39 @@ def test_order_and_default_values_missing_from_the_run_are_warnings() -> None:
         "order['region'] names 'c', which this run's table does not contain",
         "defaults['region'] names 'd', which this run's table does not contain",
     ]
+
+
+# ---------------------------------------------------------------------------------------------
+# The display order of a schema, and running a transformation
+
+
+def test_ordered_puts_the_values_order_names_first() -> None:
+    schema = check(FRAME.with_columns(process=pl.lit("x")), blick()).schema
+    assert schema is not None
+    result = ordered(schema, {"region": ["b", "zzz"]})  # zzz: a value the table lacks
+    assert [d.values for d in result.dimensions] == [[2020, 2021], ["b", "a"], ["x"]]
+    assert ordered(schema, {}) == schema  # a dimension order does not name stays as it was
+
+
+def test_compute_reports_the_call_a_transformation_wraps() -> None:
+    def failing(run: object) -> pl.DataFrame:
+        try:
+            raise KeyError("flows")
+        except KeyError as error:
+            raise Raised("select('flows/steel') of the dataset", error) from error
+
+    here = Path(__file__).parent
+    (problem,) = compute(replace(blick(), transform=failing), None, here).problems
+    assert problem.message.startswith(
+        "select('flows/steel') of the dataset raised KeyError: 'flows' (raised at test_tables.py:"
+    )
+    assert problem.traceback is not None
+    assert "raise KeyError" in problem.traceback
+    assert str(Raised("f()", ValueError("no"))) == "f() raised ValueError: no"
+
+
+def test_compute_converts_and_checks_what_the_transformation_returns() -> None:
+    result = compute(blick(), FRAME, Path(__file__).parent)
+    assert (result.problems, result.frame is not None) == ((), True)
+    (problem,) = compute(replace(blick(), transform=lambda run: None), FRAME, Path()).problems
+    assert problem.message == "the transformation returned None; did it forget return?"

@@ -1,6 +1,7 @@
 import type { BlickEntry } from './manifest'
 
-const CHANNELS: Record<string, string> = { x: 'x', color: 'colour', linetype: 'line type' }
+/** The built-in dimension channels as the viewer names them. */
+export const CHANNEL_LABELS: Record<string, string> = { x: 'x', color: 'colour', linetype: 'line type' }
 
 /**
  * What each dimension of a Blick does, for its card: the channels it is bound to (x, colour,
@@ -8,7 +9,7 @@ const CHANNELS: Record<string, string> = { x: 'x', color: 'colour', linetype: 'l
  */
 export function roles(entry: BlickEntry): string[] {
   const mapping = entry.definition?.plot.mapping ?? {}
-  const bound = Object.entries(CHANNELS)
+  const bound = Object.entries(CHANNEL_LABELS)
     .filter(([channel]) => mapping[channel])
     .map(([channel, label]) => `${label}: ${mapping[channel]}`)
   const of = (kind: string) => entry.controls.filter(control => control.kind === kind).map(control => control.dimension)

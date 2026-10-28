@@ -42,15 +42,17 @@ runs code from the checkout, so build only runs you trust.
 
 ```
 pyproject.toml          [tool.blicket], empty: the defaults apply
-blicketconf.py          load_run, the loader; found by convention, like pytest's conftest.py
+blicketconf.py          load_run, the loader, found by convention like pytest's conftest.py, and
+                        dataset, the quantities the Blick builder charts
 blicks/                 the Blicks
 ```
 
 `blicketconf.py` is the loader: it unpickles `model.pickle`, takes the run id from the folder
 name and the profile, such as `plastics_SSP2_h12`, from the run's config, and rejects runs of
-other models. A project whose loader lives inside its own package names it instead with
-`loader = "package.module:function"` under `[tool.blicket]`. `blicks/` holds the Blicks, one
-group per file:
+other models. It also holds `dataset(run)`, the run's quantities for the Blick builder (see
+[The Blick builder](#the-blick-builder)). A project whose loader lives inside its own package
+names it instead with `loader = "package.module:function"` under `[tool.blicket]`. `blicks/`
+holds the Blicks, one group per file:
 
 ```
 blicks/drivers.py       GDP per capita, scenario rates, polymer splits
@@ -225,6 +227,33 @@ The Blicks give their units with `unit=`. The flows split by Region into one pan
 shared y axis, so the regions compare by size; "Scenario rates" shows one `Parameter` at a time,
 starting at `collection_rate`, and its panels, when split, each have their own y axis
 (`independent_y=True`), since the rates differ by orders of magnitude.
+
+## The Blick builder
+
+`blicket dev` checks a run as `check` does and then serves it, keeping the run in memory for the
+Blick builder:
+
+```console
+$ uv run blicket dev ../../data_out/2026-10-26--11-25-13_plastics_SSP2_h12
+```
+
+The report ends with `builder: 112 quantities, 6 dimensions`, the size of the dataset that
+`dataset(run)` in `blicketconf.py` makes of the run (the numbers depend on the remind-mfa version);
+"Build a Blick" on the overview opens the builder page, which lists those quantities: the future
+system's flows as `flows/<from> => <to>`, in t per year; each of its stocks as
+`stocks/<stock>/stock`, in t, and `/inflow` and `/outflow`, in t per year; its parameters as
+`parameters/<parameter>`, not additive, so the builder never sums them, with the units the dataset
+knows (`fraction` for the rates and shares, `2005 USD PPP per person` for `gdppc`, `years` for the
+lifetimes, none for the others), the parameters without a dimension left out; and the historical
+system's flows and stock under `historical/`, titled `... (historical)`, its parameters left out,
+since most of them are the future system's. The historical system counts the years on `Historical
+Time`, which the dataset calls `Time`, so a historical flow and its future counterpart share a
+chart: pick `polymerization => primary_market (historical)` and `polymerization => primary_market`.
+The dataset is a `bk.Frames`: each array is added with a function that returns its `to_df()`, read
+when the quantity is first charted, and the model's dimensions are declared ahead, so they keep its
+order; blicket filters and sums the frame. A parameter
+with five dimensions, such as `manufactured_products_imports`, has more rows than the builder draws
+until the values of one of its filters are narrowed.
 
 ## Developing blicket
 

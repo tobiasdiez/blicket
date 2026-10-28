@@ -17,6 +17,7 @@ from pathlib import Path
 
 from blicket import manifest
 from blicket.comparison import COMPARE, COMPARISON
+from blicket.config import load_config
 from blicket.errors import BlicketError, os_reason
 from blicket.manifest import Manifest
 
@@ -57,6 +58,11 @@ class Store:
     def __init__(self, directory: Path) -> None:
         self.directory = directory
         self.builds = directory / "builds"
+
+    @classmethod
+    def of_project(cls, root: Path) -> Store:
+        """The store of the project at ``root``: ``store`` in its ``[tool.blicket]``."""
+        return cls(root / load_config(root).store)
 
     def push(self, build: Path) -> Pushed:
         """Copy the manifest of the build directory ``build``, the tables its entries name, and

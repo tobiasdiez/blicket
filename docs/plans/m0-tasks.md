@@ -248,6 +248,35 @@ What M2 starts from:
   the dev server: "Viewer test data", served when no project is running, and the IDE link from
   "defined at", which needs the project root the dev server knows.
 
+## M2 in tasks (2026-10-27)
+
+Tobias put the Blick builder first; M2 is three tasks.
+
+### M2.1 The Blick builder, on the dev server (built on 2026-10-27)
+
+The plan is `m2-1-blick-builder.md`. The dataset protocol (`bk.Quantity`, `bk.Dataset`,
+`bk.Dimension` and `dataset(run)` in the loader's module, `dataset.py`; `bk.Frames`, the stock
+dataset over tables, added 2026-10-28), remind-mfa's dataset in `blicketconf.py` (112 quantities
+on the example runs at remind-mfa `710302d`, a `Frames` over the arrays), the builder's
+query (`query.py`), `build()` split into `prepare`, `load` and `write`, the comparison of `check`
+in `check.py`, and `blicket dev`: a check without the push, then the stdlib server with a
+session (`dev.py`) that keeps the run, answers `manifest.json` from memory with the header
+`Blicket-Dev: 1`, and serves `dev/info`, `dev/dataset`, `dev/query` and the query tables through
+a route table. The viewer's builder page composes the chart area from the Blick page's
+components, which it shares with the Blick page (the tabs, the CSV download). Two review rounds
+changed the split of panels and filters, the required channel, the dimming of a stale chart, the
+no-Blicks start, the server's handling of request bodies and more; the plan's Deviations list
+them. The hand tests on the example in headless Chrome are in the plan.
+
+### M2.2 The dev loop (planned)
+
+The plan is `m2-2-dev-loop.md`: code reload, the run poller with a restart, the viewer's refresh
+and dev indicator, the fixture project, the editor link.
+
+### M2.3 Scatter and table
+
+Both halves of the `scatter` and `table` plot types; not planned yet.
+
 ## Decisions taken on 2026-10-23
 
 1. **Python floor 3.14** for now, raised when remind-mfa's dependency chain ships 3.15 wheels.
@@ -285,7 +314,9 @@ Notes from the M1 architecture review for the tasks that follow:
   (`serve` becomes `dev` without the watcher); `build_directory`, `newest_build`, the lookup rule
   (installed viewer first) and the no-cache set survive. `useManifest` gains `reload()` for the
   SSE refetch that keeps control state, and `useComparison` beside it, which keeps the chosen
-  baseline when the reload still lists it.
+  baseline when the reload still lists it. Superseded in part by M2.1 (2026-10-27): the stdlib
+  server stays, with a session object for `dev`, and M2.2 polls `dev/info` instead of streaming
+  events; the reloads are M2.2's.
 - **M4 start.** The plot module contract passes `theme` as a tokens object (mode, categorical
   palette, ink, Vega config) and the registry becomes `resolvePlotType(name): Promise`, so a module
   loaded from the build directory needs no bundled import. Whether the helpers in `layout.ts` and
@@ -318,6 +349,12 @@ Not scheduled; each is a task of its own or joins the milestone named.
   regions (the sum, named "World"). Best supported by blicket itself with a helper, the name and
   the aggregation (sum) given per Blick or once in the project config, so every regional Blick
   gets it without repeating the code.
+- **Narrow screens below 390 px** (from the M2.1 review): at 320 px the builder's chart
+  overflows by 14 px when a Time range is set, and the overview by 50 px.
+- **Unit tests of the dev composables** (from the M2.1 review): `devResource.ts` and
+  `useQuery.ts` cannot be loaded under plain vitest because of Nuxt's auto-imports, so their
+  logic is checked by hand; moving the pure parts into `app/lib/`, as `lib/latest.ts` and
+  `lib/dev.ts` already are, would let vitest cover them.
 
 ## Not in M0
 

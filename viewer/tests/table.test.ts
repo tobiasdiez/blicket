@@ -1,6 +1,7 @@
 import { readFile } from 'node:fs/promises'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { display, fetchTable, formatValue, formatter, numberFormat, readTable, valueKey } from '../app/lib/table'
+import { Unreachable } from '../app/lib/dev'
+import { KEPT_TABLES, display, fetchTable, formatValue, formatter, numberFormat, readTable, valueKey } from '../app/lib/table'
 
 const parquet = async () => {
   const file = await readFile(new URL('table.parquet', import.meta.url))
@@ -46,13 +47,24 @@ describe('numbers', () => {
   })
 })
 
+/** A table of a build. */
+const blick = (n: number) => ({ path: `blicks/many/${n}.parquet`, hash: `parquet-sha256:many${n}` })
+/** A table of the builder, in the series `series`, which no other test uses. */
+const builderTable = (series: string, n: number) => ({ path: `dev/tables/${series}${n}.parquet`, hash: `parquet-sha256:${series}${n}` })
+
+/** A fetch that answers every request with the test table. */
+async function stubFetch() {
+  const body = await parquet()
+  const fetch = vi.fn(async () => new Response(body.slice(0)))
+  vi.stubGlobal('fetch', fetch)
+  return fetch
+}
+
 describe('fetching tables', () => {
   afterEach(() => vi.unstubAllGlobals())
 
   it('fetches a table once per content hash, with the hash in the URL', async () => {
-    const body = await parquet()
-    const fetch = vi.fn(async () => new Response(body.slice(0)))
-    vi.stubGlobal('fetch', fetch)
+    const fetch = await stubFetch()
     const first = await fetchTable({ path: 'blicks/a/b.parquet', hash: 'parquet-sha256:1' })
     expect(await fetchTable({ path: 'blicks/a/b.parquet', hash: 'parquet-sha256:1' })).toBe(first)
     await fetchTable({ path: 'blicks/a/b.parquet', hash: 'parquet-sha256:2' })
@@ -60,6 +72,42 @@ describe('fetching tables', () => {
       './blicks/a/b.parquet?parquet-sha256%3A1',
       './blicks/a/b.parquet?parquet-sha256%3A2',
     ])
+  })
+
+  it('keeps the tables used last', async () => {
+    const fetch = await stubFetch()
+    for (let n = 0; n < KEPT_TABLES; n++) await fetchTable(builderTable('kept', n)) // fills the cache
+    await fetchTable(builderTable('kept', 0)) // used again
+    await fetchTable(builderTable('kept', KEPT_TABLES)) // one more: the one used longest ago goes
+    expect(fetch).toHaveBeenCalledTimes(KEPT_TABLES + 1)
+    await fetchTable(builderTable('kept', 0))
+    expect(fetch).toHaveBeenCalledTimes(KEPT_TABLES + 1) // stayed
+    await fetchTable(builderTable('kept', 1))
+    expect(fetch).toHaveBeenCalledTimes(KEPT_TABLES + 2) // gone
+  })
+
+  it('keeps every table of a build', async () => {
+    const fetch = await stubFetch()
+    for (let n = 0; n <= KEPT_TABLES + 5; n++) await fetchTable(blick(n))
+    for (let n = 0; n <= KEPT_TABLES + 5; n++) await fetchTable(builderTable('other', n))
+    await fetchTable(blick(0))
+    expect(fetch).toHaveBeenCalledTimes(2 * (KEPT_TABLES + 6))
+  })
+
+  it('calls a server that does not answer unreachable, and nothing else', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => {
+      throw new TypeError('Failed to fetch')
+    }))
+    await expect(fetchTable(builderTable('lost', 0))).rejects.toBeInstanceOf(Unreachable)
+    const cut = { ok: true, arrayBuffer: async () => {
+      throw new TypeError('network error')
+    } }
+    vi.stubGlobal('fetch', vi.fn(async () => cut))
+    await expect(fetchTable(builderTable('lost', 1))).rejects.toBeInstanceOf(Unreachable)
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('not parquet')))
+    const caught = await fetchTable(builderTable('lost', 2)).catch((cause: unknown) => cause)
+    expect(caught).toBeInstanceOf(Error)
+    expect(caught).not.toBeInstanceOf(Unreachable)
   })
 
   it('forgets a failed fetch, so the next one tries again', async () => {

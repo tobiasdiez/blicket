@@ -13,7 +13,7 @@ import typer
 from typer.testing import CliRunner, Result
 
 import blicket as bk
-from blicket import builder, cli, manifest, viewer
+from blicket import cli, loader, manifest, viewer
 from tests.support import (
     PROJECTS,
     VALUES,
@@ -209,6 +209,7 @@ def test_every_command_maps_failures_to_exit_2(monkeypatch: pytest.MonkeyPatch) 
         "push": ["dir"],
         "diff": ["a", "b"],
         "check": ["run"],
+        "dev": ["run"],
     }
     group: Any = typer.main.get_command(cli.app)
     assert set(group.commands) == set(arguments), "add the new command here"
@@ -293,8 +294,8 @@ def test_a_rebuild_prints_its_own_load_time(
     assert invoke("build", "runs/a").exit_code == 0
     (build_id,) = build_ids()
     stored = manifest.read(Path(".blicket/build", build_id)).build.loader_ms
-    load = builder.load
-    monkeypatch.setattr(builder, "load", lambda *args: (*load(*args)[:2], 2500.0))
+    load = loader.load
+    monkeypatch.setattr(loader, "load", lambda *args: (*load(*args)[:2], 2500.0))
     lines = invoke("build", "runs/a").stdout.splitlines()
     assert lines[0].endswith("· loaded in 2.5 s")
     assert lines[2].endswith("(built before, left as it was)")

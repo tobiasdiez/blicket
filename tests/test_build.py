@@ -10,7 +10,7 @@ import pytest
 from pydantic import ValidationError
 
 import blicket as bk
-from blicket import builder, manifest, viewer
+from blicket import loader, manifest, viewer
 from blicket.builder import NothingToBuild
 from blicket.errors import BlicketError
 from blicket.manifest import Manifest
@@ -173,8 +173,8 @@ def test_a_rebuild_reports_its_own_run_and_load_time(
 ) -> None:
     first = bk.build(project, ["runs/a"])
     shutil.copytree("runs/a", "runs/b")  # the same content, so the same build id
-    load = builder.load
-    monkeypatch.setattr(builder, "load", lambda *args: (*load(*args)[:2], 1234.5))
+    load = loader.load
+    monkeypatch.setattr(loader, "load", lambda *args: (*load(*args)[:2], 1234.5))
     second = bk.build(project, ["runs/b"])
     assert (second.existed, second.manifest.build.id) == (True, first.manifest.build.id)
     assert (second.manifest.run.id, second.manifest.build.loader_ms) == ("b", 1234.5)

@@ -7,6 +7,7 @@ const route = useRoute()
 const router = useRouter()
 const { manifest } = useManifest()
 const { comparison, blicks } = useComparison()
+const { dev } = useDev()
 
 // The search is in the URL, so going back from a Blick restores it.
 const search = computed({
@@ -57,6 +58,7 @@ const failed = computed(() => manifest.value?.blicks.filter(b => b.status === 'e
     <ComparisonBar />
     <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
       <UInput v-model="search" icon="i-lucide-search" placeholder="Search Blicks" class="w-full sm:max-w-sm" aria-label="Search Blicks" />
+      <UButton v-if="dev" to="/builder" icon="i-lucide-wand-sparkles" label="Build a Blick" color="neutral" variant="outline" class="self-start sm:self-auto" />
       <p class="text-sm text-muted">
         <template v-if="shown.length < total">{{ shown.length }} of </template>{{ total }} Blicks<span v-if="failed"> · {{ failed }} with errors</span><span v-if="manifest.build.incomplete"> · incomplete, a module failed to import</span>
       </p>
@@ -95,7 +97,13 @@ const failed = computed(() => manifest.value?.blicks.filter(b => b.status === 'e
         <BlickCard v-for="entry in entries" :key="entry.name" :entry="entry" :compared="blicks.get(entry.name) ?? null" />
       </div>
     </section>
-    <p v-if="!sections.length" class="text-sm text-muted">
+    <p v-if="!total && dev" class="text-sm text-muted">
+      No Blicks yet. Build one from the run, or write it as code.
+    </p>
+    <p v-else-if="!total" class="text-sm text-muted">
+      This build has no Blicks.
+    </p>
+    <p v-else-if="!sections.length" class="text-sm text-muted">
       No Blick matches.
     </p>
     <section v-if="errors.length || warnings.length" class="space-y-3">

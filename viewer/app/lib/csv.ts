@@ -21,3 +21,13 @@ export function toCsv(rows: Row[], schema: TableSchema, unit: string | null): st
   }
   return `${lines.join('\n')}\n`
 }
+
+/** Save the rows as `<name>.csv` in the browser, as `toCsv` writes them. */
+export function downloadCsv(rows: Row[], schema: TableSchema, unit: string | null, name: string): void {
+  const url = URL.createObjectURL(new Blob([toCsv(rows, schema, unit)], { type: 'text/csv' }))
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `${name}.csv`
+  link.click()
+  URL.revokeObjectURL(url)
+}

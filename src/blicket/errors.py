@@ -1,9 +1,9 @@
 """Problems and errors, shared by every part of blicket. Depends on nothing else in blicket."""
 
 import difflib
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, SerializationInfo, field_serializer
 
@@ -23,6 +23,7 @@ class Kind:
     TRANSFORMATION = "transformation"
     TABLE = "table"
     REPOSITORY = "repository"
+    QUERY = "query"
 
 
 class DefinitionError(ValueError):
@@ -56,7 +57,16 @@ class LoaderError(BlicketError):
     """The project's loader cannot be imported, raised, or returned no ``(run, RunInfo)``."""
 
 
+class DatasetError(BlicketError):
+    """``dataset(run)`` raised, or what it returned does not follow the dataset protocol."""
+
+
 SKIPPED = "the Blicks in this file were skipped"
+
+
+def issue_field(issue: Mapping[str, Any]) -> str:
+    """The field a pydantic validation issue concerns: its location joined by dots."""
+    return ".".join(map(str, issue["loc"]))
 
 
 def did_you_mean(word: str, options: Iterable[str]) -> str | None:

@@ -212,7 +212,8 @@ export function tooltipHead(args: PlotArgs, x: Spec, d: Dimension): Spec[] {
  * The hover layer of charts over x: a hairline rule that snaps to the nearest x, one per x and
  * panel, whose tooltip lists every series there, pivoted from the rows by their series label;
  * with a baseline, each with the baseline's number where it differs; a change with its sign. A
- * series the current rows lack is not listed.
+ * series the current rows lack is not listed, and one without a row at the hovered x shows an en
+ * dash.
  */
 export function hoverRule(args: PlotArgs, x: Spec, ch: Channels, quantity: Quantity = 'measure'): Spec {
   const series = seriesDimensions(ch)
@@ -223,6 +224,9 @@ export function hoverRule(args: PlotArgs, x: Spec, ch: Channels, quantity: Quant
     const labels = combinations(series).filter(label => present.has(label))
     // `max` keeps a text as it is; each series has one row per x and panel.
     transform.push({ pivot: SERIES, value: SHOWN, groupby: [x.field, ...(args.state.splits.length ? [PANEL] : [])], op: 'max' })
+    // The pivot leaves out the field of a series without a row at an x, such as yearly history
+    // next to a model's five-year steps.
+    transform.push(...labels.map(label => ({ calculate: `isValid(${datum(label)}) ? ${datum(label)} : '${NONE}'`, as: label })))
     tooltip.push(...labels.map(label => ({ field: field(label), title: label })))
     if (args.unit) {
       transform.push({ calculate: JSON.stringify(args.unit), as: UNIT })

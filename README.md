@@ -452,7 +452,7 @@ dimensions known, values of their dimension's type. A project without `dataset` 
 and the builder's page says what to add; a `dataset(run)` that raises, or returns something else
 than such an object, is a warning at start, and the builder is off for the session.
 
-## Example
+## Examples
 
 [examples/remind-mfa](examples/remind-mfa) is a project on runs of remind-mfa's plastics model: a
 loader that unpickles a run, and ten Blicks, mostly ported from remind-mfa's own figures, which
@@ -460,6 +460,14 @@ return flodym arrays and pandas frames. It has its own uv environment with remin
 checkout next to this repository. The runs are not in the repository, and producing one needs
 remind-mfa's input data, which is not public; the example's README says how to set it up and build
 a run.
+
+[examples/remind](examples/remind) is a project on runs of the integrated assessment model REMIND:
+a loader that reads the reporting (mif files) of several REMIND output folders into one run, the
+scenario as a dimension, and 20 Blicks that carry the "Summary" chapter of REMIND's
+`compareScenarios` report, so that a week of model development shows as flagged Blicks. Its
+environment needs only blicket and pyyaml. The runs are REMIND's weekly test runs on the PIK
+cluster, not in the repository; the example's README says how to fetch them, build, check and
+look at them.
 
 ## Development
 

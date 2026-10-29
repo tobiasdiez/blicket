@@ -141,6 +141,14 @@ describe('line', () => {
     expect(rowsAfter(result, { type: 'pivot' }).map(row => row.USA)).toEqual(['0', '4.5k', '9k'])
   })
 
+  it('writes an en dash for a series without a row at the hovered x', async () => {
+    const plotArgs = args([year, region], { x: 'Time', color: 'Region' })
+    plotArgs.table = plotArgs.table.filter(row => !(row.Region === 'EUR' && row.Time === 2021))
+    const result = await run(line(plotArgs))
+    expect(result.warnings).toEqual([])
+    expect(rowsAfter(result, { type: 'formula', as: 'EUR' }).map(row => row.EUR)).toEqual(['1.5k', '\u2013', '10.5k'])
+  })
+
   it('names the measure and its unit on the y axis', () => {
     const lines = layers(line(args([year], { x: 'Time' }, { unit: 't', measure: 'mass' })))[0]
     expect(lines.encoding.y.title).toBe('mass [t]')

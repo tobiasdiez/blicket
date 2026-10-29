@@ -490,6 +490,15 @@ supports loops. TypeScript types for the manifest are hand-written for now.
   repository, together with Blicks ported from remind-mfa's existing visualisations; they may
   look different from the originals. Example runs sit in `data_out/`, which is gitignored and
   never pushed. The remind-mfa checkout at `~/code/remind-mfa` can produce further runs.
+  Amendment of 2026-10-29: a second dogfooding project, `examples/remind/`, reads REMIND output
+  folders, one per scenario, into one run with the scenario as a dimension, and carries the
+  "Summary" chapter of REMIND's `compareScenarios` report as 20 Blicks
+  ([plans/example-remind-summary.md](plans/example-remind-summary.md)); its runs are two weekly
+  sets of REMIND's automated model tests in `data_out/remind/`. The concept's deferred question of
+  reference and historical data is settled for this example only, as a dimension value: its two
+  per-capita line Blicks show the IEA's history as the scenario `historical (IEA)`, with no change
+  to the core for it; a viewer fix found on the way (the tooltip of a series without a row at the
+  hovered x) is recorded in the plan.
 
 ## Milestones
 

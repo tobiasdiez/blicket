@@ -1,5 +1,5 @@
 # example model runs (hundreds of MB, never pushed)
-data_out/
+data_out
 
 # blicket build output and local store
 .blicket/

@@ -1,0 +1,13 @@
+[project]
+name = "remind-blicks"
+version = "0"
+description = "Blicks on REMIND runs, the Summary chapter of compareScenarios, an example blicket project."
+requires-python = ">=3.14"
+dependencies = ["blicket", "pyyaml"]
+
+[tool.uv.sources]
+# Not editable: uv rebuilds blicket when a file named in its [tool.uv] cache-keys changes.
+blicket = { path = "../.." }
+
+[tool.blicket]
+# Empty: the loader is load_run in blicketconf.py next to this file, the Blicks are under blicks/.

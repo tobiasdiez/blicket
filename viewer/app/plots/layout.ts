@@ -31,6 +31,14 @@ const AXIS_WIDTH = Y_LABEL_EXTENT + 20
 /** Vega's padding, left and right, and some slack, in px. */
 export const PADDING = 20
 const SPACING = 16
+// The height of the plot area without panels and of a panel, in px: of the measure, of a change
+// under it, and of a compact chart.
+const HEIGHTS: Record<Quantity | 'compact', [single: number, panel: number]> = {
+  measure: [320, 180],
+  change: [200, 140],
+  relative: [200, 140],
+  compact: [160, 160],
+}
 
 /** The plot's dimensions and measure by channel. */
 export interface Channels {
@@ -173,16 +181,35 @@ function largestIn(rows: Row[], measure: string, stackedBy: string[] | null): nu
 }
 
 /**
+ * `unit` with the legend of each encoding off, in its layers too: an encoding's own `legend` wins
+ * over the config's `legend.disable`, so each turns itself off. The params bound to a legend stay,
+ * inert.
+ */
+function withoutLegends(unit: Spec): Spec {
+  const encoding = unit.encoding as Record<string, unknown> | undefined
+  const off = (definition: unknown) => {
+    if (!definition || typeof definition !== 'object' || !('legend' in definition) || !definition.legend) return definition
+    return { ...definition, legend: { ...(definition.legend as Spec), disable: true } }
+  }
+  return {
+    ...unit,
+    ...(encoding && { encoding: Object.fromEntries(Object.entries(encoding).map(([channel, definition]) => [channel, off(definition)])) }),
+    ...(Array.isArray(unit.layer) && { layer: (unit.layer as Spec[]).map(withoutLegends) }),
+  }
+}
+
+/**
  * The whole specification around a unit chart (`encoding` and `layer`, or `mark`): the data, the
  * panels of the split dimensions as a top-level facet with wrapped columns and a shared or
  * independent y axis, the sizes and the theme. `band` says that x is a band (bars). A chart of a
- * change, under the chart of the measure, is lower.
+ * change, under the chart of the measure, is lower; a compact chart is 160 px high, without legend.
  */
-export function frame(args: PlotArgs, ch: Channels, unit: Spec, width: number, band = false, quantity: Quantity = 'measure'): TopLevelSpec {
+export function frame(args: PlotArgs, ch: Channels, drawn: Spec, width: number, band = false, quantity: Quantity = 'measure'): TopLevelSpec {
+  const unit = args.compact ? withoutLegends(drawn) : drawn
   const data = { values: prepare(args, ch, band) }
-  const base = { $schema: 'https://vega.github.io/schema/vega-lite/v6.json', data, config: config(args.theme) }
-  // The height of the plot area without panels, and of a panel.
-  const [single, panel] = quantity === 'measure' ? [320, 180] : [200, 140]
+  const themed = config(args.theme)
+  const base = { $schema: 'https://vega.github.io/schema/vega-lite/v6.json', data, config: args.compact ? { ...themed, legend: { ...themed.legend, disable: true } } : themed }
+  const [single, panel] = HEIGHTS[args.compact ? 'compact' : quantity]
   if (!args.state.splits.length) {
     return { ...base, width: plotWidth(args, width), height: single, ...unit } as unknown as TopLevelSpec
   }

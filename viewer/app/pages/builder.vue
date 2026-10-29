@@ -60,11 +60,7 @@ const shownRows = computed(() => (rows.value && schema.value && controlState.val
 const warnings = computed(() => entry.value?.problems.filter(p => p.severity === 'warning' && !(entry.value?.rows === 0 && p.kind === 'table')) ?? [])
 // What the URL asks for that is not there: values the dataset or the table lacks.
 const urlNotices = computed(() => [...(options.value ? notices(state.value, options.value) : []), ...(parsed.value?.notices ?? [])])
-const chartProps = computed(() => {
-  if (!definition.value || !schema.value || !controlState.value || !shownRows.value) return null
-  const { type, mapping } = definition.value.plot
-  return { type, mapping, schema: schema.value, unit: definition.value.unit, rows: shownRows.value, splits: controlState.value.splits, y: controlState.value.y, baseline: null }
-})
+const chartProps = computed(() => chartPropsOf(definition.value, schema.value, shownRows.value, controlState.value, null))
 // What the chart shown was summed over and which values it keeps, as its subtitle.
 const subtitle = computed(() => (answered.value && options.value ? subtitleParts(answered.value, options.value).join(' · ') : ''))
 
@@ -141,7 +137,7 @@ function saveCsv() {
   if (shownRows.value && schema.value) downloadCsv(shownRows.value, schema.value, definition.value?.unit ?? null, fileName.value)
 }
 
-const breadcrumb = [{ label: 'All Blicks', to: '/' }, { label: 'Build a Blick' }]
+const breadcrumb = [{ label: 'Overview', to: '/' }, { label: 'Build a Blick' }]
 </script>
 
 <template>

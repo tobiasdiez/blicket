@@ -38,7 +38,8 @@ bundles it, is in the [root README](../README.md#development).
 The Blick builder (`app/pages/builder.vue`, `#/builder`) is there in every generated site, but
 works only under `blicket dev`; served from a build directory it says so. The viewer is in dev
 mode when `manifest.json` comes with the header `Blicket-Dev: 1` (`useManifest`), and only then
-shows "Build a Blick" on the overview and asks `dev/info` (`useDev`). The page asks
+shows "Build a Blick" under the sidebar's list, and on an overview without Blicks, and asks
+`dev/info` (`useDev`). The page asks
 `dev/dataset` for what the builder offers when `dev/info` says there is a dataset (`useDataset`),
 posts the builder's state to `dev/query` and draws the entry it gets back with the Blick page's
 components (`useQuery`). `app/lib/builder.ts` holds the state in the URL, the roles of the
@@ -53,6 +54,35 @@ keys of the builder start with an underscore (`_q`, `_plot`, `_c.<channel>`, `_k
 split toggle turns it into a filter without a new query. A query's table is fetched as a Blick's
 is, by its content hash; of the builder's tables, `dev/tables/<hex>.parquet`, the viewer keeps
 the last 50 it used, and of a build's all.
+
+The shell (`app/app.vue`) is a row: the sidebar (`BlickSidebar`, on Nuxt UI's `USidebar`), and
+a column of the header, the page and the footer. From 1280 px (Tailwind's `xl`) the sidebar stands
+next to the page and the header's button collapses it; below, it is a drawer that the button opens
+and a picked Blick closes. Whether it is open on a wide window is kept in the browser's
+`localStorage` under `blicket:sidebar` (`useSidebar`), written only by the button, since the
+sidebar closes itself on a narrow window. The search and the "Changed" filter are the sidebar's
+own state, not in the URL, since the sidebar outlives the page; `app/lib/sidebar.ts` groups,
+searches and filters the Blicks, and `app/lib/comparison.ts` gives each its badge
+(`blickBadge`, drawn by `FlagBadge`). The pins are a list of Blick ids under `blicket:pins`
+(`usePins`, `app/lib/pins.ts`): per origin, read again on another tab's `storage` event, and
+matched with the build's Blicks through their aliases too. `app/lib/storage.ts` reads and writes
+both keys so that a browser that blocks storage only forgets them.
+
+`app/lib/preview.ts` makes the overview's sections, the state a card draws, one panel, the one
+where the change is largest when the comparison names it, and the card's caption and link. The
+changed Blicks are six cards and, under a line "N more changed", a ranked list; the pinned ones
+are cards with a button that unpins them, and while nothing is pinned or changed the section is "A
+first look" at the first six Blicks, whose buttons pin them. After a click the overview puts the
+keyboard on the button of the card in its place (`data-blick`, `data-pin`). A card
+(`BlickPreview`) fetches its tables once it comes into view, through `useBlickChart`, which the
+Blick page uses too, as the builder uses its `chartPropsOf`. Its chart is compact,
+`PlotArgs.compact`: 160 px high, without legend and export menu, the tooltips, the highlights and
+the baseline kept. `frame()` turns off the legend of each encoding, since an encoding's own
+`legend` wins over the config's `legend.disable`. Under the cards, whatever the comparison, the
+overview lists the Blicks in error with their problems, the build's own problems from
+`manifest.json`, and whether a Blick module failed to import: a Blick's problems are in its entry
+only, and the sidebar, collapsed or a drawer, may not be in view. A line at the top (`troubles`)
+says so with a button that brings the list into view.
 
 `app/lib/manifest.ts` describes the manifest of the spec in its `SPEC` by hand; the Python models in
 `src/blicket/manifest.py` and `model.py` are its source of truth, and the viewer refuses a build

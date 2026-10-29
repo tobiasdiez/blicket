@@ -1,9 +1,7 @@
 <script setup lang="ts">
-import { baselineTable } from '~/lib/comparison'
-import { TAB, queryFromState, stateFromQuery, type ControlState, type YAxis } from '~/lib/controls'
+import { TAB, queryFromState, stateFromQuery, yAxisOf, type ControlState } from '~/lib/controls'
 import { downloadCsv } from '~/lib/csv'
 import { sourceText } from '~/lib/manifest'
-import { select } from '~/lib/select'
 import { nothingToCompare } from '~/plots'
 import { CATEGORICAL, GHOST } from '~/plots/theme'
 
@@ -16,19 +14,14 @@ const { manifest } = useManifest()
 const { comparison, blicks, loading } = useComparison()
 const theme = useTheme()
 
-const id = computed(() => {
-  const segments = route.params.id
-  return Array.isArray(segments) ? segments.join('/') : String(segments ?? '')
-})
+const id = useBlickId()
 const entry = computed(() => manifest.value?.blicks.find(b => b.id === id.value) ?? null)
 const group = computed(() => manifest.value?.groups.find(g => g.name === entry.value?.group) ?? null)
 const definition = computed(() => entry.value?.definition ?? null)
 const schema = computed(() => entry.value?.columns ?? null)
 const controls = computed(() => entry.value?.controls ?? [])
-const defaultY = computed<YAxis>(() => (definition.value?.independent_y ? 'independent' : 'shared'))
+const defaultY = computed(() => yAxisOf(definition.value))
 const parsed = computed(() => (schema.value ? stateFromQuery(controls.value, schema.value, route.query, defaultY.value) : null))
-// The name of exported images and the CSV file.
-const fileName = computed(() => id.value.replaceAll('/', '__'))
 const state = computed(() => parsed.value?.state ?? null)
 const warnings = computed(() => entry.value?.problems.filter(p => p.severity === 'warning') ?? [])
 
@@ -36,32 +29,23 @@ watch(() => parsed.value?.unknown.join(', '), (unknown) => {
   if (unknown) console.warn(`blicket: the URL names ${unknown}, which this Blick has no control for; ignored`)
 }, { immediate: true })
 
-const { rows, error } = useTable(() => (entry.value?.status === 'ok' && entry.value.data ? { path: entry.value.data, hash: entry.value.hash } : null))
-const shown = computed(() => (rows.value && schema.value && state.value ? select(rows.value, schema.value, state.value.filters) : null))
-
 // The Blick in the comparison shown, and the baseline drawn behind its chart while the switch is on.
 const change = computed(() => (entry.value ? blicks.value.get(entry.value.name) ?? null : null))
-const baselineFile = computed(() => (change.value ? baselineTable(change.value) : null))
 const compare = ref(true)
-const { rows: baselineRows, error: baselineError } = useTable(() => (compare.value ? baselineFile.value : null))
-const baseline = computed(() => (baselineRows.value && schema.value && state.value ? select(baselineRows.value, schema.value, state.value.filters) : null))
+// `fileName` names exported images and the CSV file; `chartProps` is what the chart and the
+// change charts are drawn from.
+const { error, baselineFile, baselineError, shown, baseline, baselineWaiting, chartProps, fileName } = useBlickChart(entry, state, change, { compare })
 
 const tab = useTab()
 
 // The switch shows on the chart of a Blick with a baseline table; the chart waits for the
 // comparisons and the baseline's rows, so it is drawn once.
 const comparing = computed(() => baselineFile.value !== null && tab.value === 'chart')
-const waiting = computed(() => tab.value === 'chart' && (loading.value || (comparing.value && compare.value && !baselineRows.value && !baselineError.value)))
+const waiting = computed(() => tab.value === 'chart' && (loading.value || baselineWaiting.value))
 // The switch's key: the first series' colour, faded as the baseline is.
 const key = computed(() => ({ backgroundColor: CATEGORICAL[theme.value][0], opacity: GHOST[theme.value] }))
 // Exported images say when they carry the baseline, whose key is outside the chart.
 const chartName = computed(() => (baseline.value?.length ? `${fileName.value}_vs_baseline` : fileName.value))
-// What the chart and the change charts are drawn from.
-const chartProps = computed(() => {
-  if (!definition.value || !schema.value || !state.value || !shown.value) return null
-  const { type, mapping } = definition.value.plot
-  return { type, mapping, schema: schema.value, unit: definition.value.unit, rows: shown.value, splits: state.value.splits, y: state.value.y, baseline: baseline.value }
-})
 // Whether the change charts would have nothing to draw: a flat zero, which reads as no change. It
 // depends on the rows, not on the splits or the y axes.
 const incomparable = computed(() => {
@@ -95,7 +79,7 @@ function saveCsv() {
 // The overview is the one page above a Blick; the group is a label, not a page. On a narrow
 // page the title, which the heading repeats, makes room for the group.
 const breadcrumb = computed(() => [
-  { label: 'All Blicks', to: '/' },
+  { label: 'Overview', to: '/' },
   { label: group.value?.title ?? entry.value?.group ?? '', ui: { separator: 'max-sm:hidden' } },
   { label: definition.value?.title ?? id.value, ui: { item: 'max-sm:hidden' } },
 ])
@@ -110,14 +94,17 @@ const source = computed(() => (entry.value?.source ? sourceText(entry.value.sour
     <p class="text-sm text-muted">
       This build has no Blick <code>{{ id }}</code>.
     </p>
-    <UButton to="/" icon="i-lucide-arrow-left" variant="outline" color="neutral" label="All Blicks" />
+    <UButton to="/" icon="i-lucide-arrow-left" variant="outline" color="neutral" label="Overview" />
   </div>
   <div v-else class="space-y-5">
     <div class="space-y-1">
       <UBreadcrumb :items="breadcrumb" />
-      <h1 class="text-xl font-semibold text-highlighted">
-        {{ definition?.title ?? entry.name }}
-      </h1>
+      <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
+        <h1 class="min-w-0 text-xl font-semibold text-highlighted">
+          {{ definition?.title ?? entry.name }}
+        </h1>
+        <PinButton :id="id" :label="definition?.title ?? entry.name" class="shrink-0" />
+      </div>
       <p v-if="definition?.description" class="max-w-3xl text-sm text-muted">
         {{ definition.description }}
       </p>

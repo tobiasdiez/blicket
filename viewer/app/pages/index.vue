@@ -1,116 +1,160 @@
 <script setup lang="ts">
-import { ranked, type BlickComparison } from '~/lib/comparison'
-import type { BlickEntry } from '~/lib/manifest'
-import { searchText } from '~/lib/roles'
+import { PREVIEWS, pinnedHint, previewSections, troubles } from '~/lib/preview'
+import { sidebarOrder } from '~/lib/sidebar'
 
-const route = useRoute()
-const router = useRouter()
-const { manifest } = useManifest()
-const { comparison, blicks } = useComparison()
-const { dev } = useDev()
-
-// The search is in the URL, so going back from a Blick restores it.
-const search = computed({
-  get: () => (typeof route.query.q === 'string' ? route.query.q : ''),
-  set: (q: string) => void router.replace({ query: q ? { ...route.query, q } : { ...route.query, q: undefined } }),
-})
-const chosen = ref<string | null>(null)
+const { manifest, dev } = useManifest()
+const { comparison, blicks, loading } = useComparison()
+const { pinned } = usePins()
 
 useHead({ title: computed(() => (manifest.value ? `${manifest.value.run.id} · blicket` : 'blicket')) })
 
-const groups = computed(() => manifest.value?.groups ?? [])
-const tags = computed(() => {
-  const all = [...groups.value.flatMap(g => g.tags), ...(manifest.value?.blicks ?? []).flatMap(b => b.definition?.tags ?? [])]
-  return [...new Set(all)].toSorted()
+const entries = computed(() => (manifest.value ? sidebarOrder(manifest.value) : []))
+// Nothing is drawn while the comparisons load, so the first Blicks never show before the changed ones.
+const sections = computed(() => (loading.value ? null : previewSections(entries.value, comparison.value?.blicks ?? [], blicks.value, pinned.value, PREVIEWS)))
+const total = computed(() => manifest.value?.blicks.length ?? 0)
+// While nothing is pinned and nothing changed, the section shows the first Blicks instead.
+const firstLook = computed(() => !!sections.value?.unpinned && sections.value.pinned.length > 0)
+const more = computed(() => {
+  const changed = sections.value?.changed
+  return changed?.cards.length && changed.listed.length ? `${changed.listed.length} more changed` : null
 })
-
-const words = computed(() => search.value.toLowerCase().split(/\s+/).filter(Boolean))
-
-function matches(entry: BlickEntry): boolean {
-  const groupTags = groups.value.find(g => g.name === entry.group)?.tags ?? []
-  const entryTags = [...(entry.definition?.tags ?? []), ...groupTags]
-  if (chosen.value && chosen.value !== entry.group && !entryTags.includes(chosen.value)) return false
-  const text = searchText(entry, groupTags)
-  return words.value.every(word => text.includes(word))
-}
-
-const shown = computed(() => (manifest.value?.blicks ?? []).filter(matches))
-const byName = computed(() => new Map((manifest.value?.blicks ?? []).map(b => [b.name, b])))
-// The flagged Blicks with their entries; a removed Blick has none in this build.
-const movers = computed(() => ranked(comparison.value?.blicks ?? []).flatMap((blick): { blick: BlickComparison, entry: BlickEntry | null }[] => {
-  if (blick.change.flags.includes('removed')) {
-    return !chosen.value && words.value.every(word => blick.name.toLowerCase().includes(word)) ? [{ blick, entry: null }] : []
-  }
-  const entry = byName.value.get(blick.name)
-  return entry && matches(entry) ? [{ blick, entry }] : []
-}))
-const sections = computed(() => groups.value
-  .map(group => ({ group, entries: shown.value.filter(b => b.group === group.name) }))
-  .filter(section => section.entries.length > 0))
+const broken = computed(() => (manifest.value?.blicks ?? []).filter(b => b.status === 'error'))
 const errors = computed(() => (manifest.value?.problems ?? []).filter(p => p.severity === 'error'))
 const warnings = computed(() => (manifest.value?.problems ?? []).filter(p => p.severity === 'warning'))
-const total = computed(() => manifest.value?.blicks.length ?? 0)
-const failed = computed(() => manifest.value?.blicks.filter(b => b.status === 'error').length ?? 0)
+// The trouble of the build in a line, at the top, since the problems are far down the page.
+const trouble = computed(() => (manifest.value ? troubles(manifest.value) : ''))
+const problemsHeading = useTemplateRef<HTMLElement>('problemsHeading')
+
+/** Bring the problems into view, and the keyboard with them. With the hash router, `#problems` would be a route. */
+function seeProblems() {
+  problemsHeading.value?.scrollIntoView({ block: 'start' })
+  problemsHeading.value?.focus({ preventScroll: true })
+}
+
+// The cards of each section that still wait for their rows, by name: a status line per section
+// says "Loading charts" once while any does, instead of each card.
+const loadingCards = reactive({ changed: new Set<string>(), pinned: new Set<string>() })
+
+function track(section: keyof typeof loadingCards, name: string, waits: boolean) {
+  if (waits) loadingCards[section].add(name)
+  else loadingCards[section].delete(name)
+}
+
+const pinnedCards = useTemplateRef<HTMLElement>('pinnedCards')
+const pinnedHeading = useTemplateRef<HTMLElement>('pinnedHeading')
+
+/**
+ * Keep the keyboard in the section after a card's pin button changed it: on the button of the
+ * Blick's card if it is still there, else of the card that took its place, else on the heading.
+ */
+async function refocus(name: string, index: number) {
+  await nextTick()
+  const cards = [...(pinnedCards.value?.querySelectorAll<HTMLElement>('[data-blick]') ?? [])]
+  const card = cards.find(c => c.dataset.blick === name) ?? cards[index] ?? cards.at(-1)
+  const button = card?.querySelector<HTMLElement>('[data-pin] button')
+  if (button) button.focus()
+  else pinnedHeading.value?.focus()
+}
 </script>
 
 <template>
-  <div v-if="manifest" class="space-y-8">
+  <!-- The cards go in two columns when the page, not the window, is wide enough: the sidebar
+       takes some of the window. -->
+  <div v-if="manifest" class="@container space-y-8">
     <ComparisonBar />
-    <div class="flex flex-col gap-3 sm:flex-row sm:items-center">
-      <UInput v-model="search" icon="i-lucide-search" placeholder="Search Blicks" class="w-full sm:max-w-sm" aria-label="Search Blicks" />
-      <UButton v-if="dev" to="/builder" icon="i-lucide-wand-sparkles" label="Build a Blick" color="neutral" variant="outline" class="self-start sm:self-auto" />
-      <p class="text-sm text-muted">
-        <template v-if="shown.length < total">{{ shown.length }} of </template>{{ total }} Blicks<span v-if="failed"> · {{ failed }} with errors</span><span v-if="manifest.build.incomplete"> · incomplete, a module failed to import</span>
-      </p>
-    </div>
-    <div v-if="tags.length" class="flex flex-wrap gap-1.5">
-      <UButton
-        v-for="name in [...groups.map(g => g.name), ...tags]"
-        :key="name"
-        size="xs"
-        :variant="chosen === name ? 'solid' : 'outline'"
-        color="neutral"
-        :label="name"
-        @click="chosen = chosen === name ? null : name"
-      />
-    </div>
-    <section v-if="movers.length">
-      <h2 class="text-sm font-semibold text-highlighted">
-        Changed since the baseline
-      </h2>
-      <div class="divide-y divide-default">
-        <template v-for="{ blick, entry } in movers" :key="blick.name">
-          <BlickCard v-if="entry" :entry="entry" :compared="blick" />
-          <div v-else class="flex flex-col gap-1 py-3 sm:flex-row sm:items-baseline sm:gap-4">
-            <span class="min-w-0 flex-1 font-mono text-sm text-muted">{{ blick.name }}</span>
-            <span class="flex gap-1.5 sm:justify-end"><FlagBadges :change="blick.change" /></span>
-          </div>
+    <UAlert
+      v-if="trouble"
+      color="error"
+      variant="subtle"
+      icon="i-lucide-circle-x"
+      :title="trouble"
+      orientation="horizontal"
+      :actions="[{ label: 'See problems', color: 'error', variant: 'outline', size: 'xs', onClick: seeProblems }]"
+    />
+    <template v-if="sections && total">
+      <section v-if="sections.changed" class="space-y-3" aria-labelledby="changed">
+        <h2 id="changed" class="text-sm font-semibold text-highlighted">
+          Changed since the baseline
+        </h2>
+        <div v-if="sections.changed.cards.length" class="grid gap-4 @3xl:grid-cols-2">
+          <BlickPreview v-for="card in sections.changed.cards" :key="card.entry.name" :entry="card.entry" :change="card.change" @loading="track('changed', card.entry.name, $event)" />
+        </div>
+        <p role="status" class="sr-only">
+          {{ loadingCards.changed.size ? 'Loading charts' : '' }}
+        </p>
+        <template v-if="sections.changed.listed.length">
+          <p v-if="more" class="pt-2 text-sm text-muted">
+            {{ more }}
+          </p>
+          <ul class="divide-y divide-default">
+            <li v-for="item in sections.changed.listed" :key="item.name" class="flex flex-wrap items-baseline gap-x-2 gap-y-1 py-2 text-sm">
+              <NuxtLink v-if="item.to" :to="item.to" class="min-w-0 font-medium text-highlighted hover:underline" :class="{ 'font-mono font-normal': item.byName }">
+                {{ item.label }}
+              </NuxtLink>
+              <span v-else class="min-w-0 font-mono text-muted">{{ item.label }}</span>
+              <FlagBadge v-if="item.badge" :badge="item.badge" size="sm" />
+              <p v-if="item.problem" class="w-full whitespace-pre-wrap break-words text-muted">
+                {{ item.problem }}
+              </p>
+            </li>
+          </ul>
         </template>
-      </div>
-    </section>
-    <section v-for="{ group, entries } in sections" :key="group.name">
-      <h2 class="text-sm font-semibold text-highlighted">
-        {{ group.title ?? group.name }}
-        <span v-if="group.title" class="ml-1 font-mono text-xs font-normal text-muted">{{ group.name }}</span>
-      </h2>
-      <div class="divide-y divide-default">
-        <BlickCard v-for="entry in entries" :key="entry.name" :entry="entry" :compared="blicks.get(entry.name) ?? null" />
-      </div>
-    </section>
-    <p v-if="!total && dev" class="text-sm text-muted">
-      No Blicks yet. Build one from the run, or write it as code.
-    </p>
+      </section>
+      <section class="space-y-3" aria-labelledby="pinned">
+        <h2 id="pinned" ref="pinnedHeading" tabindex="-1" class="text-sm font-semibold text-highlighted">
+          {{ firstLook ? 'A first look' : 'Pinned' }}
+        </h2>
+        <p v-if="sections.unpinned" class="text-sm text-muted">
+          {{ pinnedHint(sections.pinned.length) }}
+        </p>
+        <div v-if="sections.pinned.length" ref="pinnedCards" class="grid gap-4 @3xl:grid-cols-2">
+          <BlickPreview
+            v-for="(card, index) in sections.pinned"
+            :key="card.entry.name"
+            :entry="card.entry"
+            :change="card.change"
+            pinnable
+            @toggle="refocus(card.entry.name, index)"
+            @loading="track('pinned', card.entry.name, $event)"
+          />
+        </div>
+        <p role="status" class="sr-only">
+          {{ loadingCards.pinned.size ? 'Loading charts' : '' }}
+        </p>
+      </section>
+    </template>
+    <div v-if="!total && dev" class="space-y-3">
+      <p class="text-sm text-muted">
+        No Blicks yet. Build one from the run, or write it as code.
+      </p>
+      <UButton to="/builder" icon="i-lucide-wand-sparkles" label="Build a Blick" color="neutral" variant="outline" />
+    </div>
     <p v-else-if="!total" class="text-sm text-muted">
       This build has no Blicks.
     </p>
-    <p v-else-if="!sections.length" class="text-sm text-muted">
-      No Blick matches.
-    </p>
-    <section v-if="errors.length || warnings.length" class="space-y-3">
-      <h2 class="text-sm font-semibold text-highlighted">
-        Problems with files and the project
+    <!-- Whatever the comparison: the Blicks that did not build, and the build's own problems. -->
+    <section v-if="trouble || warnings.length" class="space-y-4" aria-labelledby="problems">
+      <h2 id="problems" ref="problemsHeading" tabindex="-1" class="scroll-mt-4 text-sm font-semibold text-highlighted">
+        Problems
       </h2>
-      <ProblemList :problems="[...errors, ...warnings]" />
+      <p v-if="manifest.build.incomplete" class="text-sm">
+        This build is incomplete: a Blick module failed to import, so the Blicks it defines are missing.
+      </p>
+      <div v-for="entry in broken" :key="entry.name" class="space-y-2">
+        <h3 class="text-sm font-medium text-highlighted">
+          <NuxtLink v-if="entry.id" :to="`/blick/${entry.id}`" class="font-mono hover:underline">
+            {{ entry.name }}
+          </NuxtLink>
+          <span v-else class="font-mono">{{ entry.name }}</span>
+        </h3>
+        <ProblemList :problems="entry.problems" />
+      </div>
+      <div v-if="errors.length || warnings.length" class="space-y-2">
+        <h3 class="text-sm font-medium text-highlighted">
+          Files and the project
+        </h3>
+        <ProblemList :problems="[...errors, ...warnings]" />
+      </div>
     </section>
   </div>
 </template>

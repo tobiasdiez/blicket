@@ -345,7 +345,7 @@ def dev_command(
     """Check a run without pushing it, then serve it with the Blick builder; Ctrl-C stops.
 
     Builds the run and compares it with its baseline as blicket check
-    does, then keeps the run in memory: "Build a Blick" on the overview
+    does, then keeps the run in memory: "Build a Blick" in the viewer
     charts any quantity of the dataset that dataset(run) in the loader's
     module returns.
 

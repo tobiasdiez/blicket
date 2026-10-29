@@ -1,8 +1,13 @@
-import type { Control, Dimension, TableSchema, Value } from './manifest'
+import type { BlickDefinition, Control, Dimension, TableSchema, Value } from './manifest'
 import { valueKey } from './table'
 
 /** Whether split panels share their y axis or each has its own. */
 export type YAxis = 'shared' | 'independent'
+
+/** The y axes of a Blick's panels when the URL does not say: each its own, or one shared. */
+export function yAxisOf(definition: Pick<BlickDefinition, 'independent_y'> | null): YAxis {
+  return definition?.independent_y ? 'independent' : 'shared'
+}
 
 /** What the controls of a Blick are set to. */
 export interface ControlState {

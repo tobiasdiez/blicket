@@ -178,10 +178,20 @@ $ blicket serve .blicket/build/5d0c3f1e2a9b8c47
 viewer: http://127.0.0.1:8765/#/   (Ctrl-C stops)
 ```
 
-Without an argument, `blicket serve` serves the build of the project made last; `--port`,
-`--host` and `--open` (open the browser) do what they say. It serves nothing outside the build
-directory and the viewer. The overview lists the Blicks by group with a
-search box; a Blick's page shows its chart, its controls and a data tab with the rows shown.
+Without an argument, `blicket serve` serves the build of the project made last; `--port`, `--host`
+and `--open` (open the browser) do what they say. It serves nothing outside the build directory and
+the viewer. A sidebar on every page lists the Blicks by group, with a search box, a badge on each
+Blick the comparison flags (see [Comparing two builds](#comparing-two-builds)) and a filter that
+keeps those; it collapses, and on a window narrower than 1280 px it is a drawer. The overview shows
+small charts: of the Blicks that changed since the baseline, the largest change first, each at the
+panel where its change is largest with the baseline faded behind, and of the Blicks you pinned.
+While nothing is pinned and nothing changed, it shows the first six Blicks instead, as "A first
+look", each card with a button that pins it. A line at the top says when Blicks failed to build or
+the build is incomplete; their problems are listed under the charts. Pins are kept in the browser
+per origin, that is per address and port: the builds that `blicket serve` shows on one port share
+them, as do the catalogs on one static host, and nothing is written to the project or the build. A
+pinned Blick that a build lacks is left out, and a renamed one keeps its pin through its aliases. A
+Blick's page shows its chart, its controls and a data tab with the rows shown.
 Every dimension that the plot does not bind to a channel gets a control: a filter that shows one
 value at a time, starting at the first value in display order or at `defaults={dim: value}`, or,
 with `controls={dim: "split"}`, one panel per value. The control state is in the URL
@@ -322,15 +332,18 @@ comparison file on stdout instead of the report, `null` without a baseline, and 
 stderr. `--out` and `--project` work as for `build`.
 
 `blicket serve` on a checked build directory shows the comparison. The overview names the baseline's
-run in a selector over the baselines the build was checked against, the one checked last first,
-each with its commit and time, and "No baseline", which shows the build as if it was never
-checked; a baseline of the same run is not offered. Then come the counts per flag and the values
-and columns that appeared or vanished across Blicks, and "Changed since the baseline": the flagged
-Blicks ranked as `check` ranks its movers, each with badges such as `Δ 2.1% of scale` (the largest
-change, as a percent of the chart's scale), `schema` or `new`.
+run in a selector over the baselines the build was checked against, the one checked last first, each
+with its commit and time, and "No baseline", which shows the build as if it was never checked; a
+baseline of the same run is not offered. Then come the counts per flag and the values and columns
+that appeared or vanished across Blicks, and "Changed since the baseline": the flagged Blicks ranked
+as `check` ranks its movers, the first six as small charts and the others as a list under a line
+such as "4 more changed", each with a badge such as `Δ 2.1%` (the largest change, as a percent of
+the chart's scale), `schema` or `new`, which the sidebar shows too. A card's caption names the panel
+it shows and the rest of the row that changed most: `Region: SSA · largest change at Flow: Primary,
+Time: 2100 · baseline faded`.
 
 A Blick's page says what changed: its flags, the largest change, where it is and against which
-baseline (`largest change 2.1% of the chart's scale at Region SSA, Flow Primary, Time 2100,
+baseline (`largest change 2.1% of the chart's scale at Region: SSA, Flow: Primary, Time: 2100,
 against run …`), with a "Show where" button when that is another filter setting, and the values or
 columns that appeared or vanished. "Compare with baseline", on by default, draws the baseline
 behind the chart, faded and broader in each series' colour: wide lines behind the lines, the
@@ -368,32 +381,32 @@ The line `builder:` says whether the Blick builder is on, with the size of the p
 or why it is off. `dev` takes `--against`, `--out` and `--project` as `check` does and `--port`,
 `--host` and `--open` as `serve` does; it takes the port before it loads the run, so a port in use
 fails at once. It exits 0 when stopped with Ctrl-C, whatever the build holds: flagged Blicks and
-Blicks that fail are in the report and the viewer, and a baseline that `--against` names but
-cannot be found is in the report. Only a session that cannot start exits 2, as `check` would: an invalid
+Blicks that fail are in the report and the viewer, and a baseline that `--against` names but cannot
+be found is in the report. Only a session that cannot start exits 2, as `check` would: an invalid
 `[tool.blicket]`, a loader that raises, no viewer, a port in use. `-v` shows tracebacks, of the
-Blicks at the start and of the builder's queries while the session runs. A project with a loader
-and no Blick yet is no error in `dev`: the report says `no Blicks yet`, the build holds no Blick
-and is complete, and the overview offers the builder. The viewer knows it is served by `dev` from
-the header `Blicket-Dev: 1` on `manifest.json`, which `dev` answers from memory.
+Blicks at the start and of the builder's queries while the session runs. A project with a loader and
+no Blick yet is no error in `dev`: the report says `no Blicks yet`, the build holds no Blick and is
+complete, and the overview offers the builder, as the foot of the Blick list always does. The viewer
+knows it is served by `dev` from the header `Blicket-Dev: 1` on `manifest.json`, which `dev` answers
+from memory.
 
 ## The Blick builder
 
-In `blicket dev`, "Build a Blick" on the overview opens the builder, which composes an ad hoc Blick
-from the run: you pick a quantity of the model, a plot type, what each dimension does (an axis or a
-colour, panels, a filter, or summed over) and, for each dimension kept, the values to keep, and
-the chart follows. A dimension on a filter is shown one value at a time, picked above the chart
-as on a Blick's page. The dev server runs the query in Python and checks the table as it checks a
-Blick's; the chart, its controls, the data tab and the exports are those of a Blick's page, and a
-line under the title says what was summed and which values are kept. Picking more quantities of
-one unit puts them into one chart, told apart by a dimension `Quantity` that holds their titles,
-on colour at first; summed over `Quantity`, they add up. The dimension on `x` can only swap with
-one on another channel, since a chart needs an `x`. A query that cannot run, such as one that sums
-a quantity that is not additive, or one whose table exceeds 100,000 rows (the problem names the
-dimensions and their sizes), shows its problem above the last chart, which stays dimmed until
-the next query runs. The builder's state is in the URL
-(`#/builder?_q=flows/steel&_c.x=year&_keep=process&_split=process`), so a link reproduces the
-chart for as long as the session runs; nothing is saved, and a Blick worth keeping is written as
-code.
+In `blicket dev`, "Build a Blick" at the foot of the Blick list opens the builder, which composes an
+ad hoc Blick from the run: you pick a quantity of the model, a plot type, what each dimension does
+(an axis or a colour, panels, a filter, or summed over) and, for each dimension kept, the values to
+keep, and the chart follows. A dimension on a filter is shown one value at a time, picked above the
+chart as on a Blick's page. The dev server runs the query in Python and checks the table as it
+checks a Blick's; the chart, its controls, the data tab and the exports are those of a Blick's page,
+and a line under the title says what was summed and which values are kept. Picking more quantities
+of one unit puts them into one chart, told apart by a dimension `Quantity` that holds their titles,
+on colour at first; summed over `Quantity`, they add up. The dimension on `x` can only swap with one
+on another channel, since a chart needs an `x`. A query that cannot run, such as one that sums a
+quantity that is not additive, or one whose table exceeds 100,000 rows (the problem names the
+dimensions and their sizes), shows its problem above the last chart, which stays dimmed until the
+next query runs. The builder's state is in the URL
+(`#/builder?_q=flows/steel&_c.x=year&_keep=process&_split=process`), so a link reproduces the chart
+for as long as the session runs; nothing is saved, and a Blick worth keeping is written as code.
 
 The builder reads the run through a dataset: `dataset(run)` next to `load_run` in
 `blicketconf.py`, or in the module that `loader` names, returns one. The stock dataset is

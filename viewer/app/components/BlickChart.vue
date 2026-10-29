@@ -20,6 +20,8 @@ const props = defineProps<{
   baseline: Row[] | null
   /** The change against the baseline to draw instead of the measure. */
   kind?: ChangeKind
+  /** A small chart, without legend and export menu; never a change chart. */
+  compact?: boolean
 }>()
 
 const container = useTemplateRef<HTMLElement>('container')
@@ -61,6 +63,7 @@ async function draw() {
       baseline: props.baseline,
       theme: theme.value,
       name: props.kind ? exportName(props.name, props.kind) : props.name,
+      compact: props.compact,
     })
     if (unmounted) done()
     else cleanup = done
@@ -79,7 +82,7 @@ watch(width, (current) => {
 })
 
 onMounted(schedule)
-watch(() => [props.rows, props.baseline, props.splits, props.y, props.type, props.mapping, props.unit, theme.value], async () => {
+watch(() => [props.rows, props.baseline, props.splits, props.y, props.type, props.mapping, props.unit, props.compact, theme.value], async () => {
   failure.value = null
   await nextTick()
   schedule()

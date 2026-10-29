@@ -32,6 +32,8 @@ export interface PlotArgs {
   theme: Theme
   /** The name exported images get, without extension. */
   name: string
+  /** A small chart, as the overview's cards draw: lower, without legend and export menu. */
+  compact?: boolean
 }
 
 /** The browser half of a plot type: draws into `el` and resolves to what removes the chart. */

@@ -3,19 +3,6 @@ import type { BlickEntry } from './manifest'
 /** The built-in dimension channels as the viewer names them. */
 export const CHANNEL_LABELS: Record<string, string> = { x: 'x', color: 'colour', linetype: 'line type' }
 
-/**
- * What each dimension of a Blick does, for its card: the channels it is bound to (x, colour,
- * line type), then the splits into panels, then the filters.
- */
-export function roles(entry: BlickEntry): string[] {
-  const mapping = entry.definition?.plot.mapping ?? {}
-  const bound = Object.entries(CHANNEL_LABELS)
-    .filter(([channel]) => mapping[channel])
-    .map(([channel, label]) => `${label}: ${mapping[channel]}`)
-  const of = (kind: string) => entry.controls.filter(control => control.kind === kind).map(control => control.dimension)
-  return [...bound, ...of('split').map(name => `panels: ${name}`), ...of('filter').map(name => `filter: ${name}`)]
-}
-
 /** The text a search looks in: id, title, description, tags, plot type and dimension names. */
 export function searchText(entry: BlickEntry, groupTags: string[]): string {
   const definition = entry.definition

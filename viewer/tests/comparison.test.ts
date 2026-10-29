@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ControlState } from '../app/lib/controls'
-import { badges, baselineTable, buildParts, counts, offered, percent, ranked, schemaDetails, schemaSummary, whereState, whereText, type BlickComparison, type BuildRef, type Change, type Comparison, type Flag } from '../app/lib/comparison'
+import { badges, baselineTable, blickBadge, buildParts, counts, offered, percent, ranked, schemaDetails, schemaSummary, whereState, whereText, type BlickComparison, type BuildRef, type Change, type Comparison, type Flag } from '../app/lib/comparison'
 import type { TableSchema } from '../app/lib/manifest'
 
 function blick(name: string, flags: Flag[], change: Partial<Change> = {}, extra: Partial<BlickComparison> = {}): BlickComparison {
@@ -56,9 +56,15 @@ describe('percent', () => {
 describe('badges', () => {
   it('labels the value with its share of the chart\'s scale and says what the number is', () => {
     expect(badges(blick('a', ['schema', 'value'], { magnitude: 0.020961 }).change)).toEqual([
-      { flag: 'schema', label: 'schema' },
-      { flag: 'value', label: 'Δ 2.1% of scale', title: 'largest change: 2.1% of the largest value in its panel' },
+      { flag: 'schema', label: 'schema', spoken: 'columns or values changed' },
+      { flag: 'value', label: 'Δ 2.1% of scale', title: 'largest change: 2.1% of the largest value in its panel', spoken: 'changed by 2.1% of scale' },
     ])
+  })
+
+  it('give a listed Blick one, of the flag it is ranked by, or error when no comparison judged it', () => {
+    expect(blickBadge(null, blick('a', ['schema', 'value'], { magnitude: 0.020961 }))).toEqual({ flag: 'value', label: 'Δ 2.1%', title: 'largest change: 2.1% of the largest value in its panel', spoken: 'changed by 2.1% of scale' })
+    expect(blickBadge(null, blick('a', ['removed']))!.label).toBe('removed')
+    expect([blickBadge({ status: 'error' }, null)!.label, blickBadge({ status: 'ok' }, blick('a', [])), blickBadge({ status: 'ok' }, null)]).toEqual(['error', null, null])
   })
 })
 
@@ -177,10 +183,10 @@ describe('where', () => {
   })
 
   it('names the panel, the series and the x value with their dimensions', () => {
-    expect(whereText({ Flow: 'Primary', Time: 2100, Region: 'SSA' }, { ...state, filters: {} }, mapping)).toBe('Region SSA, Flow Primary, Time 2100')
+    expect(whereText({ Flow: 'Primary', Time: 2100, Region: 'SSA' }, { ...state, filters: {} }, mapping)).toBe('Region: SSA, Flow: Primary, Time: 2100')
   })
 
   it('names the filtered values first', () => {
-    expect(whereText({ Time: 2050, Region: 'EUR', Parameter: 'landfill' }, state, mapping)).toBe('Parameter landfill, Region EUR, Time 2050')
+    expect(whereText({ Time: 2050, Region: 'EUR', Parameter: 'landfill' }, state, mapping)).toBe('Parameter: landfill, Region: EUR, Time: 2050')
   })
 })

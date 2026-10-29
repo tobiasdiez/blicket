@@ -50,8 +50,8 @@ watching blicks/, blicketconf.py and pyproject.toml for code; the run directory 
 
    and the chart redraws within the second, the filter still set, the URL unchanged, the old chart
    standing until the new rows arrive; the comparison strip now says `largest change 0.99% of the
-   chart's scale at …`, the baseline ghost shows the gap. The overview in another tab lists the
-   Blick under "Changed since the baseline".
+   chart's scale at …`, the baseline ghost shows the gap. The overview in another tab shows the
+   Blick as a card under "Changed since the baseline".
 3. You break the edit with a `NameError` inside the transformation: the line says `rebuilt 10
    Blicks in 290 ms · 1 error`, the Blick's page shows the problem with its location in place of
    the chart, the dot stays green (the session is fine; one Blick is not). You break the module

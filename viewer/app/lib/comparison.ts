@@ -2,7 +2,7 @@
 // blicket package: BuildRef, BlickComparison and Comparison in src/blicket/comparison.py, Change
 // in schema.py.
 import { parseValue, type ControlState } from './controls'
-import type { Repository, TableSchema, Value } from './manifest'
+import type { BlickEntry, Repository, TableSchema, Value } from './manifest'
 import { formatter, valueKey, type TableFile } from './table'
 
 export type Flag = 'new' | 'removed' | 'schema' | 'value' | 'error'
@@ -94,16 +94,54 @@ export function ranked(blicks: BlickComparison[]): BlickComparison[] {
     .toSorted((a, b) => rank(a) - rank(b) || twoDigits(b.change.magnitude) - twoDigits(a.change.magnitude) || byName(a, b))
 }
 
+/** A flag as a badge shows it. */
+export interface Badge {
+  flag: Flag
+  label: string
+  /** What the label means where it is short. */
+  title?: string
+  /** The badge as words, where it is read as part of a Blick's name: `changed by 2.1% of scale`. */
+  spoken: string
+}
+
+/** The colour of each flag's badge, wherever a flag is shown. */
+export const FLAG_COLORS: Record<Flag, 'warning' | 'info' | 'neutral' | 'error'> = { value: 'warning', schema: 'warning', new: 'info', removed: 'neutral', error: 'error' }
+
+// The flags other than `value` as words, which their badges are read as.
+const SPOKEN: Record<Exclude<Flag, 'value'>, string> = { schema: 'columns or values changed', new: 'new', removed: 'removed', error: 'in error' }
+
+/**
+ * The badge of `flag`: for `value` the change's `magnitude` as a share of the chart's scale,
+ * `Δ 2.1%` when `short` and `Δ 2.1% of scale` otherwise; the flag itself for the others.
+ */
+function badge(flag: Flag, magnitude: number | null, short: boolean): Badge {
+  if (flag !== 'value') return { flag, label: flag, spoken: SPOKEN[flag] }
+  const share = percent(magnitude ?? 0)
+  return {
+    flag,
+    label: short ? `Δ ${share}` : `Δ ${share} of scale`,
+    title: `largest change: ${share} of the largest value in its panel`,
+    spoken: `changed by ${share} of scale`,
+  }
+}
+
 /**
  * The badges of a Blick's flags: `Δ 2.1% of scale` for `value`, with a title that says what the
  * number is, and the flag itself for the others, `schema`, `new`, `removed`, `error`.
  */
-export function badges(change: Change): { flag: Flag, label: string, title?: string }[] {
-  return change.flags.map((flag) => {
-    if (flag !== 'value') return { flag, label: flag }
-    const share = percent(change.magnitude ?? 0)
-    return { flag, label: `Δ ${share} of scale`, title: `largest change: ${share} of the largest value in its panel` }
-  })
+export function badges(change: Change): Badge[] {
+  return change.flags.map(flag => badge(flag, change.magnitude, false))
+}
+
+/**
+ * The one badge of a Blick wherever Blicks are listed: of the flag it is ranked by, the first of
+ * its flags in the order of `ranked`, with `value` as `Δ 2.1%`; or `error` for a Blick in error
+ * that no comparison flags. `null` for an unchanged Blick.
+ */
+export function blickBadge(entry: Pick<BlickEntry, 'status'> | null, compared: BlickComparison | null): Badge | null {
+  const flag = ORDER.find(f => compared?.change.flags.includes(f))
+  if (flag) return badge(flag, compared?.change.magnitude ?? null, true)
+  return entry?.status === 'error' ? badge('error', null, true) : null
 }
 
 /** The Blicks per flag, as `9 unchanged · 1 value`, then whether removed was judged, the errors. */
@@ -238,12 +276,12 @@ export function whereState(state: ControlState, where: Record<string, Value>, sc
 
 /**
  * The row `where` in the order a reader finds it: the filtered values, the panel, the series and
- * the x value, each with its dimension, such as `Region SSA, Flow Primary, Time 2100`.
+ * the x value, each with its dimension, such as `Region: SSA, Flow: Primary, Time: 2100`.
  */
 export function whereText(where: Record<string, Value>, state: ControlState, mapping: Record<string, string>): string {
   const order = new Set([...Object.keys(state.filters), ...state.splits, mapping.color, mapping.linetype, mapping.x])
   return [...order]
     .filter((name): name is string => name !== undefined && name in where)
-    .map(name => `${name} ${String(where[name])}`)
+    .map(name => `${name}: ${String(where[name])}`)
     .join(', ')
 }

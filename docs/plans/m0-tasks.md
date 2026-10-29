@@ -336,11 +336,18 @@ Not scheduled; each is a task of its own or joins the milestone named.
   does not hold today (M2's dev server knows it).
 - **The plot type chips are not helpful.** `line`, `stacked_area` and the role chips on the
   overview and the Blick page say nothing a researcher needs; drop them or replace them with
-  something that does (the unit, the last change).
+  something that does (the unit, the last change). Done for the overview on 2026-10-28, which
+  dropped them ([overview-sidebar-and-previews.md](overview-sidebar-and-previews.md)); the Blick
+  page keeps its text line with the plot type and the unit.
 - **The overview needs a revamp for REMIND's scale.** Hundreds of Blicks will not work as one
   grouped list. Likely shape: the user, not the project, pins a few favourites, which the overview
   shows in detail (chart included); the rest stays searchable. User-level state, so stored in the
-  browser or a user config, not in the project.
+  browser or a user config, not in the project. Done on 2026-10-28
+  ([overview-sidebar-and-previews.md](overview-sidebar-and-previews.md)): the Blicks are in a
+  sidebar on every page, by group and searchable, and the overview shows the changed Blicks and the
+  pinned ones as small charts. Pins are the user's, kept in the browser per origin as a list of
+  Blick ids and shared by every catalog served from one origin; a project-side default waits for a
+  project that needs it, since it would change the manifest's spec.
 - **The header's "Blick code e7a2a23".** It is the git commit of the project that defines the
   Blicks (the manifest's `repository`), not blicket's version; the example lives inside the blicket
   repository, so the two coincide there. The label does not say that; rename it (for example

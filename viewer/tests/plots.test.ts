@@ -659,6 +659,50 @@ describe('the change against the baseline', () => {
   })
 })
 
+// The specification of each built-in plot type, by its name.
+const SPECS: Record<string, (plotArgs: PlotArgs, width: number) => Any> = {
+  line,
+  stacked_area: area,
+  bar: (plotArgs, width) => bars(plotArgs, false, width),
+  stacked_bar: (plotArgs, width) => bars(plotArgs, true, width),
+}
+
+/** The compact spec of the built-in plot `type`, 400 px wide. */
+function compact(type: string, plotArgs: PlotArgs): Any {
+  return SPECS[type]!({ ...plotArgs, compact: true }, 400)
+}
+
+describe('a compact chart', () => {
+  it('is lower, without legend, its baseline, tooltips and highlights kept, for every built-in', async () => {
+    expect(Object.keys(SPECS)).toEqual(Object.keys(PLOT_TYPES))
+    for (const type of Object.keys(PLOT_TYPES)) {
+      const dimensions = type.endsWith('bar') ? [region, scenario] : [year, region]
+      const x = dimensions[0]!.name
+      const color = dimensions[1]!.name
+      const spec = compact(type, args(dimensions, { x, color }, { baseline: sameButFifth }))
+      expect([spec.height, spec.config.legend.disable]).toEqual([160, true])
+      const drawn = layers(spec) ?? [spec]
+      expect(drawn[0].transform).toEqual([BASELINE])
+      const result = await run(spec)
+      expect([result.warnings, result.vega.legends]).toEqual([[], undefined])
+      // The hover and the legend's highlight stay: other layers refer to them.
+      const signals = result.vega.signals.map((signal: Any) => signal.name)
+      expect(signals).toEqual(expect.arrayContaining(['hover', 'focus']))
+    }
+  })
+
+  it('keeps the crosshair of a line chart, whose tooltip tells the series apart', () => {
+    const rule = layers(compact('line', args([year, many], { x: 'Time', color: 'Polymer' }))).at(-1)
+    expect(rule.mark.type).toBe('rule')
+    expect(rule.encoding.tooltip.map((entry: Any) => entry.title)).toContain('J')
+  })
+
+  it('turns off the legend of a line type too', async () => {
+    const spec = compact('line', args([year, region, scenario], { x: 'Time', color: 'Region', linetype: 'Scenario' }))
+    expect((await run(spec)).vega.legends).toBeUndefined()
+  })
+})
+
 describe('tooltips', () => {
   it('show a dash for a missing number', async () => {
     const plotArgs = args([year], { x: 'Time' }, { value: i => (i === 1 ? Number.NaN : i) })

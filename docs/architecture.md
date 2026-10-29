@@ -324,6 +324,17 @@ one `BLICKET_VIEWER` names in a checkout.
   terminal ranks its movers (`value` by magnitude, then `schema`, `new`, `removed`, `error`), each
   with its flag badges, which is the filter by flag; then the groups, with badges; search, tag and
   group filters apply to both.
+- Amendment of 2026-10-28 ([overview-sidebar-and-previews.md](plans/overview-sidebar-and-previews.md)):
+  the groups, the badges, the search and a filter by flag live in a sidebar on every page,
+  collapsible, a drawer below 1280 px; the search is not in the URL, and the tag and group chips
+  are gone. The overview keeps the baseline and its counts and shows small charts: the flagged
+  Blicks in ranked order, six as cards and the rest as a ranked list under a line "N more
+  changed", each card at the panel of its largest change with the baseline drawn behind; and the
+  Blicks the user pinned, kept in the browser per origin, or, while nothing is pinned or changed,
+  the first six Blicks as "A first look", whose cards can pin them. Whatever the comparison, a line
+  at the top says when Blicks failed to build or the build is incomplete, and the Blicks in error
+  are listed with their problems, next to the build's own. The plot type and role chips are gone
+  from the overview.
 - Blick page: chart, controls derived by the plot type, URL-carried control state, a comparison
   switch on by default, a strip with the flags, the largest change (as a percent of the chart's
   scale), where it is and against which baseline, with a button that sets the controls there.
@@ -553,9 +564,12 @@ the loader takes a run directory and returns the run object plus `RunInfo`.
    Behind this: discovery imports the Blick modules, the loader runs once and stays in memory,
    every transformation runs, tables go to canonical form, the store is searched for the baseline
    build, each plot type's diff runs against it, and a build directory with a fresh id is written.
-3. The overview opens with the flagged Blicks ranked by magnitude, each with its flags, then the
-   groups, with search, tag and group filters. The schema summary says which value appeared, for
-   example "process 'EAF-DRI' appeared in 3 Blicks".
+3. The overview opens with the flagged Blicks ranked by magnitude, the first six as small charts
+   of the panel where each changed most, the baseline drawn behind, the rest as a list, each with
+   its flag; then the Blicks the user pinned, or "A first look" at the first six while nothing is
+   pinned or changed. A sidebar on every page lists the groups, searchable, with a filter for the
+   flagged Blicks. The schema summary says which value appeared, for example
+   "process 'EAF-DRI' appeared in 3 Blicks". (Amended on 2026-10-28; see the viewer section.)
 4. You open the top mover. The chart has the controls the plot type derived: a scenario dropdown, a
    region split toggle. The URL carries the control state, so a link reproduces the view. A toggle
    shows the plot type's comparison, for the built-ins a ghost of the baseline, on by default. A

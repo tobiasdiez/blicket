@@ -142,7 +142,7 @@ wheels = [
 
 [[package]]
 name = "blicket"
-version = "0.1.0.dev0"
+version = "0.1.0"
 source = { directory = "../../" }
 dependencies = [
     { name = "polars" },

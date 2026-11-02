@@ -88,6 +88,18 @@ def steel_by_process(run):
 split then gets its own y axis by default; otherwise the panels share one, and the viewer's toggle
 changes either. Both are part of the Blick's definition in the manifest.
 
+`stacked_area` and `stacked_bar` stack the layers of `color` at each x in their display order,
+positive values up from zero and negative ones down: over a table whose exports are negative,
+`bk.plots.stacked_area(x="year", y="value", color="flow")` draws the imports above the axis and the
+exports below it. On each side the first layer is the outermost and the last lies next to zero, so
+a layer with values of both signs, which stacks each value on its own side, is best put last, where
+it crosses zero without crossing the other layers. In a `stacked_area`, a layer that is never
+positive in a panel, and negative at least once, keeps its zeros and gaps with the negative layers
+rather than on top of the positive ones. A comparison measures against the height of the stacks,
+the larger of the positive sum and the absolute negative one, and compares the positive and the
+negative sums of the two builds each on its own, so imports and exports that grow alike are a
+change though their net stays the same.
+
 ```console
 $ blicket list
 flows  Material flows  [mfa]

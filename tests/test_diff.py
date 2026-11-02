@@ -178,6 +178,84 @@ def test_a_changed_layer_names_its_row_though_its_stack_differs_by_rounding() ->
     assert change.where == {"x": 1, "color": "a"}
 
 
+@pytest.mark.parametrize(
+    ("before", "after", "magnitude", "changed"),
+    [
+        # Balanced: net 0, span 200. The imports fall by 1 of 100.
+        ([-100.0, 100.0], [-100.0, 99.0], 0.01, "imports"),
+        # The exports' side is higher: net 40 or 34, span 160 or 166, the imports' side 60 or 66.
+        ([-100.0, 60.0], [-100.0, 66.0], 0.06, "imports"),
+        # The imports' side is higher, the same mirrored.
+        ([-60.0, 100.0], [-66.0, 100.0], 0.06, "exports"),
+    ],
+)
+def test_a_stack_is_as_high_as_its_end_farthest_from_zero(
+    before: list[float], after: list[float], magnitude: float, changed: str
+) -> None:
+    # The height is 100 in each case, the side farthest from zero, whichever it is.
+    baseline = frame(before, x=[1, 1], color=["exports", "imports"])
+    current = frame(after, x=[1, 1], color=["exports", "imports"])
+    change = compare(baseline, current, "value", [], "color")
+    assert (change.magnitude, change.where) == (
+        pytest.approx(magnitude),
+        {"x": 1, "color": changed},
+    )
+
+
+def test_a_change_of_the_negative_stack_beyond_every_row_names_the_stack() -> None:
+    # At x=2 both exports grow by 1, their stack by 2, of a scale of 10, the imports.
+    color = ["exports", "imports", "re-exports"] * 2
+    baseline = frame([-4.0, 10.0, -4.0] * 2, x=[1] * 3 + [2] * 3, color=color)
+    current = frame([-4.0, 10.0, -4.0, -5.0, 10.0, -5.0], x=[1] * 3 + [2] * 3, color=color)
+    change = compare(baseline, current, "value", [], "color")
+    assert (change.magnitude, change.where) == (pytest.approx(0.2), {"x": 2})
+
+
+def test_a_change_of_the_positive_stack_beyond_every_row_names_the_stack() -> None:
+    # At x=2 both imports grow by 1, their stack by 2, of a scale of 10, the exports.
+    color = ["exports", "imports by land", "imports by sea"] * 2
+    baseline = frame([-10.0, 4.0, 4.0] * 2, x=[1] * 3 + [2] * 3, color=color)
+    current = frame([-10.0, 4.0, 4.0, -10.0, 5.0, 5.0], x=[1] * 3 + [2] * 3, color=color)
+    change = compare(baseline, current, "value", [], "color")
+    assert (change.magnitude, change.where) == (pytest.approx(0.2), {"x": 2})
+
+
+def test_imports_and_exports_growing_alike_change_the_stacks_though_not_the_net() -> None:
+    # Each layer grows by 5, each stack by 10, of a scale of 110; the net stays 0.
+    color = ["exports a", "exports b", "imports a", "imports b"]
+    baseline = frame([-50.0, -50.0, 50.0, 50.0], x=[1] * 4, color=color)
+    current = frame([-55.0, -55.0, 55.0, 55.0], x=[1] * 4, color=color)
+    change = compare(baseline, current, "value", [], "color")
+    assert (change.magnitude, change.where) == (pytest.approx(10 / 110), {"x": 1})
+
+
+def test_layers_crossing_zero_move_their_amounts_and_name_the_stack() -> None:
+    # Three layers turn from 1 to -0.5: each row and the negative sum change by 1.5, the positive
+    # sum by 3, of a scale of 6, the positive stack before.
+    color = ["a", "b", "c", "imports"]
+    baseline = frame([1.0, 1.0, 1.0, 3.0], x=[1] * 4, color=color)
+    current = frame([-0.5, -0.5, -0.5, 3.0], x=[1] * 4, color=color)
+    change = compare(baseline, current, "value", [], "color")
+    assert (change.magnitude, change.where) == (pytest.approx(0.5), {"x": 1})
+
+
+def test_where_names_the_stack_by_its_panel() -> None:
+    # World's imports grow by 10 of 1010; EUR's exports by 1 each, their stack by 2 of 10. In
+    # panels, EUR's stack changed most; on World's scale, shared without panels, World's imports.
+    keys = {
+        "x": [1] * 6,
+        "region": ["eur"] * 3 + ["world"] * 3,
+        "color": ["exports", "imports", "re-exports"] * 2,
+    }
+    baseline = frame([-4.0, 10.0, -4.0, -1000.0, 1000.0, 0.0], **keys)
+    current = frame([-5.0, 10.0, -5.0, -1000.0, 1010.0, 0.0], **keys)
+    panels = compare(baseline, current, "value", ["region"], "color")
+    assert (panels.magnitude, panels.where) == (pytest.approx(0.2), {"x": 1, "region": "eur"})
+    shared = compare(baseline, current, "value", [], "color")
+    where = {"x": 1, "region": "world", "color": "imports"}
+    assert (shared.magnitude, shared.where) == (pytest.approx(10 / 1010), where)
+
+
 def test_panels_have_scales_of_their_own() -> None:
     baseline = frame([1.0, 100.0], x=[1, 1], region=["a", "b"])
     current = frame([1.1, 100.0], x=[1, 1], region=["a", "b"])

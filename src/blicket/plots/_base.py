@@ -77,8 +77,9 @@ class PlotType(ABC):
 class BuiltinPlotType(PlotType):
     """The built-ins declare their channels and share ``controls`` and ``diff``.
 
-    ``stacked`` says that the layers of the ``color`` channel are stacked, so ``diff`` measures
-    against the height of the stacks and compares their sums as well.
+    ``stacked`` says that the layers of the ``color`` channel are stacked, positive values up and
+    negative ones down, so ``diff`` measures against the height of the stacks and compares their
+    positive and negative sums as well (see ``compare``).
     """
 
     stacked: ClassVar[bool] = False

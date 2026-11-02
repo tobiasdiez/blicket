@@ -232,6 +232,13 @@ export default {
   their change against the baseline is drawn, in the charts under the chart; a browser half may
   later declare that too, so that a project plot type opts into those charts through the
   contract.
+- Amendment of 2026-11-02: the stacked built-ins stack positive values up from zero and negative
+  ones down at each x of a panel, as Vega's zero offset does. Since Vega stacks a zero on the
+  positive side, a stacked area stacks a computed value: a missing x or value of a layer is 0, and
+  a zero of a layer that is never positive in its panel, and negative at least once, is the
+  negative number closest to zero, so it lies at the running sum of the negative layers instead of
+  at the top of the positive ones; the baseline's faded stack and the current lines on top of it do
+  the same. A layer with values of both signs stacks each value by its sign.
 
 ## Change detection, as implemented by the built-in diff routine
 

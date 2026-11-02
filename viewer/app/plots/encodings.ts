@@ -176,7 +176,7 @@ export function ghost(layer: Spec, d: Dimension | null, channel: 'strokeOpacity'
 }
 
 // A field of the row, and its number as a tooltip shows it, in a Vega expression.
-const datum = (name: string) => `datum[${JSON.stringify(name)}]`
+export const datum = (name: string) => `datum[${JSON.stringify(name)}]`
 const text = (name: string, quantity: Quantity = 'measure') => `${PER_VALUE}(${datum(name)}${quantity === 'measure' ? '' : `, '${quantity}'`})`
 
 /**

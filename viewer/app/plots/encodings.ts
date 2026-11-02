@@ -3,12 +3,16 @@
 import * as vega from 'vega'
 import type { Dimension } from '../lib/manifest'
 import { display, formatter, formatValue, isTime, numberFormat, type Cell } from '../lib/table'
-import { BASELINE_VALUE, type Channels, combinations, from, labelOf, magnitude, PANEL, plain, plotWidth, SEPARATOR, SERIES, seriesDimensions, type Spec } from './layout'
+import { BASELINE_VALUE, type Channels, combinations, type FrameChannels, from, labelOf, magnitude, PANEL, plain, plotWidth, SEPARATOR, SERIES, seriesDimensions, type Spec } from './layout'
 import { CATEGORICAL, GHOST, INK, SLOTS } from './theme'
 import type { PlotArgs, Quantity, Theme } from './types'
 
+/** The size of a scatter's point and of the dot on a hovered point, in px². */
+export const POINT_SIZE = 64
 // Line types, and lines whose colour repeats past the slots, are told apart by these.
 const DASHES = [[1, 0], [6, 3], [2, 3], [8, 3, 2, 3]]
+// The line types of points, which have no dash, are told apart by these.
+const SHAPES = ['circle', 'square', 'triangle-up', 'diamond', 'triangle-down', 'cross']
 const FADED = 0.15
 // The opacity of the baseline's marks of the series a legend click leaves out.
 const GHOST_FADED = 0.1
@@ -58,9 +62,8 @@ function xEncoding(d: Dimension, width: number): Spec {
     const values = domain(d)
     return { ...common, type: 'nominal', sort: values, scale: { domain: values }, axis: { labelAngle: 0, labelOverlap: true } }
   }
-  // About one tick per 90 px, the first and last label inside the plot.
-  const count = Math.max(2, Math.round(width / 90))
-  const ticks = { tickCount: count, labelFlush: true, labelOverlap: true }
+  const ticks = xTicks(width)
+  const count = ticks.tickCount
   if (d.dtype === 'date') {
     // Days, never hours, while the span is short enough for day ticks.
     const times = d.values.map(value => Date.parse(String(value)))
@@ -72,6 +75,11 @@ function xEncoding(d: Dimension, width: number): Spec {
   return { ...common, type: 'quantitative', scale: { nice: false, zero: false }, axis: { ...ticks, format: 'd', tickMinStep: 1 } }
 }
 
+/** The ticks of a continuous x axis `width` wide: about one per 90 px, the first and last label inside the plot. */
+export function xTicks(width: number): { tickCount: number, labelFlush: boolean, labelOverlap: boolean } {
+  return { tickCount: Math.max(2, Math.round(width / 90)), labelFlush: true, labelOverlap: true }
+}
+
 /** The y axis title: the measure with its unit, or the unit alone for the generic `value`. */
 export function yTitle(measure: string, unit: string | null): string {
   if (!unit) return measure
@@ -79,18 +87,20 @@ export function yTitle(measure: string, unit: string | null): string {
 }
 
 /** The name of what y shows: the measure, or its change. */
-export function measureName(ch: Channels, quantity: Quantity): string {
+export function measureName(ch: FrameChannels, quantity: Quantity): string {
   if (quantity === 'change') return 'change'
   return quantity === 'relative' ? 'relative change' : ch.y
 }
 
 /**
  * The y encoding of the measure, stacked or not, with the unit in its title and a number format
- * for the largest value it shows: of a row, or of a stack per x and panel. A change's axis draws
- * its zero in the ink of the tick labels, so the sign reads, and a relative change's is in percent.
+ * for the largest value it shows: of a row, or of a stack per x and panel; only a chart over a
+ * dimension on x stacks. A change's axis draws its zero in the ink of the tick labels, so the sign
+ * reads, and a relative change's is in percent.
  */
-export function yAxis(args: PlotArgs, ch: Channels, stacked: boolean, quantity: Quantity = 'measure'): Spec {
-  const format = quantity === 'relative' ? RELATIVE_FORMAT : numberFormat(magnitude(args, ch.y, stacked ? [ch.x.name, ...args.state.splits] : null))
+export function yAxis(args: PlotArgs, ch: FrameChannels, stacked: boolean, quantity: Quantity = 'measure'): Spec {
+  const stacks = stacked && ch.x ? [ch.x.name, ...args.state.splits] : null
+  const format = quantity === 'relative' ? RELATIVE_FORMAT : numberFormat(magnitude(args, ch.y, stacks))
   const ink = INK[args.theme]
   const zero = quantity === 'measure' ? {} : { gridColor: { condition: { test: 'datum.value === 0', value: ink.tick }, value: ink.grid } }
   return {
@@ -149,6 +159,37 @@ export function linetypeEncoding(d: Dimension, width: number): Spec {
   return dashEncoding(d, d.values.map((_, i) => dash(i)), width)
 }
 
+/** The point shape of the `i`-th value of a line type, or of the `i`-th round of hues. */
+function shape(i: number): string {
+  return SHAPES[i % SHAPES.length]!
+}
+
+/** The shape encoding of `d`, one of `shapes` per value in display order, with the `legend`'s properties. */
+function shapeScale(d: Dimension, shapes: string[], legend: Spec): Spec {
+  const values = domain(d)
+  return { field: field(d.name), type: 'nominal', sort: values, scale: { domain: values, range: shapes }, legend: { title: d.name, ...legend } }
+}
+
+/**
+ * The line type encoding of points: a shape per value in display order, repeating past the shapes.
+ * Its legend draws the shapes in the muted ink: beside a colour legend, which shows the points'
+ * colours, so that the shapes read as shapes only; without a colour channel, every point has the
+ * first slot's colour, which the legend leaves out.
+ */
+export function shapeEncoding(d: Dimension, theme: Theme, width: number): Spec {
+  return shapeScale(d, d.values.map((_, i) => shape(i)), { columns: legendColumns(d, width), symbolFillColor: INK[theme].muted })
+}
+
+/**
+ * The shapes of points coloured by `d` whose hues repeat past the slots: a shape per round of hues,
+ * in the colour's legend, as lines get a dash per round; `null` while every value has a hue of its
+ * own.
+ */
+export function roundShapes(d: Dimension, width: number): Spec | null {
+  if (d.values.length <= SLOTS) return null
+  return shapeScale(d, d.values.map((_, i) => shape(Math.floor(i / SLOTS))), { columns: legendColumns(d, width) })
+}
+
 /**
  * The legend highlight's param on `d`, for the first layer that encodes the legend's channel, from
  * which Vega-Lite draws the legend: clicking an entry fades the other series, clicking it again
@@ -175,6 +216,33 @@ export function ghost(layer: Spec, d: Dimension | null, channel: 'strokeOpacity'
   return from('baseline', { ...layer, encoding: { ...(layer.encoding as Spec), [channel]: opacity } })
 }
 
+/** The mark of the dot on a hovered point: filled in its series' colour, ringed in the surface colour. */
+export function hoverDot(theme: Theme): Spec {
+  return { type: 'point', filled: true, size: POINT_SIZE, opacity: 1, stroke: INK[theme].surface, strokeWidth: 2 }
+}
+
+/**
+ * The `detail` encoding that keeps the baseline's lines of each line type apart: they are drawn
+ * solid in their colour, so the lines of one colour would join without it.
+ */
+export function linetypeDetail(ch: FrameChannels): Spec {
+  return ch.linetype ? { detail: { field: field(ch.linetype.name), type: 'nominal' } } : {}
+}
+
+/**
+ * The layers of a chart compared with its baseline: the baseline's `behind` first, then `marks`
+ * and the `hover` layers from the current rows. The legend highlight's param goes with the
+ * legend's channel: on the baseline's layer, which draws the colour, or, without a colour, on the
+ * current marks, which alone draw the line type.
+ */
+export function overBaseline(behind: Spec, marks: Spec, hover: Spec[], ch: FrameChannels): Spec[] {
+  const series = ch.color ?? ch.linetype
+  const current = hover.map(layer => from('current', layer))
+  return ch.color
+    ? [{ ...behind, params: focus(series) }, from('current', marks), ...current]
+    : [behind, from('current', { ...marks, params: focus(series) }), ...current]
+}
+
 // A field of the row, and its number as a tooltip shows it, in a Vega expression.
 const datum = (name: string) => `datum[${JSON.stringify(name)}]`
 const text = (name: string, quantity: Quantity = 'measure') => `${PER_VALUE}(${datum(name)}${quantity === 'measure' ? '' : `, '${quantity}'`})`
@@ -197,6 +265,19 @@ export function shown(args: PlotArgs, measure: string, quantity: Quantity = 'mea
   return args.baseline ? compared(measure, BASELINE_VALUE, SHOWN) : { calculate: text(measure, quantity), as: SHOWN }
 }
 
+/**
+ * The `calculate` of the text that tooltips show for the number in the field `name`, into the
+ * field `as`, with the number in the field `baseline`, if given, where the two read differently.
+ */
+export function numberText(name: string, as: string, baseline: string | null = null): Spec {
+  return baseline ? compared(name, baseline, as) : { calculate: text(name), as }
+}
+
+/** The tooltip entry of a row's panel, when there are panels. */
+export function panelEntry(args: PlotArgs): Spec[] {
+  return args.state.splits.length ? [{ field: PANEL, title: args.state.splits.join(SEPARATOR) }] : []
+}
+
 /** The first tooltip entries of a chart: the x value, and the panel when there are panels. */
 export function tooltipHead(args: PlotArgs, x: Spec, d: Dimension): Spec[] {
   const entry = { field: x.field, title: x.title }
@@ -205,7 +286,7 @@ export function tooltipHead(args: PlotArgs, x: Spec, d: Dimension): Spec[] {
   else if (d.dtype === 'datetime') head = { ...entry, type: 'temporal', timeUnit: 'utcyearmonthdatehoursminutesseconds' }
   else if (d.dtype === 'integer') head = { ...entry, type: 'quantitative', format: 'd' }
   else head = { ...entry, type: 'nominal' }
-  return args.state.splits.length ? [head, { field: PANEL, title: args.state.splits.join(SEPARATOR) }] : [head]
+  return [head, ...panelEntry(args)]
 }
 
 /**

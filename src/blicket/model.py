@@ -6,10 +6,10 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Annotated, Any, Literal, Self
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, computed_field, model_validator
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from blicket.errors import Problem, Source
-from blicket.plots import PlotSpec
+from blicket.plots import PlotSpec, Scale
 from blicket.schema import Control, ControlKind, TableSchema
 
 type Transform = Callable[[Any], Any]
@@ -42,12 +42,18 @@ class Group(BaseModel):
 
 
 class PlotDefinition(BaseModel):
-    """A Blick's plot as recorded: the plot type's name and the mapping of channels to columns."""
+    """A Blick's plot as recorded: the plot type's name, the mapping of channels to columns, and
+    the scales of the channels whose axis is not linear, such as ``{"x": "log"}``.
+
+    ``scales`` is left out of the dump when empty, so a definition without scales dumps as ``type``
+    and ``mapping`` alone.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     type: str
     mapping: dict[str, str]
+    scales: dict[str, Scale] = Field(default={}, exclude_if=lambda scales: not scales)
 
 
 class BlickDefinition(BaseModel):
@@ -162,7 +168,11 @@ class Blick:
             description=self.description,
             unit=self.unit,
             tags=self.tags,
-            plot=PlotDefinition(type=self.plot.plot_type.name, mapping=dict(self.plot.mapping)),
+            plot=PlotDefinition(
+                type=self.plot.plot_type.name,
+                mapping=dict(self.plot.mapping),
+                scales=dict(self.plot.scales),
+            ),
             independent_y=self.independent_y,
             controls=dict(self.controls),
             defaults=dict(self.defaults),

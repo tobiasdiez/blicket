@@ -36,7 +36,7 @@ const strip = computed(() => (change.value && !(change.value.skipped && !change.
 const compare = ref(true)
 // `fileName` names exported images and the CSV file; `chartProps` is what the chart and the
 // change charts are drawn from.
-const { error, baselineFile, baselineError, shown, baseline, baselineWaiting, chartProps, fileName } = useBlickChart(entry, state, change, { compare })
+const { error, baselineFile, baselineError, shown, baseline, baselineWaiting, chartProps, undrawn, leftOut, fileName } = useBlickChart(entry, state, change, { compare })
 
 const tab = useTab()
 
@@ -75,7 +75,7 @@ async function showWhere(next: ControlState) {
 }
 
 function saveCsv() {
-  if (shown.value && schema.value) downloadCsv(shown.value, schema.value, definition.value?.unit ?? null, fileName.value)
+  if (shown.value && schema.value && definition.value) downloadCsv(shown.value, schema.value, definition.value.unit, definition.value.plot.mapping, fileName.value)
 }
 
 // The overview is the one page above a Blick; the group is a label, not a page. On a narrow
@@ -163,13 +163,16 @@ const source = computed(() => (entry.value?.source ? sourceText(entry.value.sour
       <p v-else-if="!shown.length" class="text-sm text-muted">
         No rows for this selection.
       </p>
+      <p v-else-if="tab === 'chart' && undrawn" class="text-sm text-muted">
+        No row of this selection can be drawn; the data tab lists the rows.
+      </p>
       <div v-else-if="tab === 'chart' && chartProps" class="space-y-4">
-        <BlickChart v-bind="chartProps" :name="chartName" />
+        <BlickChart v-bind="chartProps" :name="chartName" :note="leftOut" />
         <template v-if="baseline?.length && !incomparable">
           <BlickChart v-for="kind in CHANGE_KINDS" :key="kind" v-bind="chartProps" :name="fileName" :kind="kind" />
         </template>
       </div>
-      <DataTable v-else :rows="shown" :schema="schema" :unit="definition.unit" />
+      <DataTable v-else :rows="shown" :schema="schema" :unit="definition.unit" :mapping="definition.plot.mapping" />
     </template>
   </div>
 </template>

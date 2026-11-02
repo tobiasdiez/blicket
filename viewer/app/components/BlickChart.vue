@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { YAxis } from '~/lib/controls'
-import type { TableSchema } from '~/lib/manifest'
+import type { Scale, TableSchema } from '~/lib/manifest'
 import type { Row } from '~/lib/table'
 import { PLOT_TYPES } from '~/plots'
 import { changePlot, exportName } from '~/plots/change'
@@ -11,6 +11,8 @@ const props = defineProps<{
   /** The name exported images get, without extension; a change chart's adds the change. */
   name: string
   mapping: Record<string, string>
+  /** The scales of the channels whose axis is not linear; without it, every axis is linear. */
+  scales?: Record<string, Scale>
   schema: TableSchema
   unit: string | null
   rows: Row[]
@@ -22,6 +24,8 @@ const props = defineProps<{
   kind?: ChangeKind
   /** A small chart, without legend and export menu; never a change chart. */
   compact?: boolean
+  /** What the chart says under itself, such as how many rows it leaves out. */
+  note?: string
 }>()
 
 const container = useTemplateRef<HTMLElement>('container')
@@ -58,6 +62,7 @@ async function draw() {
       table: props.rows,
       schema: props.schema,
       mapping: props.mapping,
+      scales: props.scales,
       unit: props.unit,
       state: { splits: props.splits, y: props.y },
       baseline: props.baseline,
@@ -82,7 +87,7 @@ watch(width, (current) => {
 })
 
 onMounted(schedule)
-watch(() => [props.rows, props.baseline, props.splits, props.y, props.type, props.mapping, props.unit, props.compact, theme.value], async () => {
+watch(() => [props.rows, props.baseline, props.splits, props.y, props.type, props.mapping, props.scales, props.unit, props.compact, theme.value], async () => {
   failure.value = null
   await nextTick()
   schedule()
@@ -100,6 +105,11 @@ onBeforeUnmount(() => {
       This viewer has no browser half for the plot type <code>{{ type }}</code>; the data tab shows the table.
     </div>
     <UAlert v-else-if="failure" color="error" variant="subtle" title="The chart cannot be drawn" :description="failure" />
-    <div v-else ref="container" class="w-full" />
+    <template v-else>
+      <div ref="container" class="w-full" />
+      <p v-if="note" class="mt-1 text-xs text-muted">
+        {{ note }}
+      </p>
+    </template>
   </div>
 </template>

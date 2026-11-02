@@ -83,7 +83,7 @@ def steel_by_process(run):
     return run["flows"]
 ```
 
-`unit=` names the unit of the measure; the viewer puts it on the y axis and in the tooltips.
+`unit=` names the unit of the measure on `y`; the viewer puts it on the y axis and in the tooltips.
 `independent_y=True` is for Blicks whose panels differ by orders of magnitude: each panel of a
 split then gets its own y axis by default; otherwise the panels share one, and the viewer's toggle
 changes either. Both are part of the Blick's definition in the manifest.
@@ -102,6 +102,39 @@ names the project directory instead. `-v` shows tracebacks, `--json` prints the 
 Exit codes, for every command: 0 success (for `serve` and `dev`, stopped with Ctrl-C; for `diff`,
 changes found included), 1 for `check` when a Blick is flagged, 2 errors of any kind, a Blick that
 fails to build included, except in `dev`, which reports it and goes on.
+
+### Plot types
+
+The built-in plot types in `bk.plots` bind table columns to their channels, `x` and `y` always,
+the others optional:
+
+- `line(x, y, color, linetype)`: lines of the measure `y` over the dimension `x`, one per colour
+  and line type value.
+- `stacked_area(x, y, color)`: areas of `y` over `x`, one stacked layer per colour value.
+- `bar(x, y, color)` and `stacked_bar(x, y, color)`: bars of `y` at each value of `x`, one per
+  colour value, side by side or stacked.
+- `scatter(x, y, color, linetype, along, x_scale, y_scale)`: the measure `y` against the measure
+  `x`, both float columns (an integer column needs `measures=`), a point per row, coloured by
+  `color` and shaped by `linetype`. With `along` naming a dimension, the points of each series are
+  connected in the display order of its values instead, a trajectory over time or a curve over
+  grid points, dashed by `linetype`. Rows with a null `x` or `y` are left out, and the viewer says
+  how many under the chart. `x_scale="log"` or `y_scale="log"` draws that axis logarithmic,
+  without the values at or below zero; the scales are part of the definition. `diff` and `check`
+  compare `y` row by row, as for a line; a change of `x` alone is not flagged.
+
+```python
+@bk.blick(
+    title="In-use stock per capita over GDP per capita",
+    unit="t per person",
+    plot=bk.plots.scatter(
+        x="GDP per capita", y="value", color="region", along="year", x_scale="log"
+    ),
+)
+def stock_over_gdp(run):
+    return run["stock_per_capita"]  # year, region, GDP per capita and value
+```
+
+The unit is the unit of `y`; a scatter's `x` is a measure of its own, named by its column.
 
 ## Building a run
 

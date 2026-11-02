@@ -10,6 +10,7 @@ import polars as pl
 
 from blicket.errors import DefinitionError, did_you_mean
 from blicket.plots._diff import compare
+from blicket.plots._scales import SCALES, Scale
 from blicket.schema import Change, Control, TableSchema
 
 ChannelKind = Literal["dimension", "measure"]
@@ -101,11 +102,17 @@ class BuiltinPlotType(PlotType):
         panels: Sequence[str],
     ) -> Change:
         """Compare the measure on ``y``, as stacks of the ``color`` layers for a stacked type; the
-        other channels play no part."""
+        other channels play no part, and the measures on them, such as a scatter's ``x``, are
+        not compared."""
         if "y" not in mapping:
             raise ValueError(f"the mapping binds no column to y, which {self.name} needs")
         stacked_by = mapping.get("color") if self.stacked else None
-        return compare(baseline, current, mapping["y"], panels, stacked_by)
+        measures = [
+            mapping[c.name]
+            for c in self.channels
+            if c.kind == "measure" and c.name != "y" and c.name in mapping
+        ]
+        return compare(baseline, current, mapping["y"], panels, stacked_by, measures=measures)
 
 
 def _unknown_channel(plot_type: str, channel: str, known: Sequence[str]) -> str:
@@ -119,14 +126,16 @@ def _unknown_channel(plot_type: str, channel: str, known: Sequence[str]) -> str:
 
 @dataclass(frozen=True)
 class PlotSpec:
-    """A plot type with a mapping from its channels to table columns.
+    """A plot type with a mapping from its channels to table columns, and the scales of their axes.
 
-    The mapping is checked against the channels on construction; the columns themselves are not
-    checked here.
+    The mapping and the scales are checked against the channels on construction; the columns
+    themselves are not checked here. A scale names a channel the mapping binds. ``linear``, every
+    axis's default, is left out of ``scales``, so a spec that names it equals one that does not.
     """
 
     plot_type: PlotType
     mapping: Mapping[str, str] = field(default_factory=dict)
+    scales: Mapping[str, Scale] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.plot_type, PlotType):
@@ -154,9 +163,38 @@ class PlotSpec:
                     f"type {name}; bind each column to one channel"
                 )
             seen[column] = channel
+        for channel, scale in self.scales.items():
+            _check_scale(name, channel, scale, known, mapping)
+        scales = {channel: scale for channel, scale in self.scales.items() if scale != "linear"}
         object.__setattr__(self, "mapping", MappingProxyType(mapping))
+        object.__setattr__(self, "scales", MappingProxyType(scales))
 
 
-def make_spec(plot_type: PlotType, **mapping: str | None) -> PlotSpec:
-    """Build a spec from factory arguments, leaving out the channels passed as ``None``."""
-    return PlotSpec(plot_type, {k: v for k, v in mapping.items() if v is not None})
+def _check_scale(
+    plot_type: str, channel: str, scale: object, known: Sequence[str], mapping: Mapping[str, str]
+) -> None:
+    """Raise ``DefinitionError`` unless ``scale`` is a scale and ``channel`` a bound channel."""
+    if channel not in known:
+        raise DefinitionError(_unknown_channel(plot_type, channel, known))
+    if scale not in SCALES:
+        raise DefinitionError(
+            f"{channel}_scale={scale!r} is no scale of {channel} in plot type {plot_type}; it "
+            f"takes {' or '.join(SCALES)}"
+        )
+    if channel not in mapping:
+        raise DefinitionError(
+            f"channel {channel!r} of plot type {plot_type} has a scale but no column; map it to a "
+            "column or drop the scale"
+        )
+
+
+def make_spec(
+    plot_type: PlotType, *, scales: Mapping[str, Scale | None] | None = None, **mapping: str | None
+) -> PlotSpec:
+    """Build a spec from factory arguments, leaving out the channels and scales passed as
+    ``None``."""
+    return PlotSpec(
+        plot_type,
+        {k: v for k, v in mapping.items() if v is not None},
+        {k: v for k, v in (scales or {}).items() if v is not None},
+    )

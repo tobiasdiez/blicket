@@ -4,10 +4,11 @@ import { parse, View } from 'vega'
 import type { Dimension, TableSchema } from '../app/lib/manifest'
 import type { Row } from '../app/lib/table'
 import { barSpec } from '../app/plots/bar'
-import { nothingToCompare, PLOT_TYPES } from '../app/plots'
+import { leftOutNote, nothingToCompare, nothingToDraw, PLOT_TYPES } from '../app/plots'
 import { changeRows, changeSpec, comparable, exportName } from '../app/plots/change'
 import { magnitude } from '../app/plots/layout'
 import { lineSpec } from '../app/plots/line'
+import { scatterSpec } from '../app/plots/scatter'
 import { stackedAreaSpec } from '../app/plots/stacked_area'
 import { CATEGORICAL, INK } from '../app/plots/theme'
 import type { ChangeKind, PlotArgs, Theme } from '../app/plots/types'
@@ -53,7 +54,27 @@ function args(dimensions: Dimension[], mapping: Record<string, string>, options:
   }
 }
 
+/**
+ * `plotArgs` of a chart over x made a scatter's: the dimension on x becomes the one its points
+ * connect along, and the measure `GDP` goes on x, `gdp` of the row's position in its table, by
+ * default 1,000 times one more than it, in the baseline's rows too.
+ */
+function asScatter(plotArgs: PlotArgs, gdp: (i: number) => number | null = i => (i + 1) * 1e3): PlotArgs {
+  const withGdp = (rows: Row[]) => rows.map((row, i) => ({ ...row, GDP: gdp(i) }))
+  return {
+    ...plotArgs,
+    table: withGdp(plotArgs.table),
+    baseline: plotArgs.baseline && withGdp(plotArgs.baseline),
+    schema: { ...plotArgs.schema, measures: [{ name: 'GDP', dtype: 'float' }, ...plotArgs.schema.measures] },
+    mapping: { ...plotArgs.mapping, x: 'GDP', along: plotArgs.mapping.x! },
+  }
+}
+
+/** `plotArgs` of a chart over x as the arguments of the plot `type`. */
+const argsOf = (type: string, plotArgs: PlotArgs) => (type === 'scatter' ? asScatter(plotArgs) : plotArgs)
+
 const line = (plotArgs: PlotArgs, width = 800): Any => lineSpec(plotArgs, width) as Any
+const scatter = (plotArgs: PlotArgs, width = 800): Any => scatterSpec(plotArgs, width) as Any
 const area = (plotArgs: PlotArgs, width = 800): Any => stackedAreaSpec(plotArgs, width) as Any
 const bars = (plotArgs: PlotArgs, stacked: boolean, width = 800): Any => barSpec(plotArgs, width, stacked) as Any
 
@@ -67,9 +88,10 @@ const moment: Dimension = { name: 'Moment', dtype: 'datetime', values: ['2020-01
 
 /**
  * Compile and run the spec headless; returns the Vega-Lite warnings, the compiled Vega spec, the
- * rows of every dataset, the domains of the x and y scales, and the drawn bars.
+ * rows of every dataset, the domains of the x and y scales, the drawn bars, the drawn lines, each
+ * the list of its points, and the texts of the axis labels.
  */
-async function run(spec: Any): Promise<{ warnings: string[], vega: Any, data: Record<string, Any[]>, x: unknown[], y: unknown[] | undefined, rects: Any[] }> {
+async function run(spec: Any): Promise<{ warnings: string[], vega: Any, data: Record<string, Any[]>, x: unknown[], y: unknown[] | undefined, rects: Any[], lines: Any[][], labels: string[] }> {
   const warnings: string[] = []
   const logger: Any = { level: () => logger, warn: (...m: unknown[]) => warnings.push(m.join(' ')), info: () => logger, debug: () => logger, error: (e: unknown) => { throw e } }
   const vega = compile(spec as never, { logger: logger as never }).spec as Any
@@ -80,13 +102,17 @@ async function run(spec: Any): Promise<{ warnings: string[], vega: Any, data: Re
   // A facet with independent y axes has no top-level y scale.
   const y = vega.scales.some((scale: Any) => scale.name === 'y') ? view.scale('y').domain() : undefined
   const rects: Any[] = []
+  const lines: Any[][] = []
+  const labels: string[] = []
   const visit = (node: Any) => {
     if (node.marktype === 'rect' && node.role === 'mark') rects.push(...node.items)
+    if (node.marktype === 'line' && node.role === 'mark' && node.items.length) lines.push(node.items)
+    if (node.role === 'axis-label') labels.push(...node.items.map((item: Any) => item.text))
     for (const item of node.items ?? []) visit(item)
   }
   visit((view.scenegraph() as Any).root)
   view.finalize()
-  return { warnings, vega, data, x, y, rects }
+  return { warnings, vega, data, x, y, rects, lines, labels }
 }
 
 /** The rows of the dataset with a transform that has the properties of `transform`, such as `{ type: 'pivot' }`. */
@@ -573,7 +599,7 @@ describe('the change against the baseline', () => {
     const plotArgs = args([year, region, scenario], { x: 'Time', color: 'Region' }, { splits: ['Scenario'], baseline: twoThirdsButFifth })
     const renamed = { ...plotArgs, baseline: plotArgs.baseline!.map(row => ({ ...row, Scenario: `${row.Scenario} (old)` })) }
     for (const type of Object.keys(PLOT_TYPES)) {
-      expect((await run(change(renamed, type))).warnings).toEqual([])
+      expect((await run(change(argsOf(type, renamed), type))).warnings).toEqual([])
     }
   })
 
@@ -628,9 +654,9 @@ describe('the change against the baseline', () => {
       const plotArgs = args([year, region, latest], { x: 'Time', color: 'Region' }, { splits: ['Scenario'], y, baseline: twoThirdsButFifth })
       const lacking = { ...plotArgs, baseline: plotArgs.baseline!.filter(row => row.Scenario !== 'new') }
       for (const type of Object.keys(PLOT_TYPES)) {
-        const main = await run((type.endsWith('bar') ? bars(lacking, type === 'stacked_bar') : line(lacking)))
+        const main = await run(SPECS[type]!(argsOf(type, lacking), 800))
         for (const kind of ['change', 'relative'] as const) {
-          const result = await run(change(lacking, type, kind))
+          const result = await run(change(argsOf(type, lacking), type, kind))
           expect([result.warnings, result.data.facet_domain!.map(row => row.__panel)]).toEqual([[], main.data.facet_domain!.map(row => row.__panel)])
         }
       }
@@ -641,7 +667,7 @@ describe('the change against the baseline', () => {
     const plotArgs = args([year, region], { x: 'Time', color: 'Region' }, { baseline: twoThirdsButFifth })
     const renamed = { ...plotArgs, baseline: plotArgs.baseline!.map(row => ({ ...row, Region: `${row.Region} (old)` })) }
     for (const type of Object.keys(PLOT_TYPES)) {
-      for (const kind of ['change', 'relative'] as const) expect((await run(change(renamed, type, kind))).y).toEqual([0, 0])
+      for (const kind of ['change', 'relative'] as const) expect((await run(change(argsOf(type, renamed), type, kind))).y).toEqual([0, 0])
     }
   })
 
@@ -661,9 +687,342 @@ describe('the change against the baseline', () => {
     const plotArgs = args([year, region, scenario], { x: 'Time', color: 'Region' }, { splits: ['Scenario'], baseline: twoThirdsButFifth })
     for (const type of Object.keys(PLOT_TYPES)) {
       for (const kind of ['change', 'relative'] as const) {
-        expect((await run(change(plotArgs, type, kind))).warnings).toEqual([])
+        expect((await run(change(argsOf(type, plotArgs), type, kind))).warnings).toEqual([])
       }
     }
+  })
+})
+
+/** A scatter of `value` against `GDP` per region, along the years; `gdp` gives the GDP of the `i`-th row. */
+function trajectories(options: Options = {}, gdp?: (i: number) => number | null): PlotArgs {
+  return asScatter(args([year, region], { x: 'Time', color: 'Region' }, options), gdp)
+}
+
+/** A scatter of `value` against `GDP` without `along`: a point per region and scenario. */
+function points(options: Options = {}): PlotArgs {
+  return { ...asScatter(args([region, scenario], { x: 'Region' }, options)), mapping: { x: 'GDP', y: 'value', color: 'Region', linetype: 'Scenario' } }
+}
+
+/** `plotArgs` with the baseline's GDP twice the current one: x moved between the runs. */
+function movedX(plotArgs: PlotArgs): PlotArgs {
+  return { ...plotArgs, baseline: plotArgs.baseline!.map(row => ({ ...row, GDP: Number(row.GDP) * 2 })) }
+}
+
+/** The points of each drawn line by their field `name`, the lines in the order Vega draws them. */
+const traced = (lines: Any[][], name: string) => lines.map(drawn => drawn.map(point => point.datum[name]))
+/** The points of each drawn line by their field `name`, by the line's region. */
+const byRegion = (lines: Any[][], name: string) => Object.fromEntries(lines.map(drawn => [drawn[0]!.datum.Region, drawn.map(point => point.datum[name])]))
+/** The type of the compiled scale `name`. */
+const scaleType = (result: { vega: Any }, name: string) => result.vega.scales.find((scale: Any) => scale.name === name).type
+
+describe('scatter', () => {
+  it('puts both measures on axes not forced to zero, the unit on y only', async () => {
+    const spec = scatter(trajectories({ unit: 't per person' }))
+    expect([spec.encoding.x.title, spec.encoding.y.title]).toEqual(['GDP', 't per person'])
+    const result = await run(spec)
+    expect(result.warnings).toEqual([])
+    // GDP runs from 1k to 9k, the value from 0 to 12k.
+    expect([(result.x[0] as number) > 0, scaleType(result, 'x'), scaleType(result, 'y')]).toEqual([true, 'linear', 'linear'])
+  })
+
+  it('connects the points of a series in the display order of the along dimension', async () => {
+    const plotArgs = asScatter(args([{ ...year, values: [2022, 2020, 2021] }, region], { x: 'Time', color: 'Region' }))
+    const result = await run(scatter({ ...plotArgs, table: plotArgs.table.toReversed() }))
+    expect(result.warnings).toEqual([])
+    expect(traced(result.lines, 'Time')).toEqual([[2022, 2020, 2021], [2022, 2020, 2021], [2022, 2020, 2021]])
+  })
+
+  it('connects along a time dimension and writes its values in the tooltip as the viewer does', async () => {
+    const result = await run(scatter(asScatter(args([moment, region], { x: 'Moment', color: 'Region' }))))
+    expect(result.warnings).toEqual([])
+    expect(result.lines.length).toBe(3)
+    expect(rowsAfter(result, { as: '__x' }).slice(0, 2).map(row => row.__text_along)).toEqual(['2020-01-01 00:00:00 UTC', '2020-01-01 00:00:00 UTC'])
+  })
+
+  it('dashes the line type along a dimension, the hues repeating past eight with a dash', async () => {
+    const typed = scatter(asScatter(args([year, region, scenario], { x: 'Time', color: 'Region', linetype: 'Scenario' })))
+    expect(layers(typed)[0].encoding.strokeDash.scale.domain).toEqual(['low', 'high'])
+    const crowded = scatter(asScatter(args([year, many], { x: 'Time', color: 'Polymer' })))
+    expect(layers(crowded)[0].encoding.strokeDash.scale.range[8]).not.toEqual(layers(crowded)[0].encoding.strokeDash.scale.range[0])
+    expect((await run(typed)).warnings).toEqual([])
+    expect((await run(crowded)).warnings).toEqual([])
+  })
+
+  it('draws filled points without along, a shape per line type', async () => {
+    const spec = scatter(points())
+    const marks = layers(spec)[0]
+    expect([marks.mark.type, marks.encoding.shape.scale.range]).toEqual(['point', ['circle', 'square']])
+    // The shapes have no colour of their own; the legend draws them in the muted ink of the theme.
+    expect(layers(scatter(points({ theme: 'dark' })))[0].encoding.shape.legend.symbolFillColor).toBe(INK.dark.muted)
+    const result = await run(spec)
+    expect([result.warnings, result.vega.legends.map((legend: Any) => legend.title)]).toEqual([[], ['Region', 'Scenario']])
+  })
+
+  it('gives points a shape per round of hues past the colour slots, in the colour\'s legend', async () => {
+    const plotArgs = { ...asScatter(args([many, scenario], { x: 'Scenario' })), mapping: { x: 'GDP', y: 'value', color: 'Polymer' } }
+    const shape = layers(scatter(plotArgs))[0].encoding.shape
+    expect([shape.scale.range[0], shape.scale.range[7], shape.scale.range[8]]).toEqual(['circle', 'circle', 'square'])
+    const result = await run(scatter({ ...plotArgs, table: plotArgs.table.filter(row => row.Scenario === 'low') }))
+    expect([result.warnings, result.vega.legends.map((legend: Any) => legend.title)]).toEqual([[], ['Polymer']])
+    // Within the slots, the hues tell the points apart.
+    expect(layers(scatter(points()))[0].encoding.shape.field).toBe('Scenario')
+    expect(layers(scatter({ ...points(), mapping: { x: 'GDP', y: 'value', color: 'Region' } }))[0].encoding.shape).toBeUndefined()
+  })
+
+  it('draws one series in the first colour without a colour or line type', async () => {
+    const plotArgs = { ...trajectories(), table: trajectories().table.filter(row => row.Region === 'USA'), mapping: { x: 'GDP', y: 'value', along: 'Time' } }
+    const result = await run(scatter(plotArgs))
+    expect([result.warnings, result.vega.legends, result.lines.length]).toEqual([[], undefined, 1])
+    expect(result.lines[0]![0]!.stroke).toBe(CATEGORICAL.light[0])
+  })
+
+  it('tells the series of a line type apart without a colour, and highlights them from its legend', async () => {
+    const alongs: Record<string, string>[] = [{ along: 'Time' }, {}]
+    for (const along of alongs) {
+      const plotArgs: PlotArgs = { ...asScatter(args([year, scenario], { x: 'Time' })), mapping: { x: 'GDP', y: 'value', linetype: 'Scenario', ...along } }
+      for (const spec of [scatter(plotArgs), scatter({ ...plotArgs, baseline: plotArgs.table })]) {
+        const result = await run(spec)
+        expect([result.warnings, result.vega.legends.map((legend: Any) => legend.title)]).toEqual([[], ['Scenario']])
+        expect(result.vega.signals.map((signal: Any) => signal.name)).toContain('focus_Scenario_legend')
+      }
+    }
+  })
+
+  it('leaves out a row without x or y, and connects its neighbours', async () => {
+    // The fifth row, EUR in 2021, has no GDP; the first, USA in 2020, a value of 0, which is drawn.
+    const result = await run(scatter(trajectories({}, i => (i === 4 ? null : (i + 1) * 1e3))))
+    expect(result.warnings).toEqual([])
+    expect(byRegion(result.lines, 'Time')).toEqual({ USA: [2020, 2021, 2022], EUR: [2020, 2022], CHA: [2020, 2021, 2022] })
+  })
+
+  it('draws a log axis as the definition chooses, its values at or below zero missing', async () => {
+    // GDP is none, 0 and negative in the first three rows, 2020; the value is 0 in the first.
+    const plotArgs = { ...trajectories({}, i => (i < 3 ? [null, 0, -5][i]! : (i + 1) * 1e3)), scales: { x: 'log', y: 'log' } as const }
+    const result = await run(scatter(plotArgs))
+    expect([result.warnings, scaleType(result, 'x'), scaleType(result, 'y')]).toEqual([[], 'log', 'log'])
+    expect(byRegion(result.lines, 'Time')).toEqual({ USA: [2021, 2022], EUR: [2021, 2022], CHA: [2021, 2022] })
+    // Not rounded out to powers of ten: the axis ends at the values.
+    expect(result.x).toEqual([4e3, 9e3])
+    // Linear, the axes show 0 and negative values.
+    const linear = await run(scatter({ ...plotArgs, scales: {} }))
+    expect([linear.warnings, byRegion(linear.lines, 'Time')]).toEqual([[], { USA: [2021, 2022], EUR: [2020, 2021, 2022], CHA: [2020, 2021, 2022] }])
+  })
+
+  it('says a log axis in its title, and keeps about one x tick per 90 px', async () => {
+    const plotArgs = { ...trajectories({ unit: 't' }), scales: { x: 'log', y: 'log' } as const }
+    const spec = scatter(plotArgs, 800)
+    expect([spec.encoding.x.title, spec.encoding.y.title]).toEqual(['GDP (log scale)', 't (log scale)'])
+    // x has the ticks of a linear x axis, so its labels do not crowd; y a tick per 40 px of its 320.
+    expect([spec.encoding.x.axis.tickCount, spec.encoding.y.axis.tickCount]).toEqual([scatter({ ...plotArgs, scales: {} }, 800).encoding.x.axis.tickCount, 8])
+    const split = scatter(asScatter(args([year, region, scenario], { x: 'Time', color: 'Region' }, { splits: ['Scenario'] })), 800)
+    expect(split.spec.encoding.x.title).toBe('GDP')
+    const logged = scatter({ ...asScatter(args([year, region, scenario], { x: 'Time', color: 'Region' }, { splits: ['Scenario'] })), scales: { x: 'log' } }, 800)
+    expect(logged.spec.encoding.x.title).toBe('GDP (log)')
+    expect((await run(logged)).warnings).toEqual([])
+  })
+
+  it('labels a log axis value by value, as tooltips write numbers', async () => {
+    const plotArgs = { ...trajectories({ value: i => 10 ** (i / 2 - 2) }), scales: { y: 'log' } as const }
+    const result = await run(scatter(plotArgs))
+    expect(result.warnings).toEqual([])
+    expect(result.labels).toEqual(expect.arrayContaining(['0.01', '0.1', '1', '10', '100']))
+    expect(result.labels).not.toContain('10m')
+  })
+
+  it('keeps points clear of the frame, on a log axis too', async () => {
+    const scaled: PlotArgs['scales'][] = [{}, { x: 'log', y: 'log' }]
+    for (const scales of scaled) {
+      const plotArgs = { ...points({ value: i => (i + 1) * 1e3 }), scales }
+      const gdp = plotArgs.table.map(row => Number(row.GDP))
+      const result = await run(scatter(plotArgs))
+      expect(result.warnings).toEqual([])
+      expect([(result.x[0] as number) < Math.min(...gdp), (result.x[1] as number) > Math.max(...gdp)]).toEqual([true, true])
+    }
+  })
+
+  it('dots the nearest point, its tooltip naming panel, series, along value, x and y', async () => {
+    const plotArgs = asScatter(args([year, region, scenario], { x: 'Time', color: 'Region' }, { unit: 't', splits: ['Scenario'] }))
+    const hover = layers(scatter(plotArgs)).at(-1)
+    expect(hover.params[0].select.nearest).toBe(true)
+    expect(hover.encoding.tooltip.map((entry: Any) => entry.title)).toEqual(['Scenario', 'Region', 'Time', 'GDP', 't'])
+    const result = await run(scatter(plotArgs))
+    expect(result.warnings).toEqual([])
+    expect(rowsAfter(result, { as: '__x' }).slice(0, 3).map(row => [row.__x, row.__shown])).toEqual([['1k', '0'], ['2k', '1.5k'], ['3k', '3k']])
+  })
+
+  it('highlights a series from the legend', () => {
+    const marks = layers(scatter(trajectories()))[0]
+    expect([marks.params[0].bind, marks.encoding.opacity.condition]).toEqual(['legend', { param: 'focus', value: 1 }])
+  })
+})
+
+describe('the baseline of a scatter', () => {
+  it('lies behind as wide, faded lines at the baseline\'s own x, in the series colours', async () => {
+    const moved = movedX(trajectories({ baseline: sameButFifth }))
+    const [ghost, current] = scatter(moved).layer
+    expect([ghost.transform[0], ghost.mark.strokeWidth, ghost.encoding.strokeOpacity]).toEqual([BASELINE, 6, GHOST])
+    expect(ghost.encoding.color.scale).toEqual(current.encoding.color.scale)
+    expect(current.transform[0]).toEqual(CURRENT)
+    const result = await run(scatter(moved))
+    expect(result.warnings).toEqual([])
+    // The ghost's lines come first, at twice the current GDP.
+    expect(traced(result.lines, 'GDP').slice(0, 3)).toEqual([[2e3, 8e3, 14e3], [4e3, 10e3, 16e3], [6e3, 12e3, 18e3]])
+  })
+
+  it('leaves out of its lines the baseline\'s values a log axis has no place for', async () => {
+    // The baseline's value is 0 in the first row, USA in 2020, and negative in the second, EUR.
+    const plotArgs = { ...trajectories({ baseline: i => (i < 2 ? -i : i * 1e3) }), scales: { y: 'log' } as const }
+    const result = await run(scatter(plotArgs))
+    expect(result.warnings).toEqual([])
+    // The ghost's lines are the wide ones.
+    expect(byRegion(result.lines.filter(drawn => drawn[0]!.strokeWidth === 6), 'Time')).toEqual({ USA: [2021, 2022], EUR: [2021, 2022], CHA: [2020, 2021, 2022] })
+  })
+
+  it('lies behind as wider, faded points without along', async () => {
+    const ghost = layers(scatter(points({ baseline: sameButFifth })))[0]
+    expect([ghost.mark.type, ghost.mark.size, ghost.encoding.fillOpacity]).toEqual(['point', 196, GHOST])
+    expect((await run(scatter(points({ baseline: sameButFifth })))).warnings).toEqual([])
+  })
+
+  it('names the baseline\'s x and y in the tooltip where they differ', async () => {
+    const result = await run(scatter(movedX(trajectories({ baseline: sameButFifth }))))
+    const shown = rowsAfter(result, { as: '__x' })
+    expect(shown.map(row => row.__shown)).toContain('6k (baseline 12k)')
+    expect(shown.slice(0, 2).map(row => row.__x)).toEqual(['1k (baseline 2k)', '2k (baseline 4k)'])
+    expect(rowsAfter(await run(scatter(trajectories({ baseline: sameButFifth }))), { as: '__x' })[0]!.__x).toBe('1k')
+    // Without the baseline's x, its own alone.
+    const noX = trajectories({ baseline: sameButFifth })
+    const withoutX = await run(scatter({ ...noX, baseline: noX.baseline!.map(row => ({ ...row, GDP: null })) }))
+    expect(rowsAfter(withoutX, { as: '__x' }).slice(0, 2).map(row => [row.__x, row.__shown])).toEqual([['1k', '0'], ['2k', '1.5k']])
+  })
+})
+
+/** A scatter compared with a baseline, both axes logarithmic. */
+const compared = (): PlotArgs => ({ ...trajectories({ unit: 't', baseline: twoThirdsButFifth }), scales: { x: 'log', y: 'log' } })
+
+describe('the change of a scatter', () => {
+  it('draws the change of y over x along the same dimension, x on the chart\'s scale and y linear', async () => {
+    for (const kind of ['change', 'relative'] as const) {
+      const result = await run(change(compared(), 'scatter', kind))
+      expect([result.warnings, scaleType(result, 'x'), scaleType(result, 'y'), result.lines.length]).toEqual([[], 'log', 'linear', 3])
+    }
+  })
+
+  it('has the x axis of the chart above, which has a place for a row of no y at the far end of x', async () => {
+    // The third row has a GDP of 5k but no value: the chart above leaves it out, the change chart
+    // draws it, against the baseline's value at 3k.
+    const plotArgs = asScatter(args([year], { x: 'Time' }, { value: i => [10, 20, 30][i]!, baseline: i => [10, 20, 30][i]! }), i => [1e3, 2e3, 3e3][i]!)
+    const current = { ...plotArgs, table: plotArgs.table.map((row, i) => (i === 2 ? { ...row, GDP: 5e3, value: null } : row)) }
+    const above = await run(scatter(current))
+    const under = await run(change(current, 'scatter'))
+    expect([above.x, under.x]).toEqual([[1e3, 5e3], [1e3, 5e3]])
+    expect(traced(under.lines, 'GDP')).toEqual([[1e3, 2e3, 5e3]])
+  })
+
+  it('leaves out of its x axis the x of a row that neither it nor the chart above draws', async () => {
+    // The third row, at a GDP of 100 far below the others, has no value, and no baseline row to
+    // compare with: no chart draws it.
+    const plotArgs = trajectories({ baseline: twoThirdsButFifth }, i => (i === 2 ? 100 : (i + 1) * 1e4))
+    const outlier = { ...plotArgs, table: plotArgs.table.map((row, i) => (i === 2 ? { ...row, value: null } : row)), baseline: plotArgs.baseline!.filter((_, i) => i !== 2) }
+    for (const spec of [scatter(outlier), change(outlier, 'scatter'), scatter({ ...outlier, baseline: null })]) {
+      expect((await run(spec)).x[0]).toBe(1e4)
+    }
+  })
+
+  it('has the x axis of the chart above, though x moved between the runs', async () => {
+    for (const plotArgs of [movedX(compared()), movedX({ ...points({ baseline: twoThirdsButFifth }), scales: { x: 'log' } }), movedX(points({ baseline: twoThirdsButFifth }))]) {
+      const above = await run(scatter(plotArgs))
+      for (const kind of ['change', 'relative'] as const) expect((await run(change(plotArgs, 'scatter', kind))).x).toEqual(above.x)
+    }
+  })
+
+  it('names the baseline\'s x in its tooltips where it differs', async () => {
+    const result = await run(change(movedX(compared()), 'scatter'))
+    expect(rowsAfter(result, { as: '__x' }).slice(0, 2).map(row => row.__x)).toEqual(['1k (baseline 2k)', '2k (baseline 4k)'])
+  })
+
+  it('draws the change of a row only the baseline has at the baseline\'s x', async () => {
+    const plotArgs = compared()
+    // The eighth row, EUR in 2022, vanished; in the baseline its GDP was 9k.
+    const sparse = { ...plotArgs, table: plotArgs.table.filter((_, i) => i !== 7), baseline: plotArgs.baseline!.map((row, i) => (i === 7 ? { ...row, GDP: 9e3 } : row)) }
+    const result = await run(change(sparse, 'scatter'))
+    expect(byRegion(result.lines, 'GDP').EUR).toEqual([2e3, 5e3, 9e3])
+    expect(rowsAfter(result, { as: '__shown' }).map(row => row.__shown)).toContain('−7k')
+  })
+
+  it('compares the rows by their dimensions, whatever their x', () => {
+    const plotArgs = compared()
+    const moved = { ...plotArgs, baseline: plotArgs.baseline!.map(row => ({ ...row, GDP: null })) }
+    expect(changeRows(moved).map(row => row.__change).slice(0, 5)).toEqual([0, 500, 1e3, 1.5e3, -6e3])
+    const renamed = { ...plotArgs, baseline: plotArgs.baseline!.map(row => ({ ...row, Region: `${row.Region} (old)` })) }
+    expect([comparable(moved), comparable(renamed)]).toEqual([true, false])
+    expect([nothingToCompare('scatter', moved), nothingToCompare('scatter', renamed)]).toEqual([false, true])
+  })
+
+  it('keeps the panel of a split none of whose rows it can draw', async () => {
+    const plotArgs = asScatter(args([year, region, scenario], { x: 'Time', color: 'Region' }, { splits: ['Scenario'], baseline: twoThirdsButFifth }))
+    const blank = { ...plotArgs, table: plotArgs.table.map(row => (row.Scenario === 'high' ? { ...row, GDP: null } : row)) }
+    for (const spec of [scatter(blank), change(blank, 'scatter')]) {
+      const result = await run(spec)
+      expect([result.warnings, result.data.facet_domain!.map(row => row.__panel)]).toEqual([[], ['low', 'high']])
+    }
+  })
+})
+
+/** The GDP of the `i`-th of nine rows: missing in the first, and -1 in every third from the third on. */
+const gappy = (i: number) => (i === 0 ? null : i % 3 === 2 ? -1 : (i + 1) * 1e3)
+
+/** `plotArgs` with a GDP but no value in every current row. */
+const blank = (plotArgs: PlotArgs): PlotArgs => ({ ...plotArgs, table: plotArgs.table.map(row => ({ ...row, value: null })) })
+
+describe('the rows a chart leaves out', () => {
+  it('are all of a scatter\'s selection without a row its axes can show', () => {
+    const plotArgs = trajectories({}, () => null)
+    expect(nothingToDraw('scatter', plotArgs)).toBe(true)
+    expect(nothingToDraw('scatter', trajectories({}, i => (i === 3 ? 5 : null)))).toBe(false)
+    const negative = trajectories({}, () => -1)
+    expect([nothingToDraw('scatter', negative), nothingToDraw('scatter', { ...negative, scales: { x: 'log' } })]).toEqual([false, true])
+  })
+
+  it('are never all of a selection without rows, nor of a chart over x', () => {
+    expect(nothingToDraw('scatter', { ...trajectories(), table: [] })).toBe(false)
+    expect(nothingToDraw('line', args([year], { x: 'Time' }, { value: () => Number.NaN }))).toBe(false)
+    const sankey = args([region], { source: 'Region' })
+    expect(nothingToDraw('sankey', { ...sankey, mapping: { source: 'Region', value: 'value' } })).toBe(false)
+  })
+
+  it('leave something to draw while the baseline\'s rows behind, or a change against them, are drawn', () => {
+    // The current rows have a GDP but no value.
+    expect(nothingToDraw('scatter', blank(trajectories()))).toBe(true)
+    // The baseline's points are drawn behind, and each row has a change against them.
+    expect(nothingToDraw('scatter', blank(trajectories({ baseline: i => i })))).toBe(false)
+    // The baseline has no GDP, so its points are not drawn, but each row still has a change.
+    const noGdp = blank(trajectories({ baseline: i => i }))
+    expect(nothingToDraw('scatter', { ...noGdp, baseline: noGdp.baseline!.map(row => ({ ...row, GDP: null })) })).toBe(false)
+    // Neither table has a value: nothing is drawn, and nothing changed.
+    expect(nothingToDraw('scatter', { ...noGdp, baseline: noGdp.table })).toBe(true)
+  })
+
+  it('are counted and explained under the chart when some are drawn', () => {
+    expect(leftOutNote('scatter', trajectories({}, i => (i === 0 ? null : 1)))).toBe('1 of 9 rows is not drawn: x or y is missing.')
+    expect(leftOutNote('scatter', trajectories({}, gappy))).toBe('1 of 9 rows is not drawn: x or y is missing.')
+    expect(leftOutNote('scatter', { ...trajectories({}, gappy), scales: { x: 'log' } })).toBe('4 of 9 rows are not drawn: x or y is missing, or a value is at or below zero on the logarithmic x axis.')
+    expect(leftOutNote('scatter', { ...trajectories({}, i => (i % 2 ? -1 : 1)), scales: { x: 'log' } })).toBe('4 of 9 rows are not drawn: a value is at or below zero on the logarithmic x axis.')
+  })
+
+  it('are those at or below zero on a logarithmic axis for every built-in', () => {
+    const plotArgs = { ...args([year, region], { x: 'Time', color: 'Region' }, { value: i => i - 2 }), scales: { y: 'log' } as const }
+    expect(leftOutNote('line', plotArgs)).toBe('3 of 9 rows are not drawn: a value is at or below zero on the logarithmic y axis.')
+    expect(nothingToDraw('line', { ...plotArgs, table: plotArgs.table.slice(0, 3) })).toBe(true)
+    expect(leftOutNote('line', { ...plotArgs, scales: {} })).toBe('')
+  })
+
+  it('are not said when none is left out, nor for a project\'s plot type', () => {
+    expect(leftOutNote('scatter', trajectories())).toBe('')
+    // All of them, which the chart says when the baseline's rows behind it are drawn.
+    expect(leftOutNote('scatter', trajectories({}, () => null))).toBe('9 of 9 rows are not drawn: x or y is missing.')
+    expect(leftOutNote('line', args([year], { x: 'Time' }, { value: () => Number.NaN }))).toBe('')
+    expect(leftOutNote('sankey', { table: [{ value: -1 }, { value: 1 }], mapping: { value: 'value' }, scales: { value: 'log' } })).toBe('')
   })
 })
 
@@ -673,6 +1032,7 @@ const SPECS: Record<string, (plotArgs: PlotArgs, width: number) => Any> = {
   stacked_area: area,
   bar: (plotArgs, width) => bars(plotArgs, false, width),
   stacked_bar: (plotArgs, width) => bars(plotArgs, true, width),
+  scatter,
 }
 
 /** The compact spec of the built-in plot `type`, 400 px wide. */
@@ -687,10 +1047,10 @@ describe('a compact chart', () => {
       const dimensions = type.endsWith('bar') ? [region, scenario] : [year, region]
       const x = dimensions[0]!.name
       const color = dimensions[1]!.name
-      const spec = compact(type, args(dimensions, { x, color }, { baseline: sameButFifth }))
+      const spec = compact(type, argsOf(type, args(dimensions, { x, color }, { baseline: sameButFifth })))
       expect([spec.height, spec.config.legend.disable]).toEqual([160, true])
       const drawn = layers(spec) ?? [spec]
-      expect(drawn[0].transform).toEqual([BASELINE])
+      expect(drawn[0].transform[0]).toEqual(BASELINE)
       const result = await run(spec)
       expect([result.warnings, result.vega.legends]).toEqual([[], undefined])
       // The hover and the legend's highlight stay: other layers refer to them.

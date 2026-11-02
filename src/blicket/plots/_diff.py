@@ -26,15 +26,19 @@ def compare(
     y: str,
     panels: Sequence[str],
     stacked_by: str | None = None,
+    *,
+    measures: Sequence[str] = (),
 ) -> Change:
-    """Compare two tables of a chart of the measure ``y`` over the other columns, the dimensions.
+    """Compare two tables of a chart of the measure ``y`` over the dimensions, the columns other
+    than ``y`` and ``measures``.
 
-    The tables are as ``tables.check`` leaves them: ``y`` the one float column, no null dimension
-    value, every combination of dimension values once. A column that appeared, vanished or
-    changed its dtype sets ``schema``, and nothing is compared. Otherwise the rows are matched by
-    their dimension values. A value of a dimension that only one table has sets ``schema``, and
-    the rows that carry it are left out. A row of one table only is compared with null, and null,
-    or NaN, counts as 0 against a value.
+    The tables are as ``tables.check`` leaves them: ``y`` a float column, no null dimension value,
+    every combination of dimension values once. ``measures`` are the other float columns, such as
+    the ``x`` of a scatter, which are neither dimensions nor compared. A column that appeared,
+    vanished or changed its dtype sets ``schema``, and nothing is compared. Otherwise the rows are
+    matched by their dimension values. A value of a dimension that only one table has sets
+    ``schema``, and the rows that carry it are left out. A row of one table only is compared with
+    null, and null, or NaN, counts as 0 against a value.
 
     A row's change is measured against the scale of its panel, the compared rows with the same
     values in the ``panels`` columns (all compared rows without them): the largest absolute value
@@ -45,11 +49,11 @@ def compare(
     dimension values of the first row in sort order that reached it, or of the first stack when a
     stack changed more than every row by ``_STACK_MARGIN``, and is ``None`` when nothing changed.
 
-    Raises ``TypeError`` for a table that is not a polars frame or ``panels`` given as a string,
-    and ``ValueError`` when ``y``, ``panels`` or ``stacked_by`` do not fit the current table or a
-    table repeats a combination of dimension values.
+    Raises ``TypeError`` for a table that is not a polars frame or ``panels`` or ``measures``
+    given as a string, and ``ValueError`` when ``y``, ``panels``, ``stacked_by`` or ``measures``
+    do not fit the current table or a table repeats a combination of dimension values.
     """
-    dims = _check_arguments(baseline, current, y, panels, stacked_by)
+    dims = _check_arguments(baseline, current, y, panels, stacked_by, measures)
     after, before = dict(current.schema), dict(baseline.schema)
     if after != before:  # by name, in any order, since the tables are joined by name
         return Change(
@@ -57,6 +61,8 @@ def compare(
             columns_added={c: _type(t) for c, t in after.items() if before.get(c) != t},
             columns_removed={c: _type(t) for c, t in before.items() if after.get(c) != t},
         )
+    if measures:
+        baseline, current = baseline.drop(measures), current.drop(measures)
     added, removed = _only_in(current, baseline, dims), _only_in(baseline, current, dims)
     flags: frozenset[Flag] = frozenset({"schema"}) if added or removed else frozenset()
 
@@ -117,23 +123,32 @@ def _check_arguments(
     y: str,
     panels: Sequence[str],
     stacked_by: str | None,
+    measures: Sequence[str],
 ) -> list[str]:
     """The dimensions of the current table, after checking that both tables are polars frames,
-    ``y`` is a float column of the current table beside at least one dimension, and ``panels``
-    and ``stacked_by`` are dimensions, and different ones."""
+    ``y`` and ``measures`` are distinct float columns of the current table beside at least one
+    dimension, and ``panels`` and ``stacked_by`` are dimensions, and different ones."""
     for name, table in (("baseline", baseline), ("current", current)):
         if not isinstance(table, pl.DataFrame):
             raise TypeError(
                 f"the {name} table must be a polars DataFrame, got {type(table).__name__}"
             )
-    if isinstance(panels, str):
-        raise TypeError(f"panels is a list of column names, got the string {panels!r}")
+    for name, given in (("panels", panels), ("measures", measures)):
+        if isinstance(given, str):
+            raise TypeError(f"{name} is a list of column names, got the string {given!r}")
     columns = current.schema
-    if y not in columns:
-        raise ValueError(f"y={y!r} is not a column of the current table{_hint(y, columns)}")
-    if not (dtype := columns[y]).is_float():
-        raise ValueError(f"y={y!r} holds {dtype} values, not floats")
-    dims = [column for column in columns if column != y]
+    named = [(f"y={y!r}", y), *((f"the measure {column!r}", column) for column in measures)]
+    for label, column in named:
+        if column not in columns:
+            raise ValueError(
+                f"{label} is not a column of the current table{_hint(column, columns)}"
+            )
+        if not (dtype := columns[column]).is_float():
+            raise ValueError(f"{label} holds {dtype} values, not floats")
+    compared = [y, *measures]
+    if len(set(compared)) != len(compared):
+        raise ValueError(f"y and measures name a column twice: {', '.join(map(repr, compared))}")
+    dims = [column for column in columns if column != y and column not in measures]
     if not dims:
         raise ValueError(f"the current table has no dimension column beside y={y!r}")
     if missing := [column for column in panels if column not in dims]:

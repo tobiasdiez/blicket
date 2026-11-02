@@ -231,6 +231,10 @@ def test_repeated_dimension_values_are_an_error(which: str) -> None:
         compare(tables["baseline"], tables["current"], "value", [])
 
 
+# A table with a second measure, GDP.
+WITH_GDP = frame([1.0], x=[1], color=["a"]).with_columns(gdp=pl.lit(2.0))
+
+
 @pytest.mark.parametrize(
     ("arguments", "error", "message"),
     [
@@ -259,6 +263,20 @@ def test_repeated_dimension_values_are_an_error(which: str) -> None:
             ValueError,
             "the current table has no dimension column beside y='value'",
         ),
+        ({"measures": "x"}, TypeError, "measures is a list of column names, got the string 'x'"),
+        (
+            {"current": WITH_GDP, "measures": ["gpd"]},
+            ValueError,
+            "the measure 'gpd' is not a column of the current table; did you mean 'gdp'?",
+        ),
+        ({"measures": ["x"]}, ValueError, "the measure 'x' holds Int64 values, not floats"),
+        ({"measures": ["value"]}, ValueError, "y and measures name a column twice: 'value', "),
+        (
+            {"current": WITH_GDP, "measures": ["gdp"], "panels": ["gdp"]},
+            ValueError,
+            "panels name 'gdp', which is not a dimension of the current table (dimensions: x, "
+            "color)",
+        ),
     ],
 )
 def test_arguments_that_do_not_fit(
@@ -270,3 +288,13 @@ def test_arguments_that_do_not_fit(
     with pytest.raises(error) as info:
         compare(**given)
     assert message in str(info.value)
+
+
+def test_other_measures_are_neither_keys_nor_compared() -> None:
+    baseline = frame([1.0, 2.0], x=[1, 2]).with_columns(gdp=pl.Series([1e4, 2e4]))
+    current = frame([1.0, 3.0], x=[1, 2]).with_columns(gdp=pl.Series([None, 9e4]))
+    change = compare(baseline, current, "value", [], measures=["gdp"])
+    assert (change.flags, change.magnitude, change.where) == (frozenset(), 1 / 3, {"x": 2})
+    assert compare(baseline, current.drop("gdp"), "value", [], measures=[]) == Change(
+        flags=SCHEMA, columns_removed={"gdp": "float"}
+    )

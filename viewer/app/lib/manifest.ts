@@ -47,9 +47,14 @@ export interface Problem {
   traceback: string | null
 }
 
+/** How an axis maps values to positions; `linear` is every axis's default. */
+export type Scale = 'linear' | 'log'
+
 export interface PlotDefinition {
   type: string
   mapping: Record<string, string>
+  /** The scales of the channels whose axis is not linear, such as `{ x: 'log' }`; without it, every axis is linear. */
+  scales?: Record<string, Scale>
 }
 
 export interface BlickDefinition {
@@ -154,4 +159,13 @@ export function sourceText(source: Source): string {
 /** A measure's name with the Blick's unit, as table headers show it: `value [t per year]`. */
 export function withUnit(measure: string, unit: string | null): string {
   return unit ? `${measure} [${unit}]` : measure
+}
+
+/**
+ * The unit of a measure column, as tables show it: the Blick's unit is the unit of the measure on
+ * y, so another measure, such as a scatter's x, has none; for a plot that binds no column to y,
+ * every measure has it.
+ */
+export function unitOf(measure: string, unit: string | null, mapping: Record<string, string>): string | null {
+  return mapping.y === undefined || mapping.y === measure ? unit : null
 }

@@ -5,12 +5,14 @@ A plot type declares its channels as data, so they can be listed before any mapp
 
 from blicket.errors import DefinitionError
 from blicket.plots._base import Channel, ChannelKind, PlotSpec, PlotType
+from blicket.plots._scales import Scale
 from blicket.plots.bar import BAR, STACKED_BAR, bar, stacked_bar
 from blicket.plots.line import LINE, line
+from blicket.plots.scatter import SCATTER, scatter
 from blicket.plots.stacked_area import STACKED_AREA, stacked_area
 
 _BUILTINS: dict[str, PlotType] = {
-    plot_type.name: plot_type for plot_type in (LINE, STACKED_AREA, BAR, STACKED_BAR)
+    plot_type.name: plot_type for plot_type in (LINE, STACKED_AREA, BAR, STACKED_BAR, SCATTER)
 }
 
 
@@ -34,10 +36,12 @@ __all__ = [
     "ChannelKind",
     "PlotSpec",
     "PlotType",
+    "Scale",
     "bar",
     "builtin",
     "builtins",
     "line",
+    "scatter",
     "stacked_area",
     "stacked_bar",
 ]

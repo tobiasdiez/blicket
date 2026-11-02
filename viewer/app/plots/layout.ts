@@ -4,6 +4,7 @@
 import type { TopLevelSpec } from 'vega-lite'
 import type { Dimension } from '../lib/manifest'
 import { display, isTime, largest, valueKey, type Cell, type Row } from '../lib/table'
+import { masked } from './scales'
 import { config, Y_LABEL_EXTENT } from './theme'
 import type { PlotArgs, Quantity } from './types'
 
@@ -40,15 +41,24 @@ const HEIGHTS: Record<Quantity | 'compact', [single: number, panel: number]> = {
   compact: [160, 160],
 }
 
-/** The plot's dimensions and measure by channel. */
-export interface Channels {
-  x: Dimension
+/**
+ * What `frame` needs of a chart's channels: the measure on y, the dimensions that tell the series
+ * apart, and the dimension on x of a chart over one.
+ */
+export interface FrameChannels {
   y: string
   color: Dimension | null
   linetype: Dimension | null
+  x?: Dimension
 }
 
-function dimension(args: Pick<PlotArgs, 'schema'>, name: string): Dimension {
+/** The plot's dimensions and measure by channel, of a chart over a dimension on x. */
+export interface Channels extends FrameChannels {
+  x: Dimension
+}
+
+/** The dimension of the table called `name`. */
+export function dimension(args: Pick<PlotArgs, 'schema'>, name: string): Dimension {
   const found = args.schema.dimensions.find(d => d.name === name)
   if (!found) throw new Error(`the table has no dimension ${name}`)
   return found
@@ -66,7 +76,7 @@ export function channels(args: Pick<PlotArgs, 'mapping' | 'schema'>): Channels {
 }
 
 /** The dimensions that tell the series apart: colour and line type. */
-export function seriesDimensions(ch: Channels): Dimension[] {
+export function seriesDimensions(ch: FrameChannels): Dimension[] {
   return [ch.color, ch.linetype].filter((d): d is Dimension => d !== null)
 }
 
@@ -116,16 +126,17 @@ export function plain(value: Cell, d: Dimension): Cell {
 
 /**
  * The rows as Vega reads them: time as keys except on a time x axis (not on a `band`), plus the
- * panel label and the series label. With a baseline, its rows follow the current ones, every row
- * names its source, and a current row holds the baseline's value of the row with its dimension
- * values.
+ * panel label and the series label; a value at or below zero on a logarithmic axis as null. With
+ * a baseline, its rows follow the current ones, every row names its source, and a current row
+ * holds the baseline's value of the row with its dimension values, as it is, for the tooltips.
  */
-function prepare(args: PlotArgs, ch: Channels, band: boolean): Row[] {
+function prepare(args: PlotArgs, ch: FrameChannels, band: boolean): Row[] {
   const times = args.schema.dimensions.filter(d => isTime(d) && (band || d !== ch.x))
   const splits = splitDimensions(args)
   const series = seriesDimensions(ch)
+  const table = masked(args, args.table)
   const baseline = args.baseline
-  if (!times.length && !splits.length && !series.length && !baseline) return args.table
+  if (!times.length && !splits.length && !series.length && !baseline) return table
   const withLabels = (row: Row): Row => {
     const copy: Row = { ...row }
     for (const d of times) copy[d.name] = plain(row[d.name] ?? null, d)
@@ -133,12 +144,12 @@ function prepare(args: PlotArgs, ch: Channels, band: boolean): Row[] {
     if (series.length) copy[SERIES] = labelOf(row, series)
     return copy
   }
-  if (!baseline) return args.table.map(withLabels)
+  if (!baseline) return table.map(withLabels)
   const dims = args.schema.dimensions
   const before = baselineValues(baseline, dims, ch.y)
   return [
-    ...args.table.map(row => ({ ...withLabels(row), [SOURCE]: 'current', [BASELINE_VALUE]: before.get(rowKey(row, dims)) ?? null })),
-    ...baseline.map(row => ({ ...withLabels(row), [SOURCE]: 'baseline' })),
+    ...table.map(row => ({ ...withLabels(row), [SOURCE]: 'current', [BASELINE_VALUE]: before.get(rowKey(row, dims)) ?? null })),
+    ...masked(args, baseline).map(row => ({ ...withLabels(row), [SOURCE]: 'baseline' })),
   ]
 }
 
@@ -156,6 +167,12 @@ function layout(args: PlotArgs, width: number): { columns: number, panelWidth: n
 /** The width of the plot area of a chart `width` wide, of one panel when there are panels. */
 export function plotWidth(args: PlotArgs, width: number): number {
   return args.state.splits.length ? layout(args, width).panelWidth : Math.max(PLOT_FLOOR, width - PADDING - AXIS_WIDTH)
+}
+
+/** The height of the plot area of a chart of `quantity`, of one panel when there are panels. */
+export function plotHeight(args: PlotArgs, quantity: Quantity = 'measure'): number {
+  const [single, panel] = HEIGHTS[args.compact ? 'compact' : quantity]
+  return args.state.splits.length ? panel : single
 }
 
 /**
@@ -204,14 +221,13 @@ function withoutLegends(unit: Spec): Spec {
  * independent y axis, the sizes and the theme. `band` says that x is a band (bars). A chart of a
  * change, under the chart of the measure, is lower; a compact chart is 160 px high, without legend.
  */
-export function frame(args: PlotArgs, ch: Channels, drawn: Spec, width: number, band = false, quantity: Quantity = 'measure'): TopLevelSpec {
+export function frame(args: PlotArgs, ch: FrameChannels, drawn: Spec, width: number, band = false, quantity: Quantity = 'measure'): TopLevelSpec {
   const unit = args.compact ? withoutLegends(drawn) : drawn
   const data = { values: prepare(args, ch, band) }
   const themed = config(args.theme)
   const base = { $schema: 'https://vega.github.io/schema/vega-lite/v6.json', data, config: args.compact ? { ...themed, legend: { ...themed.legend, disable: true } } : themed }
-  const [single, panel] = HEIGHTS[args.compact ? 'compact' : quantity]
   if (!args.state.splits.length) {
-    return { ...base, width: plotWidth(args, width), height: single, ...unit } as unknown as TopLevelSpec
+    return { ...base, width: plotWidth(args, width), height: plotHeight(args, quantity), ...unit } as unknown as TopLevelSpec
   }
   const { columns, panelWidth } = layout(args, width)
   return {
@@ -220,7 +236,7 @@ export function frame(args: PlotArgs, ch: Channels, drawn: Spec, width: number, 
     facet: { field: PANEL, type: 'nominal', sort: combinations(splitDimensions(args)), header: { title: null, labelLimit: panelWidth } },
     columns,
     spacing: { row: SPACING + 8, column: SPACING },
-    spec: { width: panelWidth, height: panel, ...unit },
+    spec: { width: panelWidth, height: plotHeight(args, quantity), ...unit },
     resolve: { scale: { y: args.state.y } },
   } as unknown as TopLevelSpec
 }

@@ -3,7 +3,7 @@
 import type { TopLevelSpec } from 'vega-lite'
 import type { Row } from '../lib/table'
 import { definePlot } from './embed'
-import { asNumber, baselineValues, cellKey, channels, PADDING, rowKey } from './layout'
+import { asNumber, baselineValues, cellKey, PADDING, rowKey } from './layout'
 import type { ChangeBuilder, ChangeKind, PlotArgs, PlotType } from './types'
 
 // The data fields of a row's change and relative change.
@@ -50,7 +50,8 @@ function changes(current: number | null, baseline: number | null, zero: number):
  * differ from the comparison's verdict on the whole tables.
  */
 function pairs(args: Compared): Pair[] {
-  const { y } = channels(args)
+  const y = args.mapping.y
+  if (!y) throw new Error('the plot maps no y')
   const dims = args.schema.dimensions
   const baselineRows = args.baseline ?? []
   const baselineByKey = baselineValues(baselineRows, dims, y)
@@ -85,20 +86,32 @@ export function changeRows(args: Compared): Row[] {
   })
 }
 
+/** The rows of either table that have a change (see `changeRows`), which the change charts draw. */
+export function changedRows(args: Compared): Row[] {
+  return changeRows(args).filter(row => row[CHANGE] !== null)
+}
+
 /** Whether a row of the selection has a change, so that the change charts draw something. */
 export function comparable(args: Compared): boolean {
   return pairs(args).some(([, values]) => values !== null && (values[0] !== null || values[1] !== null))
 }
 
-/** The arguments of the `kind` of change chart of `args`: its change rows, with the change as the measure. */
+/**
+ * The arguments of the `kind` of change chart of `args`: its change rows, with the change as the
+ * measure on a linear y axis, since a change crosses zero, x on the chart's scale, and `args`
+ * itself as the chart above.
+ */
 function changeArgs(args: PlotArgs, kind: ChangeKind): PlotArgs {
   const measure = kind === 'change' ? CHANGE : RELATIVE
+  const { y: _, ...scales } = args.scales ?? {}
   return {
     ...args,
     table: changeRows(args),
     baseline: null,
     schema: { ...args.schema, measures: [{ name: measure, dtype: 'float' }] },
     mapping: { ...args.mapping, y: measure },
+    scales,
+    above: args,
     unit: kind === 'change' ? args.unit : null,
   }
 }

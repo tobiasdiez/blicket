@@ -20,7 +20,7 @@ classifiers = [
     "Topic :: Scientific/Engineering",
     "Typing :: Typed",
 ]
-dependencies = ["polars>=2.0", "pydantic>=2.13", "typer>=0.27"]
+dependencies = ["polars>=2.0", "pydantic>=2.13", "typer>=0.27.2"]
 
 [project.scripts]
 blicket = "blicket.cli:app"

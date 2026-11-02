@@ -134,7 +134,7 @@ function onRole(dimension: string, role: string) {
 }
 
 function saveCsv() {
-  if (shownRows.value && schema.value) downloadCsv(shownRows.value, schema.value, definition.value?.unit ?? null, fileName.value)
+  if (shownRows.value && schema.value && definition.value) downloadCsv(shownRows.value, schema.value, definition.value.unit, definition.value.plot.mapping, fileName.value)
 }
 
 const breadcrumb = [{ label: 'Overview', to: '/' }, { label: 'Build a Blick' }]
@@ -326,7 +326,7 @@ const breadcrumb = [{ label: 'Overview', to: '/' }, { label: 'Build a Blick' }]
               No rows for this selection.
             </p>
             <BlickChart v-else-if="tab === 'chart' && chartProps" v-bind="chartProps" :name="fileName" />
-            <DataTable v-else :rows="shownRows" :schema="schema" :unit="definition.unit" />
+            <DataTable v-else :rows="shownRows" :schema="schema" :unit="definition.unit" :mapping="definition.plot.mapping" />
           </div>
         </template>
       </section>

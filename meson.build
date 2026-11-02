@@ -41,6 +41,7 @@ py.install_sources(
   'src/blicket/plots/_diff.py',
   'src/blicket/plots/bar.py',
   'src/blicket/plots/line.py',
+  'src/blicket/plots/scatter.py',
   'src/blicket/plots/stacked_area.py',
   subdir: 'blicket/plots',
 )

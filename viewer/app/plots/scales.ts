@@ -1,6 +1,5 @@
 // The axis scales of a plot: a logarithmic axis's encoding, and what it does to the data. It has
-// no place for a value at or below zero, so the chart draws such a value as missing and says
-// below itself how many it left out.
+// no place for a value at or below zero, so the chart draws such a value as missing.
 import * as vega from 'vega'
 import { formatValue, type Cell, type Row } from '../lib/table'
 import type { Spec } from './layout'
@@ -44,12 +43,12 @@ export function scaled(encoding: Spec, args: Pick<PlotArgs, 'scales' | 'state'>,
 }
 
 /** Whether a cell has no place on a logarithmic axis: a number at or below zero. */
-function belowZero(cell: Cell | undefined): boolean {
+export function belowZero(cell: Cell | undefined): boolean {
   return typeof cell === 'number' && cell <= 0
 }
 
 /** The channels that the plot draws on a logarithmic axis, each with its column. */
-function logChannels(args: Scaled): [channel: string, column: string][] {
+export function logChannels(args: Scaled): [channel: string, column: string][] {
   return Object.entries(args.scales ?? {}).flatMap(([channel, scale]) => {
     const column = args.mapping[channel]
     return scale === 'log' && column ? [[channel, column] as [string, string]] : []
@@ -64,24 +63,4 @@ export function masked(args: Scaled, rows: Row[]): Row[] {
     const off = columns.filter(column => belowZero(row[column]))
     return off.length ? { ...row, ...Object.fromEntries(off.map(column => [column, null])) } : row
   })
-}
-
-/** How many current rows have a value at or below zero on each channel on a logarithmic axis, the channels without one left out. */
-function belowZeroCounts(args: Pick<PlotArgs, 'table' | 'mapping' | 'scales'>): [channel: string, count: number][] {
-  return logChannels(args)
-    .map(([channel, column]): [string, number] => [channel, args.table.filter(row => belowZero(row[column])).length])
-    .filter(([, count]) => count > 0)
-}
-
-/**
- * What a chart says below itself about the current values its logarithmic axes draw as missing,
- * one sentence per axis, such as `3 values at or below zero are not drawn on the logarithmic y
- * axis.`; empty when there are none. The baseline's rows do not count, so the note stays as it is
- * when the comparison is switched on or off.
- */
-export function belowZeroNote(args: Pick<PlotArgs, 'table' | 'mapping' | 'scales'>): string {
-  return belowZeroCounts(args).map(([channel, count]) => {
-    const [noun, verb] = count === 1 ? ['value', 'is'] : ['values', 'are']
-    return `${count} ${noun} at or below zero ${verb} not drawn on the logarithmic ${channel} axis.`
-  }).join(' ')
 }

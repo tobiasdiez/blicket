@@ -206,4 +206,10 @@ describe('where', () => {
   it('names the filtered values first', () => {
     expect(whereText({ Time: 2050, Region: 'EUR', Parameter: 'landfill' }, state, mapping)).toBe('Parameter: landfill, Region: EUR, Time: 2050')
   })
+
+  it('names a scatter\'s along value after its series; its x is a measure, which no row names', () => {
+    const scatter = { x: 'GDP per capita', y: 'value', color: 'Flow', linetype: 'Period', along: 'Time' }
+    const where = { Time: 2100, Period: 'Projected', Flow: 'Primary', Region: 'SSA', Parameter: 'landfill' }
+    expect(whereText(where, state, scatter)).toBe('Parameter: landfill, Region: SSA, Flow: Primary, Period: Projected, Time: 2100')
+  })
 })

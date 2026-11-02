@@ -138,11 +138,17 @@ class BuiltinPlotType(PlotType):
         panels: Sequence[str],
     ) -> Change:
         """Compare the measure on ``y``, as stacks of the ``color`` layers for a stacked type; the
-        other channels play no part."""
+        other channels play no part, and the measures on them, such as a scatter's ``x``, are
+        not compared."""
         if "y" not in mapping:
             raise ValueError(f"the mapping binds no column to y, which {self.name} needs")
         stacked_by = mapping.get("color") if self.stacked else None
-        return compare(baseline, current, mapping["y"], panels, stacked_by)
+        measures = [
+            mapping[c.name]
+            for c in self.channels
+            if c.kind == "measure" and c.name != "y" and c.name in mapping
+        ]
+        return compare(baseline, current, mapping["y"], panels, stacked_by, measures=measures)
 
 
 def _unknown_channel(plot_type: str, channel: str, known: Sequence[str]) -> str:

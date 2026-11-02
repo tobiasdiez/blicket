@@ -217,11 +217,12 @@ export default {
   used by the built-ins (an outer-join change table, a bounded magnitude, a Vega-Lite template
   renderer with a ghost overlay) may be promoted to public helpers later, once two project plot
   types have wanted the same thing.
-- Built-ins: line, stacked area, bar (grouped, stacked) in M0/M1; scatter and table in M2. Their
-  `render` uses Vega-Lite templates; their `diff` uses a shared internal routine. Their `controls`
-  turn each unbound dimension into a filter by default and allow `split` where the chart supports
-  facets. Hiding dimensions that are functionally determined by other unbound dimensions (unit by
-  variable) waits for a project that needs it (amendment of 2026-10-24).
+- Built-ins: line, stacked area, bar (grouped, stacked) in M0/M1; table in M2; scatter (amendment
+  of 2026-11-02 below). Their `render` uses Vega-Lite templates; their `diff` uses a shared
+  internal routine. Their `controls` turn each unbound dimension into a filter by default and
+  allow `split` where the chart supports facets. Hiding dimensions that are functionally
+  determined by other unbound dimensions (unit by variable) waits for a project that needs it
+  (amendment of 2026-10-24).
 - Amendment of 2026-10-24 (M0.5): `diff` takes `panels` instead of `controls`, the dimensions
   whose value combinations each get their own scale. The core derives them, since it lays out the
   panels (the filters, and the splits when the Blick sets `independent_y`); the plot type scales
@@ -244,6 +245,18 @@ export default {
   negative number closest to zero, so it lies at the running sum of the negative layers instead of
   at the top of the positive ones; the baseline's faded stack and the current lines on top of it do
   the same. A layer with values of both signs stacks each value by its sign.
+
+- Amendment of 2026-11-02: scatter is built, `bk.plots.scatter(x, y, color, linetype, along,
+  x_scale, y_scale)`, with two measure channels, `x` and `y`: a plot type may declare several
+  measure channels, and a column takes its role from the kind of the channel it is bound to. The
+  dimension on `along` orders the points of each series into a line. The builder offers only the
+  plot types of one measure, since a query makes one. Its `diff` compares `y` as `line` does; the
+  other measures of the mapping are neither keys nor compared, though a measure column that
+  appeared, vanished or changed type is a `schema` change, as any column is. A plot's definition
+  records `scales` beside `type` and `mapping`, the axes drawn logarithmic, such as
+  `{"x": "log"}`, and `render` receives them; the field is left out of the manifest when empty, so
+  the spec stays 0.2 and the ids of builds without scales stay as they were, and it is part of the
+  build id when set.
 
 ## Change detection, as implemented by the built-in diff routine
 

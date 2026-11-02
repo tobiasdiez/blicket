@@ -101,12 +101,20 @@ controls select, and from the baseline's rows after the same filters when the ch
 (`PlotArgs.baseline`): the built-ins draw them behind the current marks, faded and broader, in the
 series' colours, and solid whatever the line style, as remind-mfa draws its reference run; the
 legend click and the tooltip tell lines of a repeated hue apart. Their colours are the validated
-palette in `app/plots/theme.ts`. A channel the plot puts on a logarithmic axis (`PlotArgs.scales`)
-gets its encoding from `scaled` in `app/plots/scales.ts`: "(log scale)" in its title, ends at the
-data, and grid lines at the labelled ticks only. `frame` hands Vega the values at or below zero
-on such an axis as null, since Vega-Lite filters only null, NaN and infinite values; the line
-breaks there, a tooltip shows the en dash of a missing value (the data tab keeps the number), and
-`BlickChart` says below the chart how many current values it left out.
+palette in `app/plots/theme.ts`. The charts over a dimension on x (`line.ts`, `stacked_area.ts`,
+`bar.ts`) share `channels()` and the encodings in `encodings.ts`; `scatter.ts` has a measure on
+both axes. An axis is linear or logarithmic as the definition's `scales` choose
+(`PlotArgs.scales`): `scaled` in `app/plots/scales.ts` gives a logarithmic axis its encoding,
+"(log scale)" in its title, ends at the data, and grid lines at the labelled ticks only. `frame()`
+in `layout.ts` lays out either kind of chart, and its data preparation makes a value at or below
+zero on a logarithmic axis missing (`masked` in `scales.ts`), since Vega-Lite filters only null,
+NaN and infinite values; the line breaks there and a tooltip shows the en dash of a missing value
+(the data tab keeps the number). A chart leaves out such rows, and a scatter also those without an
+x or a y; `leftOutNote` and `nothingToDraw` in `app/plots/index.ts`, which `useBlickChart` calls,
+give the line under the chart that says how many and why, and tell the page and the cards when
+none is left, which they say instead of a chart. A change chart gets the chart above as
+`PlotArgs.above`, so a scatter's change charts share its x domain and name the baseline's x when x
+moved between the runs.
 
 While "Compare with baseline" is on, `app/plots/change.ts` draws two charts under a built-in
 type's chart: the change of each row, absolute and relative, through the type's own specification

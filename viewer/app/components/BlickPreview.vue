@@ -48,7 +48,7 @@ onBeforeUnmount(() => observer?.disconnect())
 
 // The chart waits for the baseline's rows, so it is drawn once; a baseline that cannot be read is
 // left out.
-const { error, shown, baselineWaiting, chartProps, fileName } = useBlickChart(
+const { error, shown, baselineWaiting, chartProps, undrawn, fileName } = useBlickChart(
   () => props.entry,
   () => preview.value?.state ?? null,
   () => props.change,
@@ -98,6 +98,9 @@ const SILENT = { 'aria-hidden': 'true', 'role': undefined, 'aria-label': undefin
     <USkeleton v-else-if="waiting" class="h-51 w-full" v-bind="SILENT" />
     <p v-else-if="!shown?.length" class="text-sm text-muted">
       No rows for this selection.
+    </p>
+    <p v-else-if="undrawn" class="text-sm text-muted">
+      No row of this selection can be drawn.
     </p>
     <BlickChart v-else-if="chartProps" v-bind="chartProps" :name="fileName" compact />
     <p v-if="caption" class="text-sm text-muted">

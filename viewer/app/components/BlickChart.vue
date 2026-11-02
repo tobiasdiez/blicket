@@ -4,7 +4,6 @@ import type { Scale, TableSchema } from '~/lib/manifest'
 import type { Row } from '~/lib/table'
 import { PLOT_TYPES } from '~/plots'
 import { changePlot, exportName } from '~/plots/change'
-import { belowZeroNote } from '~/plots/scales'
 import type { ChangeKind } from '~/plots/types'
 
 const props = defineProps<{
@@ -25,6 +24,8 @@ const props = defineProps<{
   kind?: ChangeKind
   /** A small chart, without legend and export menu; never a change chart. */
   compact?: boolean
+  /** What the chart says under itself, such as how many rows it leaves out. */
+  note?: string
 }>()
 
 const container = useTemplateRef<HTMLElement>('container')
@@ -35,11 +36,6 @@ const plot = computed(() => {
   const builtIn = PLOT_TYPES[props.type]
   if (!builtIn) return null
   return props.kind ? changePlot(props.kind, builtIn.change) : builtIn.plot
-})
-// The values the logarithmic axes draw as missing, said under the chart of the measure only.
-const note = computed(() => {
-  if (props.kind || props.compact) return ''
-  return belowZeroNote({ table: props.rows, mapping: props.mapping, scales: props.scales })
 })
 const failure = ref<string | null>(null)
 let cleanup: (() => void) | null = null

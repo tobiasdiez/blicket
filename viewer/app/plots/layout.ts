@@ -41,15 +41,24 @@ const HEIGHTS: Record<Quantity | 'compact', [single: number, panel: number]> = {
   compact: [160, 160],
 }
 
-/** The plot's dimensions and measure by channel. */
-export interface Channels {
-  x: Dimension
+/**
+ * What `frame` needs of a chart's channels: the measure on y, the dimensions that tell the series
+ * apart, and the dimension on x of a chart over one.
+ */
+export interface FrameChannels {
   y: string
   color: Dimension | null
   linetype: Dimension | null
+  x?: Dimension
 }
 
-function dimension(args: Pick<PlotArgs, 'schema'>, name: string): Dimension {
+/** The plot's dimensions and measure by channel, of a chart over a dimension on x. */
+export interface Channels extends FrameChannels {
+  x: Dimension
+}
+
+/** The dimension of the table called `name`. */
+export function dimension(args: Pick<PlotArgs, 'schema'>, name: string): Dimension {
   const found = args.schema.dimensions.find(d => d.name === name)
   if (!found) throw new Error(`the table has no dimension ${name}`)
   return found
@@ -67,7 +76,7 @@ export function channels(args: Pick<PlotArgs, 'mapping' | 'schema'>): Channels {
 }
 
 /** The dimensions that tell the series apart: colour and line type. */
-export function seriesDimensions(ch: Channels): Dimension[] {
+export function seriesDimensions(ch: FrameChannels): Dimension[] {
   return [ch.color, ch.linetype].filter((d): d is Dimension => d !== null)
 }
 
@@ -121,7 +130,7 @@ export function plain(value: Cell, d: Dimension): Cell {
  * a baseline, its rows follow the current ones, every row names its source, and a current row
  * holds the baseline's value of the row with its dimension values, as it is, for the tooltips.
  */
-function prepare(args: PlotArgs, ch: Channels, band: boolean): Row[] {
+function prepare(args: PlotArgs, ch: FrameChannels, band: boolean): Row[] {
   const times = args.schema.dimensions.filter(d => isTime(d) && (band || d !== ch.x))
   const splits = splitDimensions(args)
   const series = seriesDimensions(ch)
@@ -212,7 +221,7 @@ function withoutLegends(unit: Spec): Spec {
  * independent y axis, the sizes and the theme. `band` says that x is a band (bars). A chart of a
  * change, under the chart of the measure, is lower; a compact chart is 160 px high, without legend.
  */
-export function frame(args: PlotArgs, ch: Channels, drawn: Spec, width: number, band = false, quantity: Quantity = 'measure'): TopLevelSpec {
+export function frame(args: PlotArgs, ch: FrameChannels, drawn: Spec, width: number, band = false, quantity: Quantity = 'measure'): TopLevelSpec {
   const unit = args.compact ? withoutLegends(drawn) : drawn
   const data = { values: prepare(args, ch, band) }
   const themed = config(args.theme)

@@ -309,6 +309,11 @@ def test_several_quantities_make_a_quantity_dimension() -> None:
         ),
         (
             ["flows/steel"],
+            {"plot": "scatter", "mapping": {"along": "year"}},
+            "no plot type 'scatter' in the builder; it offers line, stacked_area, bar, stacked_bar",
+        ),
+        (
+            ["flows/steel"],
             {"mapping": {"color": "year"}},
             "the x channel needs a dimension; give one the role x",
         ),
@@ -402,6 +407,8 @@ def test_a_select_returning_other_columns_is_a_problem() -> None:
 
 def test_the_options_list_the_plot_types_of_one_measure() -> None:
     options = query.Options.of(contents(Toy()))
+    # A scatter charts two measures, and a query makes one.
+    assert "scatter" in [plot_type.name for plot_type in bk.plots.builtins()]
     assert [p.name for p in options.plots] == ["line", "stacked_area", "bar", "stacked_bar"]
     dumped = options.model_dump(mode="json")
     assert dumped["plots"][0]["channels"][0] == {

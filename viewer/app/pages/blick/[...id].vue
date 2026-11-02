@@ -2,7 +2,7 @@
 import { TAB, queryFromState, stateFromQuery, yAxisOf, type ControlState } from '~/lib/controls'
 import { downloadCsv } from '~/lib/csv'
 import { sourceText } from '~/lib/manifest'
-import { nothingToCompare } from '~/plots'
+import { drawsBaseline, nothingToCompare } from '~/plots'
 import { CATEGORICAL, GHOST } from '~/plots/theme'
 
 // The charts of the change against the baseline, under the chart while it is compared.
@@ -44,10 +44,12 @@ const tab = useTab()
 // comparisons and the baseline's rows, so it is drawn once.
 const comparing = computed(() => baselineFile.value !== null && tab.value === 'chart')
 const waiting = computed(() => tab.value === 'chart' && (loading.value || baselineWaiting.value))
+// Whether the chart draws the baseline behind; the Sankey diagram has its change charts alone.
+const baselineDrawn = computed(() => drawsBaseline(definition.value?.plot.type ?? ''))
 // The switch's key: the first series' colour, faded as the baseline is.
 const key = computed(() => ({ backgroundColor: CATEGORICAL[theme.value][0], opacity: GHOST[theme.value] }))
 // Exported images say when they carry the baseline, whose key is outside the chart.
-const chartName = computed(() => (baseline.value?.length ? `${fileName.value}_vs_baseline` : fileName.value))
+const chartName = computed(() => (baseline.value?.length && baselineDrawn.value ? `${fileName.value}_vs_baseline` : fileName.value))
 // Whether the change charts would have nothing to draw: a flat zero, which reads as no change. It
 // depends on the rows, not on the splits or the y axes.
 const incomparable = computed(() => {
@@ -143,7 +145,7 @@ const source = computed(() => (entry.value?.source ? sourceText(entry.value.sour
             <template #label>
               <span class="inline-flex items-center gap-2">
                 Compare with baseline
-                <span aria-hidden="true" class="h-1.5 w-6 rounded-full" :style="key" />
+                <span v-if="baselineDrawn" aria-hidden="true" class="h-1.5 w-6 rounded-full" :style="key" />
               </span>
             </template>
           </USwitch>

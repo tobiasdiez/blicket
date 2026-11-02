@@ -7,10 +7,11 @@ from blicket.errors import DefinitionError
 from blicket.plots._base import Channel, ChannelKind, PlotSpec, PlotType
 from blicket.plots.bar import BAR, STACKED_BAR, bar, stacked_bar
 from blicket.plots.line import LINE, line
+from blicket.plots.sankey import SANKEY, sankey
 from blicket.plots.stacked_area import STACKED_AREA, stacked_area
 
 _BUILTINS: dict[str, PlotType] = {
-    plot_type.name: plot_type for plot_type in (LINE, STACKED_AREA, BAR, STACKED_BAR)
+    plot_type.name: plot_type for plot_type in (LINE, STACKED_AREA, BAR, STACKED_BAR, SANKEY)
 }
 
 
@@ -38,6 +39,7 @@ __all__ = [
     "builtin",
     "builtins",
     "line",
+    "sankey",
     "stacked_area",
     "stacked_bar",
 ]

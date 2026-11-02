@@ -22,6 +22,24 @@ def test_factories_bind_columns_to_channels() -> None:
         mapping["color"] = "scenario"
 
 
+def test_sankey_binds_flows_from_one_dimension_to_another() -> None:
+    spec = bk.plots.sankey(source="From", target="To", value="value", color="Stage")
+    assert spec.plot_type is builtin("sankey")
+    assert spec.mapping == {"source": "From", "target": "To", "value": "value", "color": "Stage"}
+    assert bk.plots.sankey("From", "To", "value").mapping == {
+        "source": "From",
+        "target": "To",
+        "value": "value",
+    }
+    channels = {c.name: (c.kind, c.required) for c in builtin("sankey").channels}
+    assert channels == {
+        "source": ("dimension", True),
+        "target": ("dimension", True),
+        "value": ("measure", True),
+        "color": ("dimension", False),
+    }
+
+
 @pytest.mark.parametrize(
     ("make", "expected"),
     [
@@ -33,6 +51,18 @@ def test_factories_bind_columns_to_channels() -> None:
         (lambda: PlotSpec(builtin("stacked_area"), {"x": "year"}), "needs the channel(s) y"),
         (lambda: bk.plots.line(x="year", y="value", color="year"), "bound to both 'x' and 'color'"),
         (lambda: builtin("pie"), "no built-in plot type 'pie'"),
+        (
+            lambda: PlotSpec(builtin("sankey"), {"source": "a", "target": "b"}),
+            "plot type sankey needs the channel(s) value",
+        ),
+        (
+            lambda: bk.plots.sankey(source="Process", target="Process", value="v"),
+            "bound to both 'source' and 'target'",
+        ),
+        (
+            lambda: PlotSpec(builtin("sankey"), {"source": "a", "target": "b", "y": "v"}),
+            "channels of sankey: source, target, value, color",
+        ),
         (lambda: spec(builtin("line"), {"x": "a", "y": 3}), "must name a column"),
         (lambda: spec("line", {}), "must be a PlotType instance"),
     ],
@@ -48,8 +78,8 @@ def test_plot_type_contract() -> None:
     with pytest.raises(TypeError):
         abstract()
 
-    class Sankey(bk.PlotType):
-        name = "sankey"
+    class Chord(bk.PlotType):
+        name = "chord"
         channels = (bk.Channel("source", "dimension", required=True),)
 
         def controls(self, schema: Any, mapping: Any) -> list[Any]:
@@ -58,7 +88,7 @@ def test_plot_type_contract() -> None:
         def diff(self, baseline: Any, current: Any, mapping: Any, panels: Any) -> bk.Change:
             return bk.Change()
 
-    assert PlotSpec(Sankey(), {"source": "from"}).mapping == {"source": "from"}
+    assert PlotSpec(Chord(), {"source": "from"}).mapping == {"source": "from"}
 
 
 def test_builtin_controls_filter_every_unbound_dimension() -> None:
@@ -101,3 +131,59 @@ def test_builtin_diff_needs_a_measure_on_y() -> None:
     table = pl.DataFrame({"year": [2020], "value": [1.0]})
     with pytest.raises(ValueError, match="the mapping binds no column to y, which line needs"):
         builtin("line").diff(table, table, {"x": "year"}, [])
+
+
+def test_sankey_filters_every_dimension_but_its_ends_and_its_colour() -> None:
+    schema = TableSchema(
+        dimensions=[
+            Dimension(name="Time", dtype="integer", values=[2050, 2100]),
+            Dimension(name="Region", dtype="string", values=["World", "EUR"]),
+            Dimension(name="From", dtype="string", values=["Production", "Use"]),
+            Dimension(name="To", dtype="string", values=["Use", "Production"]),
+            Dimension(name="Stage", dtype="string", values=["Use", "Recycling"]),
+        ],
+        measures=[Measure(name="value", dtype="float")],
+    )
+    mapping = {"source": "From", "target": "To", "value": "value", "color": "Stage"}
+    assert builtin("sankey").controls(schema, mapping) == [
+        Control(dimension="Time", kind="filter", default=2050),
+        Control(dimension="Region", kind="filter", default="World"),
+    ]
+
+
+# A loop of three flows in two years, the second a tenth of the first.
+FLOWS = pl.DataFrame(
+    {
+        "Time": [2050] * 3 + [2100] * 3,
+        "From": ["Production", "Use", "Recycling"] * 2,
+        "To": ["Use", "Recycling", "Production"] * 2,
+        "Stage": ["Use", "End of life", "Recycling"] * 2,
+        "value": [100.0, 40, 20, 10, 4, 2],
+    }
+)
+SANKEY = {"source": "From", "target": "To", "value": "value"}
+
+
+def test_sankey_diff_compares_each_flow_against_the_largest_of_its_panel() -> None:
+    # Recycling in 2100 grows from 2 to 3: a tenth of the largest flow that year, 10.
+    current = FLOWS.with_columns(value=pl.Series([100.0, 40, 20, 10, 4, 3]))
+    sankey = builtin("sankey")
+    per_year = sankey.diff(FLOWS, current, SANKEY, ["Time"])
+    assert per_year.magnitude == pytest.approx(0.1)
+    assert per_year.where == {
+        "Time": 2100,
+        "From": "Recycling",
+        "To": "Production",
+        "Stage": "Recycling",
+    }
+    # Without panels the largest flow of both years sets the scale; the colour stacks nothing.
+    assert sankey.diff(FLOWS, current, SANKEY, []).magnitude == pytest.approx(0.01)
+    with_color = sankey.diff(FLOWS, current, {**SANKEY, "color": "Stage"}, ["Time"])
+    assert with_color.magnitude == pytest.approx(0.1)
+    unchanged = sankey.diff(FLOWS, FLOWS, SANKEY, ["Time"])
+    assert (unchanged.magnitude, unchanged.where) == (0.0, None)
+
+
+def test_sankey_diff_needs_a_measure_on_value() -> None:
+    with pytest.raises(ValueError, match="binds no column to value, which sankey needs"):
+        builtin("sankey").diff(FLOWS, FLOWS, {"source": "From", "target": "To"}, [])

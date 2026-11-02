@@ -293,11 +293,12 @@ export function whereState(state: ControlState, where: Record<string, Value>, sc
 }
 
 /**
- * The row `where` in the order a reader finds it: the filtered values, the panel, the series and
- * the x value, each with its dimension, such as `Region: SSA, Flow: Primary, Time: 2100`.
+ * The row `where` in the order a reader finds it: the filtered values, the panel, a Sankey link's
+ * ends, the series and the x value, each with its dimension, such as `Region: SSA, Flow: Primary,
+ * Time: 2100`.
  */
 export function whereText(where: Record<string, Value>, state: ControlState, mapping: Record<string, string>): string {
-  const order = new Set([...Object.keys(state.filters), ...state.splits, mapping.color, mapping.linetype, mapping.x])
+  const order = new Set([...Object.keys(state.filters), ...state.splits, mapping.source, mapping.target, mapping.color, mapping.linetype, mapping.x])
   return [...order]
     .filter((name): name is string => name !== undefined && name in where)
     .map(name => `${name}: ${String(where[name])}`)

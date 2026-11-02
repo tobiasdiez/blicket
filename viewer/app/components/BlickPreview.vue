@@ -3,7 +3,7 @@ import { blickBadge, type BlickComparison } from '~/lib/comparison'
 import { yAxisOf } from '~/lib/controls'
 import { firstLine, type BlickEntry } from '~/lib/manifest'
 import { firstProblem, previewCaption, previewLink, previewState } from '~/lib/preview'
-import { PLOT_TYPES } from '~/plots'
+import { drawsBaseline, PLOT_TYPES } from '~/plots'
 
 // A Blick as a card of the overview: its title, which leads to its page, its badge, a small chart
 // and a caption. `change` is the Blick in the comparison shown, if any. With `pinnable` the card
@@ -20,7 +20,7 @@ const title = computed(() => definition.value?.title ?? props.entry.name)
 const defaultY = computed(() => yAxisOf(definition.value))
 const preview = computed(() => previewState(props.entry, props.change, defaultY.value))
 const link = computed(() => previewLink(props.entry, preview.value, defaultY.value))
-const caption = computed(() => previewCaption(props.entry, preview.value, props.change))
+const caption = computed(() => previewCaption(props.entry, preview.value, props.change, drawsBaseline(definition.value?.plot.type ?? '')))
 const badge = computed(() => blickBadge(props.entry, props.change))
 const pinned = computed(() => !!props.entry.id && isPinned(props.entry.id))
 const problem = computed(() => firstProblem(props.entry))

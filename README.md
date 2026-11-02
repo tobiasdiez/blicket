@@ -83,10 +83,44 @@ def steel_by_process(run):
     return run["flows"]
 ```
 
-`unit=` names the unit of the measure; the viewer puts it on the y axis and in the tooltips.
+`unit=` names the unit of the measure; the viewer puts it on the y axis, or over a Sankey diagram
+as the width of its links, and in the tooltips.
 `independent_y=True` is for Blicks whose panels differ by orders of magnitude: each panel of a
 split then gets its own y axis by default; otherwise the panels share one, and the viewer's toggle
 changes either. Both are part of the Blick's definition in the manifest.
+
+The built-in plot types bind the table's columns to their channels: `bk.plots.line(x, y,
+color=None, linetype=None)`, `stacked_area(x, y, color=None)`, `bar(x, y, color=None)` (grouped),
+`stacked_bar(x, y, color=None)` and `sankey(source, target, value, color=None)`. `y`, and a
+Sankey's `value`, take the measure column, the other channels dimensions. A Sankey diagram draws a
+link per row from the node of its `source` value to that of its `target` value, as wide as `value`
+and coloured by `color`; a value that is in both columns is one node, so flows may loop, as
+recycling does. A row with no value, 0 or a negative value draws no link, nor does one from a node
+to itself, and a caption under the diagram counts the negative ones and the ones from a node to
+itself; a value within a billionth of the largest of its panel is noise and counts as 0. As for the
+other types, every dimension the plot leaves unbound gets a control, so a Sankey of flows by year
+and region shows one year and region at a time:
+
+```python
+@bk.blick(
+    title="Sankey diagram",
+    unit="t per year",
+    plot=bk.plots.sankey(source="From", target="To", value="value", color="Stage"),
+    defaults={"Time": 2050, "Region": "World"},
+)
+def sankey(run):
+    return run["process_flows"]  # the columns Time, Region, From, To, Stage and value
+```
+
+The table has one row per source, target and colour value for each combination of the other
+dimensions: add parallel flows up in the Blick, since blicket refuses two rows with the same
+dimension values, and a column that tells them apart belongs on `color`. Keep the flows that are 0
+rather than leaving their rows out: a node or colour value that vanishes from the table is flagged
+`schema` and its rows are left out of the magnitude, and the change bars can only show a flow whose
+ends the selection of the other table still carries. A split draws a diagram per value, and with
+`independent_y=True` each has a link scale of its own; the comparison measures a row's change
+against the largest flow of its panel, the largest absolute value in either table, so a negative
+value, which is not drawn, sets the scale all the same.
 
 ```console
 $ blicket list
@@ -216,7 +250,8 @@ the viewer. A sidebar on every page lists the Blicks by group, with a search box
 Blick the comparison flags (see [Comparing two builds](#comparing-two-builds)) and a filter that
 keeps those; it collapses, and on a window narrower than 1280 px it is a drawer. The overview shows
 small charts: of the Blicks that changed since the baseline, the largest change first, each at the
-panel where its change is largest with the baseline faded behind, and of the Blicks you pinned.
+panel where its change is largest with the baseline faded behind (but for a Sankey diagram, which
+does not draw the baseline), and of the Blicks you pinned.
 While nothing is pinned and nothing changed, it shows the first six Blicks instead, as "A first
 look", each card with a button that pins it. A line at the top says when Blicks failed to build or
 the build is incomplete; their problems are listed under the charts. Pins are kept in the browser
@@ -382,7 +417,7 @@ as `check` ranks its movers, the first six as small charts and the others as a l
 such as "4 more changed", each with a badge such as `Δ 2.1%` (the largest change, as a percent of
 the chart's scale), `schema` or `new`, which the sidebar shows too. A card's caption names the panel
 it shows and the rest of the row that changed most: `Region: SSA · largest change at Flow: Primary,
-Time: 2100 · baseline faded`.
+Time: 2100 · baseline faded`; a Sankey diagram's says nothing of the baseline.
 
 A Blick's page says what changed: its flags, the largest change, where it is and against which
 baseline (`largest change 2.1% of the chart's scale at Region: SSA, Flow: Primary, Time: 2100,
@@ -390,14 +425,17 @@ against run …`), with a "Show where" button when that is another filter settin
 columns that appeared or vanished. "Compare with baseline", on by default, draws the baseline
 behind the chart, faded and broader in each series' colour: wide lines behind the lines, the
 baseline's stack as faded areas under the current one drawn as lines, wider bars behind the bars.
-The tooltip shows the baseline's number where it differs, as `−60.1M (baseline −48.1M)`.
+The tooltip shows the baseline's number where it differs, as `−60.1M (baseline −48.1M)`. A Sankey
+diagram has no baseline behind it, since two layouts do not line up; a link's tooltip gives the
+baseline's value and the change.
 
 While the switch is on, two charts under the chart, in its panels, colours and legend, draw the
 change of each row against the baseline, in the Blick's unit and relative to the baseline's value:
 lines, grouped bars for bars, and stacked bars for the change of stacked bars, gains up and losses
-down. As in `check`, a row missing from one table counts as 0; a row with a dimension value only
-one table has gets no change drawn, and when the selection has nothing to compare, the page says
-so instead of drawing the two charts. A build that was never checked looks as before.
+down; for a Sankey diagram, a bar per link that changed, labelled `source → target`, the largest
+change first. As in `check`, a row missing from one table counts as 0; a row with a dimension
+value only one table has gets no change drawn, and when the selection has nothing to compare, the
+page says so instead of drawing the two charts. A build that was never checked looks as before.
 
 ## Developing Blicks
 
@@ -443,7 +481,9 @@ checks a Blick's; the chart, its controls, the data tab and the exports are thos
 and a line under the title says what was summed and which values are kept. Picking more quantities
 of one unit puts them into one chart, told apart by a dimension `Quantity` that holds their titles,
 on colour at first; summed over `Quantity`, they add up. The dimension on `x` can only swap with one
-on another channel, since a chart needs an `x`. A query that cannot run, such as one that sums a
+on another channel, since a chart needs an `x`. A Sankey diagram starts with nothing on `source` and
+`target`, and time as a filter; the chart waits until both have a dimension, and from then on they
+can only swap. A query that cannot run, such as one that sums a
 quantity that is not additive, or one whose table exceeds 100,000 rows (the problem names the
 dimensions and their sizes), shows its problem above the last chart, which stays dimmed until the
 next query runs. The builder's state is in the URL

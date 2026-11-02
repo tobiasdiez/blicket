@@ -30,7 +30,8 @@ const PLOT_FLOOR = 160 // px, the least plot width without panels
 const AXIS_WIDTH = Y_LABEL_EXTENT + 20
 /** Vega's padding, left and right, and some slack, in px. */
 export const PADDING = 20
-const SPACING = 16
+/** The room between panels, in px. */
+export const SPACING = 16
 // The height of the plot area without panels and of a panel, in px: of the measure, of a change
 // under it, and of a compact chart.
 const HEIGHTS: Record<Quantity | 'compact', [single: number, panel: number]> = {
@@ -48,7 +49,8 @@ export interface Channels {
   linetype: Dimension | null
 }
 
-function dimension(args: Pick<PlotArgs, 'schema'>, name: string): Dimension {
+/** The dimension of the table called `name`; an error when it has none. */
+export function dimension(args: Pick<PlotArgs, 'schema'>, name: string): Dimension {
   const found = args.schema.dimensions.find(d => d.name === name)
   if (!found) throw new Error(`the table has no dimension ${name}`)
   return found
@@ -82,7 +84,8 @@ export function combinations(dims: Dimension[]): string[] {
   return labels
 }
 
-const splitDimensions = (args: PlotArgs) => args.state.splits.map(name => dimension(args, name))
+/** The dimensions split into panels. */
+export const splitDimensions = (args: Pick<PlotArgs, 'schema' | 'state'>) => args.state.splits.map(name => dimension(args, name))
 
 /** The key of a row's value of `d`, which compares equal across the tables. */
 export function cellKey(row: Row, d: Dimension): string {

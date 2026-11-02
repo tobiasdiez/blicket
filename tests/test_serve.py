@@ -375,6 +375,7 @@ def test_dev_info_and_dataset(tmp_path: Path) -> None:
             "stacked_area",
             "bar",
             "stacked_bar",
+            "sankey",
         ]
         assert fetch(server, "/dev/nothing")[0].status == 404
         response, body = fetch(server, "/dev/query")  # a GET

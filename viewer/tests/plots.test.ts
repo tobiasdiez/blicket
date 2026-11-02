@@ -8,9 +8,11 @@ import { nothingToCompare, PLOT_TYPES } from '../app/plots'
 import { changeRows, changeSpec, comparable, exportName } from '../app/plots/change'
 import { magnitude } from '../app/plots/layout'
 import { lineSpec } from '../app/plots/line'
+import { legendGrid } from '../app/plots/encodings'
 import { stackedAreaSpec } from '../app/plots/stacked_area'
 import { CATEGORICAL, INK } from '../app/plots/theme'
 import type { ChangeKind, PlotArgs, Theme } from '../app/plots/types'
+import { flows, stage } from './sankey-flows'
 
 // The specs are read loosely: their Vega-Lite types are unions too deep to narrow in a test.
 type Any = Record<string, any>
@@ -76,9 +78,10 @@ async function run(spec: Any): Promise<{ warnings: string[], vega: Any, data: Re
   const view = new View(parse(vega), { renderer: 'none' })
   await view.runAsync()
   const data = Object.fromEntries(vega.data.map((d: Any) => [d.name, view.data(d.name)]))
-  const x = view.scale('x').domain()
+  // A facet with independent x axes has no top-level x scale.
+  const x = (vega.scales ?? []).some((scale: Any) => scale.name === 'x') ? view.scale('x').domain() : []
   // A facet with independent y axes has no top-level y scale.
-  const y = vega.scales.some((scale: Any) => scale.name === 'y') ? view.scale('y').domain() : undefined
+  const y = (vega.scales ?? []).some((scale: Any) => scale.name === 'y') ? view.scale('y').domain() : undefined
   const rects: Any[] = []
   const visit = (node: Any) => {
     if (node.marktype === 'rect' && node.role === 'mark') rects.push(...node.items)
@@ -572,7 +575,7 @@ describe('the change against the baseline', () => {
   it('draws when no row of one table matches the other\'s, in panels too', async () => {
     const plotArgs = args([year, region, scenario], { x: 'Time', color: 'Region' }, { splits: ['Scenario'], baseline: twoThirdsButFifth })
     const renamed = { ...plotArgs, baseline: plotArgs.baseline!.map(row => ({ ...row, Scenario: `${row.Scenario} (old)` })) }
-    for (const type of Object.keys(PLOT_TYPES)) {
+    for (const type of Object.keys(SPECS)) {
       expect((await run(change(renamed, type))).warnings).toEqual([])
     }
   })
@@ -619,7 +622,7 @@ describe('the change against the baseline', () => {
 
   it('does not ask a project\'s plot type, whose mapping need not have the built-ins\' channels', () => {
     const plotArgs = args([year, region], { x: 'Time', color: 'Region' }, { baseline: twoThirdsButFifth })
-    expect(nothingToCompare('sankey', { ...plotArgs, mapping: { source: 'Region', value: 'value' } })).toBe(false)
+    expect(nothingToCompare('chord', { ...plotArgs, mapping: { from: 'Region', size: 'value' } })).toBe(false)
   })
 
   it('keeps every panel of the chart, also one without a change, for bars and lines', async () => {
@@ -627,7 +630,7 @@ describe('the change against the baseline', () => {
     for (const y of ['shared', 'independent'] as const) {
       const plotArgs = args([year, region, latest], { x: 'Time', color: 'Region' }, { splits: ['Scenario'], y, baseline: twoThirdsButFifth })
       const lacking = { ...plotArgs, baseline: plotArgs.baseline!.filter(row => row.Scenario !== 'new') }
-      for (const type of Object.keys(PLOT_TYPES)) {
+      for (const type of Object.keys(SPECS)) {
         const main = await run((type.endsWith('bar') ? bars(lacking, type === 'stacked_bar') : line(lacking)))
         for (const kind of ['change', 'relative'] as const) {
           const result = await run(change(lacking, type, kind))
@@ -640,7 +643,7 @@ describe('the change against the baseline', () => {
   it('has 0 on its y axis, also without a change', async () => {
     const plotArgs = args([year, region], { x: 'Time', color: 'Region' }, { baseline: twoThirdsButFifth })
     const renamed = { ...plotArgs, baseline: plotArgs.baseline!.map(row => ({ ...row, Region: `${row.Region} (old)` })) }
-    for (const type of Object.keys(PLOT_TYPES)) {
+    for (const type of Object.keys(SPECS)) {
       for (const kind of ['change', 'relative'] as const) expect((await run(change(renamed, type, kind))).y).toEqual([0, 0])
     }
   })
@@ -659,7 +662,7 @@ describe('the change against the baseline', () => {
 
   it('is drawn by every built-in plot type, in both kinds', async () => {
     const plotArgs = args([year, region, scenario], { x: 'Time', color: 'Region' }, { splits: ['Scenario'], baseline: twoThirdsButFifth })
-    for (const type of Object.keys(PLOT_TYPES)) {
+    for (const type of Object.keys(SPECS)) {
       for (const kind of ['change', 'relative'] as const) {
         expect((await run(change(plotArgs, type, kind))).warnings).toEqual([])
       }
@@ -682,8 +685,7 @@ function compact(type: string, plotArgs: PlotArgs): Any {
 
 describe('a compact chart', () => {
   it('is lower, without legend, its baseline, tooltips and highlights kept, for every built-in', async () => {
-    expect(Object.keys(SPECS)).toEqual(Object.keys(PLOT_TYPES))
-    for (const type of Object.keys(PLOT_TYPES)) {
+    for (const type of Object.keys(SPECS)) {
       const dimensions = type.endsWith('bar') ? [region, scenario] : [year, region]
       const x = dimensions[0]!.name
       const color = dimensions[1]!.name
@@ -716,5 +718,54 @@ describe('tooltips', () => {
     const plotArgs = args([year], { x: 'Time' }, { value: i => (i === 1 ? Number.NaN : i) })
     const result = await run(line({ ...plotArgs, table: plotArgs.table.map((row, i) => (i === 2 ? { ...row, value: null } : row)) }))
     expect(rowsAfter(result, { as: '__shown' }).map(row => row.__shown)).toEqual(['0', '–', '–'])
+  })
+})
+
+describe('the plot types', () => {
+  it('are the Vega-Lite specifications above and the Sankey diagram', () => {
+    expect(Object.keys(PLOT_TYPES)).toEqual([...Object.keys(SPECS), 'sankey'])
+  })
+})
+
+/** The labels of the drawn bars, top to bottom. */
+const barLabels = (result: { rects: Any[] }) => result.rects.toSorted((a, b) => a.y - b.y).map(rect => rect.datum.__link)
+
+describe('the change bars of the Sankey diagram', () => {
+  it('draws the change as bars per link, the largest first, links without a change left out', async () => {
+    // Production → Use of the stage Use grows by 3, End of life → Landfill shrinks by 1.
+    const plotArgs = flows({ baseline: (value, row) => (row.Stage === 'Use' ? 7 : row.To === 'Landfill' && value !== null ? value + 1 : value) })
+    const absolute = change(plotArgs, 'sankey')
+    expect([absolute.encoding.x.title, absolute.encoding.x.field, absolute.encoding.x.axis.orient, absolute.encoding.y.sort]).toEqual(['change [t]', '__change', 'top', { field: '__size', op: 'max', order: 'descending' }])
+    const result = await run(absolute)
+    expect(result.warnings).toEqual([])
+    // Two stages flow from Production to Use: their bars are told apart by the stage.
+    expect(barLabels(result)).toEqual(['Production → Use · Use', 'End of life → Landfill', 'Recycling → Landfill'])
+    expect(rowsAfter(result, { as: '__shown' }).map(row => row.__shown)).toEqual(['+3', '−1', '−1'])
+    expect(absolute.encoding.color.scale.range).toEqual(CATEGORICAL.light.slice(0, 4))
+    // The legend has the room of the plot, where Vega starts it.
+    expect(absolute.encoding.color.legend.columns).toBe(legendGrid(stage.values as string[], absolute.width).columns)
+    const relative = change(plotArgs, 'sankey', 'relative')
+    expect([relative.encoding.x.title, relative.encoding.x.axis.format]).toEqual(['relative change', '.3~p'])
+    // Recycling → Landfill has no relative change against the baseline's 0.
+    expect(barLabels(await run(relative))).toEqual(['Production → Use · Use', 'End of life → Landfill'])
+  })
+
+  it('draws the change bars in the diagram\'s panels, their x axes shared or not', async () => {
+    for (const y of ['shared', 'independent'] as const) {
+      const plotArgs = flows({ splits: ['Time'], y, color: false, baseline: (value, row) => (row.From === 'Use' && value !== null ? value * 2 : value) })
+      const spec = change(plotArgs, 'sankey', 'change', 900)
+      expect([spec.facet.field, spec.facet.sort, spec.columns, spec.resolve.scale]).toEqual(['__panel', ['2050', '2100'], 2, { x: y, y: 'independent' }])
+      const result = await run(spec)
+      expect(result.warnings).toEqual([])
+      expect(result.rects.map(rect => [rect.datum.__panel, rect.datum.__link])).toEqual([['2050', 'Use → End of life'], ['2100', 'Use → End of life']])
+    }
+  })
+
+  it('leaves out a panel without a change, and draws when no flow of one table matches the other\'s', async () => {
+    const plotArgs = flows({ splits: ['Time'], baseline: (value, row) => (row.Time === 2100 && value !== null ? value + 1 : value) })
+    const result = await run(change(plotArgs, 'sankey'))
+    expect([result.warnings, result.data.facet_domain!.map(row => row.__panel)]).toEqual([[], ['2100']])
+    const renamed = { ...plotArgs, baseline: plotArgs.baseline!.map(row => ({ ...row, From: `${row.From} (old)` })) }
+    for (const kind of ['change', 'relative'] as const) expect((await run(change(renamed, 'sankey', kind))).warnings).toEqual([])
   })
 })

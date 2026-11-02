@@ -21,7 +21,11 @@ export function definePlot(build: (args: PlotArgs, width: number) => TopLevelSpe
         logLevel: vega.Error,
       })
       el.querySelector('.vega-embed summary')?.setAttribute('aria-label', `Export ${args.name}`)
-      return () => result.finalize()
+      // The element may go on to hold a chart of another kind, which these classes would style.
+      return () => {
+        result.finalize()
+        el.classList.remove('vega-embed', 'has-actions')
+      }
     },
   }
 }

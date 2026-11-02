@@ -29,7 +29,7 @@ import { queryFromState, stateFromQuery, type ControlState } from '~/lib/control
 import { downloadCsv } from '~/lib/csv'
 import { select } from '~/lib/select'
 
-const PLOT_LABELS: Record<string, string> = { line: 'Line', stacked_area: 'Stacked area', bar: 'Bar', stacked_bar: 'Stacked bar' }
+const PLOT_LABELS: Record<string, string> = { line: 'Line', stacked_area: 'Stacked area', bar: 'Bar', stacked_bar: 'Stacked bar', sankey: 'Sankey' }
 
 const route = useRoute()
 const router = useRouter()

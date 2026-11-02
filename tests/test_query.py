@@ -305,7 +305,8 @@ def test_several_quantities_make_a_quantity_dimension() -> None:
         (
             ["flows/steel"],
             {"plot": "pie"},
-            "no plot type 'pie' in the builder; it offers line, stacked_area, bar, stacked_bar",
+            "no plot type 'pie' in the builder; it offers line, stacked_area, bar, stacked_bar, "
+            "sankey",
         ),
         (
             ["flows/steel"],
@@ -402,7 +403,13 @@ def test_a_select_returning_other_columns_is_a_problem() -> None:
 
 def test_the_options_list_the_plot_types_of_one_measure() -> None:
     options = query.Options.of(contents(Toy()))
-    assert [p.name for p in options.plots] == ["line", "stacked_area", "bar", "stacked_bar"]
+    assert [p.name for p in options.plots] == [
+        "line",
+        "stacked_area",
+        "bar",
+        "stacked_bar",
+        "sankey",
+    ]
     dumped = options.model_dump(mode="json")
     assert dumped["plots"][0]["channels"][0] == {
         "name": "x",
@@ -411,6 +418,31 @@ def test_the_options_list_the_plot_types_of_one_measure() -> None:
         "doc": "Horizontal axis, usually time.",
     }
     assert dumped["quantities"][0]["title"] == "steel"
+
+
+def test_a_sankey_query_binds_its_ends_and_filters_the_rest() -> None:
+    result = ask(
+        Toy(),
+        quantities=["flows/steel"],
+        plot="sankey",
+        mapping={"source": "region", "target": "process"},
+        keep=["year"],
+    )
+    definition = result.entry.definition
+    assert definition is not None
+    assert definition.plot.type == "sankey"
+    assert definition.plot.mapping == {"source": "region", "target": "process", "value": "value"}
+    assert [(c.dimension, c.kind, c.default) for c in result.entry.controls] == [
+        ("year", "filter", 2020)
+    ]
+    assert table(result).height == 18
+    missing = ask(Toy(), quantities=["flows/steel"], plot="sankey", mapping={"source": "region"})
+    assert problem(missing) == "the target channel needs a dimension; give one the role target"
+    neither = ask(Toy(), quantities=["flows/steel"], plot="sankey", mapping={})
+    assert problem(neither) == (
+        "the source and target channels need a dimension; give one the role source and one the "
+        "role target"
+    )
 
 
 def test_a_select_returning_values_of_another_type_names_the_column() -> None:

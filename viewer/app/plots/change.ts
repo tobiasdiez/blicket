@@ -90,15 +90,20 @@ export function comparable(args: Compared): boolean {
   return pairs(args).some(([, values]) => values !== null && (values[0] !== null || values[1] !== null))
 }
 
-/** The arguments of the `kind` of change chart of `args`: its change rows, with the change as the measure. */
+/**
+ * The arguments of the `kind` of change chart of `args`: its change rows, with the change as the
+ * measure on a linear y axis, since a change crosses zero, and x on the chart's scale.
+ */
 function changeArgs(args: PlotArgs, kind: ChangeKind): PlotArgs {
   const measure = kind === 'change' ? CHANGE : RELATIVE
+  const { y: _, ...scales } = args.scales ?? {}
   return {
     ...args,
     table: changeRows(args),
     baseline: null,
     schema: { ...args.schema, measures: [{ name: measure, dtype: 'float' }] },
     mapping: { ...args.mapping, y: measure },
+    scales,
     unit: kind === 'change' ? args.unit : null,
   }
 }

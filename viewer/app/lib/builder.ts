@@ -2,7 +2,7 @@
 // URL. The shapes of the options and the request are those of src/blicket/query.py and
 // src/blicket/dataset.py, written by hand.
 import { SPLIT, Y, strings, type Query } from './controls'
-import type { Dimension } from './manifest'
+import type { Dimension, Scale } from './manifest'
 import { CHANNEL_LABELS } from './roles'
 import { valueKey } from './table'
 
@@ -24,6 +24,8 @@ export interface Channel {
   kind: 'dimension' | 'measure'
   required: boolean
   doc: string
+  /** The axis scales a Blick can give the channel besides `linear`; empty for a channel that is no continuous axis. */
+  scales?: Scale[]
 }
 
 /** A plot type the builder offers, with its channels. */

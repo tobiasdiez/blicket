@@ -5,13 +5,14 @@ import { select } from '~/lib/select'
 import type { Row } from '~/lib/table'
 
 /**
- * What `BlickChart` draws of a Blick: its plot, the rows and the baseline's rows after the state's
- * filters, and the state's panels and y axes; `null` while any of them is missing.
+ * What `BlickChart` draws of a Blick: its plot with its scales, the rows and the baseline's rows
+ * after the state's filters, and the state's panels and y axes; `null` while any of them is
+ * missing.
  */
 export function chartPropsOf(definition: BlickDefinition | null, schema: TableSchema | null, rows: Row[] | null, state: ControlState | null, baseline: Row[] | null) {
   if (!definition || !schema || !rows || !state) return null
-  const { type, mapping } = definition.plot
-  return { type, mapping, schema, unit: definition.unit, rows, splits: state.splits, y: state.y, baseline }
+  const { type, mapping, scales } = definition.plot
+  return { type, mapping, scales, schema, unit: definition.unit, rows, splits: state.splits, y: state.y, baseline }
 }
 
 /**

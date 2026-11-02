@@ -47,9 +47,14 @@ export interface Problem {
   traceback: string | null
 }
 
+/** How an axis maps values to positions; `linear` is every axis's default. */
+export type Scale = 'linear' | 'log'
+
 export interface PlotDefinition {
   type: string
   mapping: Record<string, string>
+  /** The scales of the channels whose axis is not linear, such as `{ y: 'log' }`; without it, every axis is linear. */
+  scales?: Record<string, Scale>
 }
 
 export interface BlickDefinition {

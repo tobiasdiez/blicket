@@ -39,11 +39,14 @@ def compare(
     A row's change is measured against the scale of its panel, the compared rows with the same
     values in the ``panels`` columns (all compared rows without them): the largest absolute value
     of ``y`` in the panel in either table, at least ``_EPSILON`` times the largest of all compared
-    rows. ``stacked_by`` is the column on the ``color`` channel of a stacked chart: the scale is
-    then the highest stack, positive and negative values stacked apart, and the stacks are
-    compared as well. The magnitude is the largest change, at most 1. ``where`` holds the
-    dimension values of the first row in sort order that reached it, or of the first stack when a
-    stack changed more than every row by ``_STACK_MARGIN``, and is ``None`` when nothing changed.
+    rows. ``stacked_by`` is the column on the ``color`` channel of a stacked chart; its values are
+    the layers, and rows that agree on every other dimension make a stack, positive values up and
+    negative ones down. The scale is then the highest stack, the larger of the positive sum and the
+    absolute negative one, not their net. The positive sums of the two tables, and the negative
+    ones, are compared as well, each on its own. The magnitude is the largest change, at most 1.
+    ``where`` holds the dimension values of the first row in sort order that reached it, or, when
+    the sum of a stack changed more than every row by ``_STACK_MARGIN``, of the first such stack,
+    without ``stacked_by`` and without saying which sum; it is ``None`` when nothing changed.
 
     Raises ``TypeError`` for a table that is not a polars frame or ``panels`` given as a string,
     and ``ValueError`` when ``y``, ``panels`` or ``stacked_by`` do not fit the current table or a

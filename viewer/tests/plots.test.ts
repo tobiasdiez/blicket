@@ -67,9 +67,10 @@ const moment: Dimension = { name: 'Moment', dtype: 'datetime', values: ['2020-01
 
 /**
  * Compile and run the spec headless; returns the Vega-Lite warnings, the compiled Vega spec, the
- * rows of every dataset, the domains of the x and y scales, and the drawn bars.
+ * rows of every dataset, the domains of the x and y scales, and the drawn items of the area, line
+ * and bar marks, per mark in the order of the layers.
  */
-async function run(spec: Any): Promise<{ warnings: string[], vega: Any, data: Record<string, Any[]>, x: unknown[], y: unknown[] | undefined, rects: Any[] }> {
+async function run(spec: Any): Promise<{ warnings: string[], vega: Any, data: Record<string, Any[]>, x: unknown[], y: unknown[] | undefined, marks: Any[][] }> {
   const warnings: string[] = []
   const logger: Any = { level: () => logger, warn: (...m: unknown[]) => warnings.push(m.join(' ')), info: () => logger, debug: () => logger, error: (e: unknown) => { throw e } }
   const vega = compile(spec as never, { logger: logger as never }).spec as Any
@@ -79,14 +80,15 @@ async function run(spec: Any): Promise<{ warnings: string[], vega: Any, data: Re
   const x = view.scale('x').domain()
   // A facet with independent y axes has no top-level y scale.
   const y = vega.scales.some((scale: Any) => scale.name === 'y') ? view.scale('y').domain() : undefined
-  const rects: Any[] = []
+  // By the mark's name, which the cells of a facet share.
+  const marks = new Map<string, Any[]>()
   const visit = (node: Any) => {
-    if (node.marktype === 'rect' && node.role === 'mark') rects.push(...node.items)
+    if (node.role === 'mark' && ['area', 'line', 'rect'].includes(node.marktype)) marks.set(node.name, [...(marks.get(node.name) ?? []), ...node.items])
     for (const item of node.items ?? []) visit(item)
   }
   visit((view.scenegraph() as Any).root)
   view.finalize()
-  return { warnings, vega, data, x, y, rects }
+  return { warnings, vega, data, x, y, marks: [...marks.values()] }
 }
 
 /** The rows of the dataset with a transform that has the properties of `transform`, such as `{ type: 'pivot' }`. */
@@ -354,14 +356,14 @@ describe('the baseline of a stacked area', () => {
   it('stacks the baseline as faded areas', async () => {
     const spec = area(args([year, region], { x: 'Time', color: 'Region' }, { baseline: sameButFifth }))
     const ghost = layers(spec)[0]
-    expect([ghost.transform, ghost.mark.type, ghost.encoding.y.stack, ghost.encoding.fillOpacity]).toEqual([[BASELINE], 'area', 'zero', GHOST])
+    expect([ghost.transform[0], ghost.mark.type, ghost.encoding.y.stack, ghost.encoding.fillOpacity]).toEqual([BASELINE, 'area', 'zero', GHOST])
     expect((await run(spec)).warnings).toEqual([])
   })
 
   it('draws the current stack as the lines on top of its layers', () => {
     const spec = area(args([year, region], { x: 'Time', color: 'Region' }, { baseline: sameButFifth }))
     const tops = layers(spec)[1]
-    expect([tops.transform, tops.mark, tops.encoding.y.stack]).toEqual([[CURRENT], { type: 'line' }, 'zero'])
+    expect([tops.transform[0], tops.mark, tops.encoding.y.stack]).toEqual([CURRENT, { type: 'line' }, 'zero'])
     expect(tops.encoding.color).toEqual(layers(spec)[0].encoding.color)
     expect(tops.encoding.opacity.condition.param).toBe('focus')
   })
@@ -379,6 +381,148 @@ describe('the baseline of a stacked area', () => {
 
   it('fades a single series without a legend highlight', () => {
     expect(layers(area(args([year], { x: 'Time' }, { baseline: sameButFifth })))[0].encoding.fillOpacity).toEqual({ value: 0.3 })
+  })
+})
+
+/** The regions of a trade chart, World first, whose imports and exports balance, which `region` lacks. */
+const tradeRegions: Dimension = { name: 'Region', dtype: 'string', values: ['World', 'EUR'] }
+
+/**
+ * Arguments of a chart of the flows stacked over the years, in the display `order` of the flows;
+ * with `split`, per region in panels, which share the y axis or have their own as `y` says. `value`
+ * gives each row's value, or none to leave the row out.
+ */
+function flows(order: string[], value: (row: Row) => number | null | undefined, { split = true, y = 'shared' }: { split?: boolean, y?: Options['y'] } = {}): PlotArgs {
+  const flow: Dimension = { name: 'Flow', dtype: 'string', values: order }
+  const plotArgs = args(split ? [flow, year, tradeRegions] : [flow, year], { x: 'Time', color: 'Flow' }, { splits: split ? ['Region'] : [], y })
+  const table = plotArgs.table.flatMap((row) => {
+    const v = value(row)
+    return v === undefined ? [] : [{ ...row, value: v }]
+  })
+  return { ...plotArgs, table }
+}
+
+/** A row's value by its year: the `i`-th of `values` in the `i`-th of `YEARS`. */
+const byYear = (...values: (number | null | undefined)[]) => (row: Row) => values[YEARS.indexOf(row.Time as number)]
+
+/** The imports and the negated exports: World's balance, EUR's exports half its imports, which grow by 1 a year. */
+function trade(row: Row): number {
+  const imports = row.Region === 'World' ? 30 : 10 + (row.Time as number) - 2020
+  return row.Flow === 'Imports' ? imports : row.Region === 'World' ? -imports : -imports / 2
+}
+
+/** A row by its panel, flow and year, such as `EUR Exports 2021`: of the data handed to Vega, or of a table. */
+const stackKey = (row: Any) => [row.__panel ?? row.Region, row.Flow, row.Time].filter(part => part !== undefined).join(' ')
+
+/**
+ * Where Vega stacked each drawn row of `field`, per mark in the order of the layers, by its
+ * `stackKey`: `{ 'EUR Exports 2021': [start, end] }`. Read from the drawn items, since in a facet
+ * the data of a layer's dataset need not be the layer's rows.
+ */
+function stacks(result: { marks: Any[][] }, field = '__stacked'): Record<string, number[]>[] {
+  return result.marks.map(items => Object.fromEntries(items.map(({ datum }) => [stackKey(datum), [datum[`${field}_start`], datum[`${field}_end`]]])))
+}
+
+/** Each row of `table` stacked from 0 to its value. */
+const fromZero = (table: Row[]) => Object.fromEntries(table.map(row => [stackKey(row), [0, row.value]]))
+
+describe('negative stacks', () => {
+  it('stacks the imports up and the exports down from 0, in either order of the flows', async () => {
+    for (const order of [['Imports', 'Exports'], ['Exports', 'Imports']]) {
+      const plotArgs = flows(order, trade)
+      const result = await run(area(plotArgs))
+      expect([result.warnings, stacks(result)]).toEqual([[], [fromZero(plotArgs.table)]])
+      const y = layers(area(plotArgs))[0].encoding.y
+      expect([y.title, y.stack]).toEqual(['value', 'zero'])
+    }
+  })
+
+  it('stacks a zero, a null and a missing year of a layer that is never positive with the negative layers', async () => {
+    // The exports are −6, then 0 or null, then missing; the re-exports −2. Vega stacks the last
+    // flow in display order first, so the exports start at the re-exports' −2, where the negative
+    // number closest to zero adds nothing, or at 0 before them, where it is all there is.
+    for (const [order, below, none] of [[['Imports', 'Exports', 'Re-exports'], -2, -2], [['Re-exports', 'Exports', 'Imports'], 0, -Number.MIN_VALUE]] as const) {
+      for (const missing of [0, null]) {
+        const exports = byYear(-6, missing, undefined)
+        const result = await run(area(flows([...order], row => (row.Flow === 'Exports' ? exports(row) : row.Flow === 'Imports' ? 10 : -2), { split: false })))
+        expect(result.warnings).toEqual([])
+        expect(stacks(result)).toMatchObject([{ 'Exports 2020': [below, below - 6], 'Exports 2021': [below, none], 'Exports 2022': [below, none] }])
+      }
+    }
+  })
+
+  it('stacks a zero down only in the panels where its layer is never positive, with either y axis', async () => {
+    // The exports are −6 in World and 6 in EUR, 0 in 2021 in both; the imports, 10, last in display
+    // order, stack first, next to zero.
+    for (const y of ['shared', 'independent'] as const) {
+      const result = await run(area(flows(['Exports', 'Imports'], row => (row.Flow === 'Imports' ? 10 : row.Time === 2021 ? 0 : row.Region === 'World' ? -6 : 6), { y })))
+      expect(result.warnings).toEqual([])
+      expect(stacks(result)).toMatchObject([{ 'World Exports 2021': [0, -Number.MIN_VALUE], 'EUR Exports 2020': [10, 16], 'EUR Exports 2021': [10, 10] }])
+    }
+  })
+
+  it('fills in a year that a layer lacks in one panel but has in another, with either y axis', async () => {
+    // EUR's exports lack 2021, which World's have.
+    for (const y of ['shared', 'independent'] as const) {
+      const result = await run(area(flows(['Exports', 'Imports'], row => (row.Region === 'EUR' && row.Flow === 'Exports' && row.Time === 2021 ? undefined : trade(row)), { y })))
+      expect(result.warnings).toEqual([])
+      expect(stacks(result)).toMatchObject([{ 'World Exports 2021': [0, -30], 'EUR Exports 2021': [0, -Number.MIN_VALUE] }])
+    }
+  })
+
+  it('stacks the baseline\'s areas and the current lines on top of them alike, with either y axis', async () => {
+    // EUR's exports are −5 in 2020, then 0, then missing, in both tables; the baseline is twice the current.
+    const exports = byYear(-5, 0, undefined)
+    const none = [0, -Number.MIN_VALUE]
+    for (const y of ['shared', 'independent'] as const) {
+      const plotArgs = flows(['Exports', 'Imports'], row => (row.Region === 'EUR' && row.Flow === 'Exports' ? exports(row) : trade(row)), { y })
+      const result = await run(area({ ...plotArgs, baseline: plotArgs.table.map(row => ({ ...row, value: 2 * (row.value as number) })) }))
+      expect(result.warnings).toEqual([])
+      expect(stacks(result)).toMatchObject([
+        { 'EUR Imports 2021': [0, 22], 'EUR Exports 2020': [0, -10], 'EUR Exports 2021': none, 'EUR Exports 2022': none },
+        { 'EUR Imports 2021': [0, 11], 'EUR Exports 2020': [0, -5], 'EUR Exports 2021': none, 'EUR Exports 2022': none },
+      ])
+    }
+  })
+
+  it('stacks each value of a layer with values of both signs on the side of its sign, next to zero when it is last', async () => {
+    // The balance is 4, −4 and 0, the imports 10, the exports −6; a zero of the balance is on the
+    // positive side. First in display order, the balance is the outermost layer: it jumps from the
+    // top of the imports to the bottom of the exports. Last, it lies next to zero, and the other
+    // layers start where it ends.
+    const balance = byYear(4, -4, 0)
+    const value = (row: Row) => (row.Flow === 'Balance' ? balance(row) : row.Flow === 'Imports' ? 10 : -6)
+    const first = await run(area(flows(['Balance', 'Imports', 'Exports'], value, { split: false })))
+    expect(first.warnings).toEqual([])
+    expect(stacks(first)).toMatchObject([{ 'Balance 2020': [10, 14], 'Balance 2021': [-6, -10], 'Balance 2022': [10, 10] }])
+    const last = await run(area(flows(['Imports', 'Exports', 'Balance'], value, { split: false })))
+    expect(last.warnings).toEqual([])
+    expect(stacks(last)).toEqual([{
+      'Balance 2020': [0, 4],
+      'Balance 2021': [0, -4],
+      'Balance 2022': [0, 0],
+      'Imports 2020': [4, 14],
+      'Imports 2021': [0, 10],
+      'Imports 2022': [0, 10],
+      'Exports 2020': [0, -6],
+      'Exports 2021': [-4, -10],
+      'Exports 2022': [0, -6],
+    }])
+  })
+
+  it('keeps the y axis from 0 for a layer of zeros beside positive layers', async () => {
+    // A layer of zeros is never negative, so its zeros stack at 0: at the negative number closest
+    // to zero, they would take the axis a tick below 0.
+    const result = await run(area(flows(['Imports', 'Exports'], row => (row.Flow === 'Imports' ? 0.5 : 0), { split: false })))
+    expect([result.warnings, result.y]).toEqual([[], [0, 0.5]])
+  })
+
+  it('stacks the bars of the exports down from 0, in either order of the flows', async () => {
+    for (const order of [['Imports', 'Exports'], ['Exports', 'Imports']]) {
+      const plotArgs = flows(order, trade)
+      const result = await run(bars(plotArgs, true))
+      expect([result.warnings, stacks(result, 'value')]).toEqual([[], [fromZero(plotArgs.table)]])
+    }
   })
 })
 
@@ -648,7 +792,7 @@ describe('the change against the baseline', () => {
   it('leaves out the gap of a stacked segment of no height, which would cut the zero line', async () => {
     const plotArgs = args([year, region], { x: 'Time', color: 'Region' }, { value: i => [5, 3, 0][i % 3]!, baseline: i => [5, 1, 0][i % 3]! })
     for (const spec of [bars({ ...plotArgs, baseline: null }, true), change(plotArgs, 'stacked_bar')]) {
-      const strokes = (await run(spec)).rects.map(item => [item.height > 0, item.stroke])
+      const strokes = (await run(spec)).marks.flat().map(item => [item.height > 0, item.stroke])
       expect(new Set(strokes.map(stroke => JSON.stringify(stroke)))).toEqual(new Set([JSON.stringify([true, INK.light.surface]), JSON.stringify([false, 'transparent'])]))
     }
   })
@@ -690,7 +834,8 @@ describe('a compact chart', () => {
       const spec = compact(type, args(dimensions, { x, color }, { baseline: sameButFifth }))
       expect([spec.height, spec.config.legend.disable]).toEqual([160, true])
       const drawn = layers(spec) ?? [spec]
-      expect(drawn[0].transform).toEqual([BASELINE])
+      // The stacked area's layers stack by sign in transforms after the source filter.
+      expect(type === 'stacked_area' ? drawn[0].transform.slice(0, 1) : drawn[0].transform).toEqual([BASELINE])
       const result = await run(spec)
       expect([result.warnings, result.vega.legends]).toEqual([[], undefined])
       // The hover and the legend's highlight stay: other layers refer to them.

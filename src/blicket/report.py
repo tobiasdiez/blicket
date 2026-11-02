@@ -4,6 +4,7 @@ computed."""
 
 import importlib.metadata
 import json
+import textwrap
 from collections import Counter, defaultdict
 from collections.abc import Sequence
 from datetime import UTC
@@ -62,6 +63,14 @@ type _Block = tuple[Source | None, list[str]]
 _INCOMPLETE = "incomplete (Blicks missing)"
 _EMPTY = "\N{EN DASH}"  # an empty cell of a Markdown table
 _POINTER = " (all in --json)"  # after a shortened list in the text of diff
+# The names of the Blicks skipped for one reason, under the reason.
+_SKIPPED_NAMES = textwrap.TextWrapper(
+    width=100,
+    initial_indent="    ",
+    subsequent_indent="    ",
+    break_long_words=False,
+    break_on_hyphens=False,
+)
 
 
 def _section(title: str, blocks: Sequence[_Block]) -> list[str]:
@@ -159,7 +168,7 @@ def _hint(problem: Problem, verbose: bool) -> str:
 def _problem_lines(problem: Problem, root: Path | None, verbose: bool = False) -> list[str]:
     """The problem's location and kind, the traceback under ``-v``, then its message lines.
 
-    The message comes last, so the note that a file's Blicks were skipped ends the entry.
+    The message comes last, so the note that a file's Blicks are missing ends the entry.
     """
     location = problem.location(root)
     heading = f"{location}  {_headline(problem.kind)}" if location else _headline(problem.kind)
@@ -192,7 +201,8 @@ def _head(repository: Repository | None) -> str:
 
 
 def render_build(result: Build, *, verbose: bool = False) -> str:
-    """The text of ``blicket build``: the run, the counts, the build directory, then problems."""
+    """The text of ``blicket build``: the run, the counts, the build directory, the skipped
+    Blicks with their reasons, then problems."""
     manifest = result.manifest
     run, head = manifest.run, _head(manifest.repository)
     milliseconds = manifest.build.loader_ms
@@ -217,15 +227,41 @@ def render_build(result: Build, *, verbose: bool = False) -> str:
         for severity, blocks in (("error", errors), ("warning", warnings)):
             if problems := [p for p in entry.problems if p.severity == severity]:
                 blocks.append((entry.source, _blick_lines(entry, problems, None, verbose)))
-    return "\n".join([*lines, *_section("warnings", warnings), *_section("errors", errors)])
+    sections = [
+        *_section("skipped", _skipped_blocks(manifest)),
+        *_section("warnings", warnings),
+        *_section("errors", errors),
+    ]
+    return "\n".join([*lines, *sections])
+
+
+def _skipped_blocks(manifest: Manifest) -> list[_Block]:
+    """The skipped Blicks grouped by their reason, a block per reason, ordered by location like
+    the other sections: the reason, its further lines indented as the names of its Blicks under
+    it, which are wrapped to 100 columns."""
+    by_reason: dict[str, list[BlickEntry]] = defaultdict(list)
+    for entry in manifest.blicks:
+        if entry.status == "skipped":
+            by_reason[entry.skipped or ""].append(entry)
+    blocks: list[_Block] = []
+    for reason, entries in by_reason.items():
+        first, *rest = reason.splitlines() or [""]
+        names = _SKIPPED_NAMES.wrap(", ".join(entry.name for entry in entries))
+        blocks.append(
+            (entries[0].source, [f"  {first}", *(f"    {line}" for line in rest), *names])
+        )
+    return blocks
 
 
 def _build_summary(manifest: Manifest) -> str:
-    """``N Blicks: n built · n errors``, file-level errors by kind, warnings, incompleteness."""
-    built = sum(entry.data is not None for entry in manifest.blicks)
-    parts = [f"{_count(len(manifest.blicks), 'Blick')}: {built} built"]
-    if failed := len(manifest.blicks) - built:
-        parts.append(_count(failed, "error"))
+    """``N Blicks: n built · n skipped · n errors``, file-level errors by kind, warnings,
+    incompleteness."""
+    statuses = manifest.statuses
+    parts = [f"{_count(len(manifest.blicks), 'Blick')}: {statuses['ok']} built"]
+    if statuses["skipped"]:
+        parts.append(f"{statuses['skipped']} skipped")
+    if statuses["error"]:
+        parts.append(_count(statuses["error"], "error"))
     file_errors = Counter(p.kind for p in manifest.problems if p.severity == "error")
     parts.extend(_count(n, f"{kind.replace('_', ' ')} error") for kind, n in file_errors.items())
     problems = [*manifest.problems, *(p for entry in manifest.blicks for p in entry.problems)]
@@ -322,11 +358,13 @@ def render_check(
 
 
 def _counts_line(comparison: Comparison, label: str) -> str:
-    """``label``, then the Blicks per flag, the unchanged ones, and whether removed was judged."""
+    """``label``, then the unchanged Blicks, the skipped ones, which were not compared, whether
+    flagged ``removed`` or not, the Blicks per flag, and whether removed was judged."""
     blicks, counts = comparison.blicks, comparison.counts
-    unchanged = len(blicks) - comparison.flagged
+    unchanged = sum(not blick.change.flags and not blick.skipped for blick in blicks)
     numbers = [
         ("unchanged", unchanged),
+        ("skipped", comparison.skipped),
         *((flag, counts[flag]) for flag in ("value", "schema", "new", "removed")),
     ]
     parts = [f"{number} {word}" for word, number in numbers if number]
@@ -361,19 +399,15 @@ def _mover_lines(comparison: Comparison, pointer: str = "") -> list[str]:
 def _detail_lines(
     comparison: Comparison, built: Manifest | None = None, *, pointer: str = ""
 ) -> list[str]:
-    """The Blicks whose values appeared or vanished, the new, the removed, and the errors;
-    without the errors of Blicks that have no table in ``built``, when given. ``pointer`` follows
-    a shortened list of values."""
+    """The Blicks whose values appeared or vanished, the new and the removed, with their messages,
+    and the errors; without the errors of Blicks that have no table in ``built``, when given.
+    ``pointer`` follows a shortened list of values."""
     blicks = comparison.blicks
     tables = None if built is None else {e.id for e in built.blicks if e.data is not None}
     sections = {
         "schema": [_schema_lines(b, pointer) for b in blicks if "schema" in b.change.flags],
-        "new": [
-            [f"  {b.name}  {b.message}" if b.message else f"  {b.name}"]
-            for b in blicks
-            if "new" in b.change.flags
-        ],
-        "removed": [[f"  {b.name}"] for b in blicks if "removed" in b.change.flags],
+        "new": [_named(b) for b in blicks if "new" in b.change.flags],
+        "removed": [_named(b) for b in blicks if "removed" in b.change.flags],
         "errors": [
             [f"  {b.name}  {b.message}"]
             for b in blicks
@@ -386,11 +420,18 @@ def _detail_lines(
     return lines
 
 
+def _named(blick: BlickComparison) -> list[str]:
+    """A Blick's line in a section of the details: its name, and its message if any."""
+    return [f"  {blick.name}  {blick.message}" if blick.message else f"  {blick.name}"]
+
+
 def render_markdown(comparison: Comparison) -> str:
     """The Markdown summary of a comparison: a heading with the two builds, the counts, a table
     of the flagged Blicks, the largest change first, then the columns and values that
-    appeared or vanished, the new Blicks that did not build in the baseline, and the errors,
-    those of the files of an incomplete build first."""
+    appeared or vanished, the new Blicks that did not build in the baseline or were skipped there,
+    the removed Blicks that were skipped, and the errors, those of the files of an incomplete
+    build first. A skipped Blick that is removed has the flags ``removed (skipped)``, so that it
+    does not read as a Blick that was deleted."""
     current, baseline = comparison.current, comparison.baseline
     lines = [
         f"### blicket: run {current.run} (`{current.id[:8]}`) against run {baseline.run} "
@@ -414,23 +455,26 @@ def render_markdown(comparison: Comparison) -> str:
         ]
     for blick in flagged:
         change = blick.change
+        flags = ", ".join(flag for flag in get_args(Flag) if flag in change.flags)
         cells = [
             f"`{blick.name}`",
-            ", ".join(flag for flag in get_args(Flag) if flag in change.flags),
+            f"{flags} (skipped)" if blick.skipped else flags,
             change.percent or _EMPTY,
             _where(change.where) if change.where else _EMPTY,
         ]
         lines.append("| " + " | ".join(cell.replace("|", "\\|") for cell in cells) + " |")
     schema = [b for b in comparison.blicks if "schema" in b.change.flags]
     new = [b for b in comparison.blicks if "new" in b.change.flags and b.message]
+    removed = [b for b in comparison.blicks if "removed" in b.change.flags and b.message]
     errors = [b for b in comparison.blicks if "error" in b.change.flags]
     if schema:
         lines += ["", "#### schema", ""]
     for blick in schema:
         lines += [f"- `{blick.name}`", *(f"  - {line}" for line in _schema_details(blick))]
-    if new:
-        lines += ["", "#### new", ""]
-        lines += [f"- `{blick.name}`: {blick.message}" for blick in new]
+    for title, blicks in (("new", new), ("removed", removed)):
+        if blicks:
+            lines += ["", f"#### {title}", ""]
+            lines += [f"- `{blick.name}`: {blick.message}" for blick in blicks]
     if errors or comparison.incomplete:
         lines += ["", "#### errors", ""]
         lines += [f"- {reason}" for reason in comparison.incomplete]

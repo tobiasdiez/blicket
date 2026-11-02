@@ -516,3 +516,40 @@ def test_compute_converts_and_checks_what_the_transformation_returns() -> None:
     assert (result.problems, result.frame is not None) == ((), True)
     (problem,) = compute(replace(blick(), transform=lambda run: None), FRAME, Path()).problems
     assert problem.message == "the transformation returned None; did it forget return?"
+
+
+def test_compute_records_the_skip_of_a_transformation() -> None:
+    def skipping(run: object) -> pl.DataFrame:
+        raise bk.Skip("the run has no trade module")
+
+    result = compute(replace(blick(), transform=skipping), None, Path())
+    assert result == Checked.skip("the run has no trade module")
+    assert (result.frame, result.schema, result.problems) == (None, None, ())
+
+
+class SkippingLate:
+    """Skips in ``to_df()``, after the transformation returned."""
+
+    def to_df(self) -> pd.DataFrame:
+        raise bk.Skip("too late")
+
+
+def skip_in_a_call(run: object) -> pl.DataFrame:
+    try:
+        raise bk.Skip("not mine")
+    except bk.Skip as error:
+        raise Raised("select('flows/steel') of the dataset", error) from error
+
+
+@pytest.mark.parametrize(
+    ("transform", "message"),
+    [
+        (lambda run: SkippingLate(), "converting the returned SkippingLate raised Skip: too late"),
+        (skip_in_a_call, "select('flows/steel') of the dataset raised Skip: not mine"),
+    ],
+)
+def test_a_skip_outside_the_transformation_itself_is_an_error(transform: Any, message: str) -> None:
+    result = compute(replace(blick(), transform=transform), None, Path(__file__).parent)
+    (problem,) = result.problems
+    assert (result.skipped, problem.severity) == (None, "error")
+    assert problem.message.startswith(f"{message} (raised at test_tables.py:")

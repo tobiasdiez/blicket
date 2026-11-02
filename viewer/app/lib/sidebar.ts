@@ -23,6 +23,8 @@ export interface SidebarEntry {
   /** The title, or the name when the Blick has none. */
   label: string
   badge: Badge | null
+  /** Whether the Blick was skipped for the run and no comparison flags it, which mutes it. */
+  muted: boolean
   pinned: boolean
   /** Whether the Blick has no page, which a Blick without an id lacks. */
   disabled: boolean
@@ -47,7 +49,7 @@ function flagged(entry: BlickEntry, changes: ReadonlyMap<string, BlickComparison
   return !!changes.get(entry.name)?.change.flags.length
 }
 
-/** The number of the build's Blicks the comparison flags; a removed Blick is not one of them. */
+/** The number of the build's Blicks the comparison flags; a Blick of the baseline only is not one of them. */
 export function changedCount(manifest: Pick<Manifest, 'blicks'>, changes: ReadonlyMap<string, BlickComparison>): number {
   return manifest.blicks.filter(entry => flagged(entry, changes)).length
 }
@@ -82,15 +84,30 @@ export function sidebarGroups(
         const text = searchText(entry, group.tags)
         return wanted.every(word => text.includes(word))
       })
-      .map((entry): SidebarEntry => ({
-        entry,
-        label: entry.definition?.title ?? entry.name,
-        badge: blickBadge(entry, changes.get(entry.name) ?? null),
-        pinned: pinned.has(entry.name),
-        disabled: entry.id === null,
-      }))
+      .map((entry): SidebarEntry => {
+        const badge = blickBadge(entry, changes.get(entry.name) ?? null)
+        return {
+          entry,
+          label: entry.definition?.title ?? entry.name,
+          badge,
+          muted: entry.status === 'skipped' && badge === null,
+          pinned: pinned.has(entry.name),
+          disabled: entry.id === null,
+        }
+      })
     return entries.length ? [{ value: group.name, label: group.title ?? group.name, entries }] : []
   })
+}
+
+/**
+ * The groups open while the user has chosen none, in their order: all but those whose Blicks are
+ * all skipped for the run and unflagged, which hold nothing to look at, unless `opened` names them,
+ * as the group of the Blick whose page is shown.
+ */
+export function initiallyOpen(groups: SidebarGroup[], opened: readonly string[] = []): string[] {
+  return groups
+    .filter(group => opened.includes(group.value) || !group.entries.every(shown => shown.muted))
+    .map(group => group.value)
 }
 
 /** What the sidebar says when the search and the filter leave no Blick: which of them did. */

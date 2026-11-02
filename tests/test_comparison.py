@@ -128,11 +128,18 @@ def entry(build: Path, **update: object) -> BlickEntry:
     return manifest.read(build).blicks[0].model_copy(update=update)
 
 
+NO_TABLE = {"data": None, "hash": None, "rows": None, "columns": None, "controls": ()}
+
+
 def failed(build: Path, **update: object) -> BlickEntry:
     """The entry of a Blick whose transformation raised."""
     problem = Problem(kind="transformation", message="transformation raised KeyError\nmore")
-    nothing = {"data": None, "hash": None, "rows": None, "columns": None, "controls": ()}
-    return entry(build, **nothing, problems=(problem,), **update)
+    return entry(build, **NO_TABLE, problems=(problem,), **update)
+
+
+def skipped(build: Path, reason: str = "no trade module\nmore", **update: object) -> BlickEntry:
+    """The entry of a Blick whose transformation skipped the run."""
+    return entry(build, **NO_TABLE, skipped=reason, **update)
 
 
 IMPORT_FAILED = Problem(
@@ -205,6 +212,91 @@ def test_another_file_level_error_names_its_message(build: Path) -> None:
 def test_a_failed_blick_is_error_with_its_cause_and_not_removed(build: Path) -> None:
     (blick,) = compare_builds(build, edited(build, failed(build))).blicks
     assert (blick.change.flags, blick.message) == ({"error"}, "transformation raised KeyError")
+
+
+def test_a_blick_skipped_now_is_removed_with_its_reason(build: Path) -> None:
+    comparison = compare_builds(build, edited(build, skipped(build)))
+    (blick,) = comparison.blicks
+    assert (blick.id, blick.change.flags, blick.skipped, blick.message) == (
+        "a/values",
+        {"removed"},
+        True,
+        "skipped: no trade module",
+    )
+    assert not comparison.has_errors
+
+
+def test_a_skipped_blick_is_removed_from_an_incomplete_build_too(build: Path) -> None:
+    comparison = compare_builds(build, edited(build, skipped(build), problems=(IMPORT_FAILED,)))
+    assert flags(comparison) == [("a/values", ["removed"])]
+    assert comparison.incomplete == ("blicks/broken.py failed to import: ModuleNotFoundError",)
+
+
+def test_a_skipped_blick_claims_the_baseline_blicks_of_its_aliases(build: Path) -> None:
+    renamed = skipped(build, id="a/renamed", name="a/renamed", aliases=("a/values",))
+    (blick,) = compare_builds(build, edited(build, renamed)).blicks
+    assert (blick.id, blick.matched, blick.change.flags) == ("a/renamed", "a/values", {"removed"})
+
+
+def baseline_of(build: Path, kind: str) -> Path:
+    """A copy of ``build`` whose Blick was skipped, failed, or is absent, as ``kind`` says."""
+    if kind == "skipped":
+        return edited(build, skipped(build, "another reason"))
+    if kind == "failed":
+        return edited(build, failed(build))
+    return edited(build)
+
+
+@pytest.mark.parametrize(
+    ("kind", "message"),
+    [
+        ("skipped", "skipped: no trade module (skipped in the baseline: another reason)"),
+        ("failed", "skipped: no trade module (did not build in the baseline)"),
+        ("absent", "skipped: no trade module (not in the baseline)"),
+    ],
+)
+def test_a_blick_skipped_now_without_a_baseline_table_is_skipped_not_unchanged(
+    build: Path, kind: str, message: str
+) -> None:
+    comparison = compare_builds(baseline_of(build, kind), edited(build, skipped(build)))
+    (blick,) = comparison.blicks
+    assert (blick.change.flags, blick.change.magnitude, blick.skipped, blick.message) == (
+        set(),
+        None,
+        True,
+        message,
+    )
+    assert (comparison.counts, comparison.flagged, comparison.has_errors) == ({}, 0, False)
+
+
+def test_a_blick_skipped_in_the_baseline_is_new_and_says_why(build: Path) -> None:
+    (blick,) = compare_builds(edited(build, skipped(build)), build).blicks
+    assert (blick.change.flags, blick.skipped, blick.message) == (
+        {"new"},
+        False,
+        "skipped in the baseline: no trade module",
+    )
+
+
+def test_a_blick_skipped_in_the_baseline_under_an_alias_is_new_and_says_why(build: Path) -> None:
+    renamed = entry(build, id="a/renamed", name="a/renamed", aliases=("a/values",))
+    (blick,) = compare_builds(edited(build, skipped(build)), edited(build, renamed)).blicks
+    assert (blick.id, blick.change.flags, blick.message) == (
+        "a/renamed",
+        {"new"},
+        "skipped in the baseline: no trade module",
+    )
+
+
+def test_a_blick_the_baseline_skipped_and_the_current_build_lacks_is_not_removed(
+    build: Path,
+) -> None:
+    assert compare_builds(edited(build, skipped(build)), edited(build)).blicks == ()
+
+
+def test_the_first_line_of_a_reason_drops_a_carriage_return(build: Path) -> None:
+    (blick,) = compare_builds(build, edited(build, skipped(build, "no trade\r\nmore"))).blicks
+    assert blick.message == "skipped: no trade"
 
 
 def test_two_failed_blicks_may_share_an_id(build: Path) -> None:

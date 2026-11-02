@@ -34,6 +34,8 @@ describe('requests to blicket dev', () => {
     const options = { quantities: [], dimensions: [], plots: [] }
     expect(await bodyOf(answer(options), isOptions, 'dev/dataset')).toEqual(options)
     expect(isEntry({ name: 'builder/query', status: 'error', problems: [] })).toBe(true)
+    expect(isEntry({ name: 'builder/query', status: 'skipped', problems: [] })).toBe(true)
+    expect(isEntry({ name: 'builder/query', status: 'broken', problems: [] })).toBe(false)
     expect(isEntry({ message: 'no dataset' })).toBe(false)
     expect(isInfo({ root: '/p', dataset: false, message: 'no dataset(run)', failed: false })).toBe(true)
     expect(isInfo({ message: 'no route' })).toBe(false)

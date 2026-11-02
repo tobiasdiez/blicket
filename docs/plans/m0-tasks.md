@@ -224,7 +224,11 @@ M1, each where its entry put it:
 
 - The per-Blick fallback to older baseline candidates, and comparisons added to a build already
   in the store: with the accept design (M3).
-- The status of a Blick that does not apply to a run: with the multi-model example.
+- The status of a Blick that does not apply to a run: built on 2026-11-02 as `bk.Skip`, raised by
+  the transformation; the Blick is recorded as `skipped` with the reason, the build report groups
+  the skipped Blicks by reason, and the comparison counts them as `skipped`, `removed` when the
+  baseline had a table, `new` when the baseline skipped. Written against the remind-mfa Blicks
+  of three models, without a plan file.
 - Hiding dimensions that others determine: when a project needs it.
 - The trade Blick, which waits for a sign convention, a plot-type question (M4).
 - Plot factories derived from the channel declarations, a colour dimension with many values

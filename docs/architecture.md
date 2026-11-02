@@ -124,6 +124,9 @@ def steel_by_process(run):
 
 `bk.register(...)` exists for families generated in loops. blicket requires only that the run
 object is reusable across Blicks in one process; what it is comes from the adapter.
+Amendment of 2026-11-02: a transformation raises `bk.Skip(reason)` when its Blick does not apply
+to the run, a cement Blick on a steel run or a validation Blick without its data; the Blick is
+then `skipped`, a status beside `ok` and `error` (see the change detection section).
 
 ## Adapter and loader protocol
 
@@ -240,8 +243,8 @@ disagree, and `new`, `removed` and `error`.
 
 | Flag | Meaning | Shown as |
 |---|---|---|
-| `new` | no baseline exists | needs a look |
-| `removed` | baseline Blick without a current Blick, after complete discovery | reported |
+| `new` | no baseline table exists | needs a look |
+| `removed` | baseline Blick without a current Blick, after complete discovery; or, since 2026-11-02, a current Blick skipped now that the baseline built | reported |
 | `schema` | columns, or dimension values, appeared or vanished | diagnostics name the values, summarised across Blicks |
 | `value` | some common row differs beyond tolerance | ranked by magnitude |
 | `error` | the module failed to import, the transformation raised, or the output is invalid | exit code 2; never aborts the build; a failed module or another file-level error marks the build incomplete; that, or a Blick without a usable id, disables `removed` |
@@ -250,6 +253,16 @@ No flags means unchanged. The magnitude is computed on the common keys, also whe
 because dimension values appeared or vanished; it is `None` when the columns differ, since then
 nothing is compared (amendment of 2026-10-24). What happens to flagged Blicks after a human has
 looked at them belongs to the deferred accept design.
+
+Amendment of 2026-11-02: a Blick whose transformation raised `bk.Skip(reason)` has the status
+`skipped`; the manifest records the reason and no table, and it is no error, so a build whose
+other Blicks built exits 0. The build report counts the skipped Blicks and lists them grouped by
+reason, since a steel run skips every cement and plastics Blick for the same reason. In a
+comparison a skipped Blick is never `error`: skipped now and built in the baseline, it is `removed`
+with the reason; built now and skipped in the baseline, it is `new` with the baseline's reason;
+skipped in both builds, it carries no flag and is counted as `skipped`, never as unchanged, since
+nothing was compared. `blicket list` runs no transformation and does not know what a run will
+skip.
 
 **Tolerance.** `[tool.blicket] tolerance = 1e-5` project-wide, `tolerance=` per Blick, in the
 same relative-to-panel-scale units as the magnitude. A row is *same* when
@@ -335,6 +348,10 @@ one `BLICKET_VIEWER` names in a checkout.
   at the top says when Blicks failed to build or the build is incomplete, and the Blicks in error
   are listed with their problems, next to the build's own. The plot type and role chips are gone
   from the overview.
+- Amendment of 2026-11-02: a skipped Blick is in the sidebar in italics and without a badge,
+  unless the comparison flags it; a group whose Blicks are all skipped starts collapsed; the
+  overview says how many Blicks are skipped for the run, and a skipped Blick's page and card
+  show the reason instead of a chart.
 - Blick page: chart, controls derived by the plot type, URL-carried control state, a comparison
   switch on by default, a strip with the flags, the largest change (as a percent of the chart's
   scale), where it is and against which baseline, with a button that sets the controls there.
@@ -672,3 +689,7 @@ sub-variables, and "facet" is the role `panels`; the walk as built is flow 1 of
 - Deferred: the accept and review workflow (M3, UI plus PR-first), TypeScript type generation,
   per-PR preview deploys, difference chart (M4), the `definition` change type, remote store
   backends until M3, export of ad hoc Blicks as code, a shipped IAMC adapter.
+- Amendment of 2026-11-02: a Blick that does not apply to a run is `skipped`, a status of its
+  own raised by the transformation as `bk.Skip(reason)`, with the constraint recorded when it was
+  deferred: it stays in the manifest, neither `error` nor `removed` by itself, and a Blick that
+  the baseline built and the current run skips is reported as `removed`.

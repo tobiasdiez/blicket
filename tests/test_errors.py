@@ -1,6 +1,8 @@
 import typing
 from pathlib import Path
 
+import pytest
+
 import blicket as bk
 from blicket.errors import Problem, Source, did_you_mean
 
@@ -30,3 +32,15 @@ def test_did_you_mean() -> None:
 
 def test_blick_type_hints_resolve() -> None:
     assert typing.get_type_hints(bk.Blick)["plot"] is bk.PlotSpec
+
+
+def test_a_skip_is_its_reason_and_no_blicket_error() -> None:
+    skip = bk.Skip("the run has no trade module")
+    assert str(skip) == skip.reason == "the run has no trade module"
+    assert not isinstance(skip, bk.BlicketError)
+
+
+@pytest.mark.parametrize("reason", ["", " \n"])
+def test_a_skip_needs_a_reason(reason: str) -> None:
+    with pytest.raises(ValueError, match=r"^bk\.Skip needs a reason$"):
+        bk.Skip(reason)

@@ -4,21 +4,26 @@ The models are the specification of the file: ``Manifest.model_json_schema(mode=
 is its JSON Schema. The fields a reader resolves as paths are relative to the build directory
 (``data``) or the project root (``source``, when dumped with ``context={"root": root}``); run
 paths outside the project, messages and tracebacks may contain paths of the machine the build ran
-on. The name ``compare`` inside a build directory is reserved.
+on. The name ``compare`` inside a build directory is reserved. A Blick's ``status`` is ``ok`` when
+it built a table, ``error`` when it failed, and ``skipped`` when its transformation raised
+``bk.Skip`` to say that the Blick does not apply to the run, which is no failure; the entry then
+holds the reason and no table.
 
 The build id is content-addressed over the whole manifest except what ``NOT_IN_ID`` leaves out:
 timestamps and timings, the blicket version, tracebacks, the run's id, paths and model checkout,
 the repository's branch and dirty flag, where the Blicks are defined, and the controls blicket
-derives from their definitions and columns. A rerun that differs
-only in those is the same build, so its existing directory is reused. Equal content without
-problems gives the same id on any machine and from any working directory; a build with problems
-embeds exception text, so its id is reproducible on one machine only. Ids compare only within
-one ``spec``, and whether a Blick changed is judged by its table hash, never by the id.
+derives from their definitions and columns. A rerun that differs only in those is the same build,
+so its existing directory is reused. Equal content without problems gives the same id on any
+machine and from any working directory. A build with problems embeds exception text, and the
+reasons of skipped Blicks are content too. Both may hold paths of the machine the build ran on,
+so the id of such a build is reproducible on that machine only. Ids compare only within one
+``spec``, and whether a Blick changed is judged by its table hash, never by the id.
 """
 
 import hashlib
 import json
 import re
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -26,7 +31,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from blicket.errors import BlicketError, Problem
-from blicket.model import BlickEntry, Group
+from blicket.model import BlickEntry, Group, Status
 
 SPEC = "0.2"
 MANIFEST = "manifest.json"
@@ -114,7 +119,8 @@ class Repository(BaseModel):
 class Manifest(BaseModel):
     """What a build holds: its definitions, run, settings, repository state, tables, problems.
 
-    ``problems`` concern a file or the project; a Blick's own are in its entry.
+    ``problems`` concern a file or the project; a Blick's own are in its entry, as is the reason
+    when it was skipped.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -132,8 +138,13 @@ class Manifest(BaseModel):
 
     @property
     def has_errors(self) -> bool:
-        """Whether a Blick or a file failed."""
-        return self.build.incomplete or any(entry.status == "error" for entry in self.blicks)
+        """Whether a Blick or a file failed; a skipped Blick did not fail."""
+        return self.build.incomplete or self.statuses["error"] > 0
+
+    @property
+    def statuses(self) -> Counter[Status]:
+        """How many Blicks have each status."""
+        return Counter(entry.status for entry in self.blicks)
 
     def content_id(self, root: Path) -> str:
         """16 hex digits of sha256 over the manifest without ``NOT_IN_ID``."""

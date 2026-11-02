@@ -15,7 +15,16 @@ from blicket.builder import NothingToBuild
 from blicket.errors import BlicketError
 from blicket.manifest import Manifest
 from blicket.schema import Control, Dimension, Measure, TableSchema
-from tests.support import VALUES, commit_all, git, line_of, make_build_project, make_run, one_blick
+from tests.support import (
+    SKIPPING_VALUES,
+    VALUES,
+    commit_all,
+    git,
+    line_of,
+    make_build_project,
+    make_run,
+    one_blick,
+)
 
 BLICKS = """\
 import pandas as pd
@@ -62,6 +71,10 @@ def broken(run):
 def unbound(run):
     return pl.DataFrame({"year": YEARS, "value": run["values"], "extra": run["values"]})
 
+
+@bk.blick(plot=LINE)
+def skipping(run):
+    raise bk.Skip("the run has no trade module")
 """
 
 
@@ -90,6 +103,7 @@ def test_statuses_and_files(project: Path) -> None:
         ("views/raising", "error"),
         ("views/broken", "error"),
         ("views/unbound", "error"),
+        ("views/skipping", "skipped"),
     ]
     ok = built.manifest.blicks[0]
     assert (ok.data, ok.rows) == ("blicks/views/from_polars.parquet", 3)
@@ -125,6 +139,71 @@ def test_exceptions_are_located(project: Path, name: str, message: str, raised_i
     assert problem.message == f"{message} (raised at {where})"
     assert problem.traceback is not None
     assert f'views.py", line {line_of(BLICKS, raised_in)}' in problem.traceback
+
+
+def test_a_skipped_blick_has_its_reason_and_neither_a_table_nor_an_error(project: Path) -> None:
+    built = bk.build(project, ["runs/a"])
+    (skipping,) = [e for e in built.manifest.blicks if e.name == "views/skipping"]
+    assert skipping.skipped == "the run has no trade module"
+    assert (skipping.data, skipping.hash, skipping.rows, skipping.columns) == (None,) * 4
+    assert (skipping.controls, skipping.problems) == ((), ())
+    assert not (built.path / "blicks" / "views" / "skipping.parquet").exists()
+    text = (built.path / "manifest.json").read_text()
+    written = {entry["name"]: entry for entry in json.loads(text)["blicks"]}
+    ok, skipped = written["views/from_polars"], written["views/skipping"]
+    assert [(e["status"], e["skipped"]) for e in (ok, skipped)] == [
+        ("ok", None),
+        ("skipped", "the run has no trade module"),
+    ]
+
+
+def test_skipped_blicks_alone_are_no_error(tmp_path: Path) -> None:
+    files = {"blicks/a.py": VALUES, "blicks/b.py": SKIPPING_VALUES}
+    built = bk.build(make_build_project(tmp_path, files), [make_run(tmp_path / "run")]).manifest
+    assert [entry.status for entry in built.blicks] == ["ok", "skipped"]
+    assert not built.has_errors
+
+
+def test_the_id_covers_the_reason_of_a_skip(project: Path) -> None:
+    first = build_id(project)
+    views = project / "blicks" / "views.py"
+    views.write_text(views.read_text().replace("no trade module", "no trade data"))
+    assert build_id(project) != first
+
+
+def test_a_manifest_without_skipped_reads_as_before(project: Path) -> None:
+    data = json.loads((bk.build(project, ["runs/a"]).path / "manifest.json").read_text())
+    for entry in data["blicks"]:
+        del entry["skipped"]
+    assert all(entry.skipped is None for entry in Manifest.model_validate(data).blicks)
+
+
+ERROR = bk.Problem(kind="transformation", message="transformation raised KeyError")
+
+
+def test_the_status_is_skipped_with_a_reason_else_error_with_an_error_else_ok() -> None:
+    def status(**fields: Any) -> str:
+        return bk.BlickEntry(id="a/x", name="a/x", group="a", **fields).status
+
+    assert status(skipped="no trade") == "skipped"
+    assert status(problems=(ERROR,)) == "error"
+    assert status() == "ok"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"data": "blicks/a/x.parquet"},
+        {"rows": 0},
+        {"controls": (Control(dimension="year", kind="filter", default=None),)},
+        {"problems": (ERROR,)},
+        {"problems": (ERROR.model_copy(update={"severity": "warning"}),)},
+    ],
+    ids=["data", "rows", "controls", "error", "warning"],
+)
+def test_a_skipped_blick_has_no_table_controls_or_problems(fields: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError, match="a skipped Blick has no table, controls or problems"):
+        bk.BlickEntry(id="a/x", name="a/x", group="a", skipped="no trade", **fields)
 
 
 def test_failed_definitions_are_entries(project: Path) -> None:

@@ -160,7 +160,7 @@ Blick that built, and a copy of the viewer (`index.html`, `favicon.svg`, `_nuxt/
 `viewer-version` marker listing the copied files). The build id is a hash of the manifest without
 the timestamps and timings, the blicket version, tracebacks, the run's id, paths and model
 checkout, the repository's branch and dirty flag, where the Blicks are defined, and the controls
-blicket derives for them; it covers the Blicks' definitions, their tables and problems, the
+blicket derives for them; it covers the Blicks' definitions, tables, problems and skip reasons, the
 settings, the run's profile and fingerprint, and the commit. Building the same run with the same
 Blicks at the same commit gives the same id again and leaves the directory as it is. A
 transformation that raises, or a table that fails a check, is listed under `errors` like a problem
@@ -170,6 +170,38 @@ and `-v` shows tracebacks. blicket gives `.blicket/` a `.gitignore`, so builds n
 `git status`. A build of the same id keeps its manifest and tables; only the files of its copy of
 the viewer are replaced when it differs from the installed one (`(built before, viewer
 refreshed)`).
+
+A transformation raises `bk.Skip(reason)` when its Blick does not apply to the run, for example
+because the run has no trade module. A second Blick in `blicks/flows.py`, say, reads trade, which
+the run above lacks:
+
+```python
+@bk.blick(
+    title="Steel trade by process",
+    unit="t per year",
+    plot=bk.plots.stacked_area(x="year", y="value", color="process"),
+)
+def trade_by_process(run):
+    if "trade" not in run:
+        raise bk.Skip("the run has no trade module")
+    return run["trade"]
+```
+
+```console
+$ blicket build runs/2026-10-22
+run 2026-10-22 · profile baseline · blicks at 0a6b858 · loaded in 12 ms
+2 Blicks: 1 built · 1 skipped
+build 9c41e7a2b05d3f86 → .blicket/build/9c41e7a2b05d3f86
+
+skipped
+  the run has no trade module
+    flows/trade_by_process
+```
+
+A skipped Blick is not an error: the manifest records it with the status `skipped` and the reason,
+without a table, and the exit code does not change. The section `skipped` lists the skipped Blicks
+under their reasons; `diff` and `check` show the first line of a reason. `blicket list` runs no
+transformation, so it cannot tell which Blicks a run skips.
 
 ## Looking at a build
 
@@ -197,7 +229,9 @@ value at a time, starting at the first value in display order or at `defaults={d
 with `controls={dim: "split"}`, one panel per value. The control state is in the URL
 (`#/blick/flows/steel_by_process?region=EU&_split=scenario`, `_y` for the y axes, `_tab=data` for
 the data tab), so a link reproduces the view. A chart exports as PNG or SVG, the rows shown as
-CSV.
+CSV. A Blick skipped for the run is in italics in the sidebar, unless a flag of the comparison
+gives it a badge, and the sidebar counts the skipped Blicks at its foot; the overview says how many
+the run skipped, and a card or page gives the reason instead of a chart.
 
 The build directory is self-contained: copied to a laptop or a static host such as GitHub Pages, it
 works from any sub-path. Opened from the file system it does not, because browsers do not let a
@@ -214,7 +248,7 @@ current  8e21b7c04f6a9d35 · run 2026-10-23 · profile baseline · blicks at 0a6
 top movers: flows/steel_by_process 3.2% of scale (year=2021, process=EAF)
 ```
 
-The output comes from a toy project with the one Blick above, built for the run above and for a
+The output comes from a toy project with the first Blick above, built for the run above and for a
 second run in which EAF reached 0.77 in 2021 instead of 0.7. The baseline comes first; each build
 is a build directory or the id of a build in the store (below). `diff` matches the Blicks of the
 two builds by id, or through `aliases=`, so a renamed Blick keeps its baseline, and compares their
@@ -233,7 +267,7 @@ but `value`:
 - `schema`: columns or dimension values appeared or vanished; the summary names them, five
   values per dimension at most. The magnitude covers the rows both tables have.
 - `new`: the baseline has no table for the Blick; the summary says when the Blick did not build
-  in the baseline.
+  in the baseline, or was skipped there, and why.
 - `removed`: a baseline Blick with a table that no current Blick claims by its id or aliases.
   When a module of the current build failed to import or another file-level error occurred, or a
   Blick has no usable id, nothing is removed, and the summary says why. A build line ends with
@@ -241,6 +275,12 @@ but `value`:
   file-level error occurred.
 - `error`: the Blick did not build, its plot type is not one this blicket knows, or the plot type
   cannot compare the tables; the summary gives the reason.
+
+A Blick that the current build skipped has no table to compare: it is `removed` when the baseline
+has a table for it, also in an incomplete build, and the summary gives the first line of the
+reason; otherwise it has no flag. Either way it is not unchanged: `skipped` counts the Blicks
+skipped in the current build, whether or not they are also `removed`, as in
+`4 Blicks: 1 unchanged · 3 skipped · 1 removed`.
 
 `diff` exits 0 when it finds changes, which are an answer, not a failure; it exits 2 when a build
 cannot be read, a Blick is flagged `error`, or removed Blicks were not judged. `--json` prints the
@@ -251,11 +291,12 @@ flag, and `incomplete`), `incomplete`, the reasons why removed Blicks were not j
 they were, and `blicks`, the current Blicks in the order of the manifest followed by the removed
 ones, each with its `id`, `name`, `matched`, the id of the baseline Blick when it differs, as for a
 Blick matched through an alias, `change` (the flags, the magnitude, the columns and values added and
-removed, and `where`, the row that changed most; `bk.Change` describes the fields) and `message`,
-why an `error` Blick has no table or was not compared, or that a `new` Blick did not build in the
-baseline. `baseline_data` and `baseline_hash`, the path of the copied baseline table in the build
-directory and its hash in the baseline manifest, are set by `check` (below) for the Blicks flagged
-`value` or `schema`, and are `null` otherwise.
+removed, and `where`, the row that changed most; `bk.Change` describes the fields), `skipped`,
+whether the current Blick was skipped, and `message`, why an `error` Blick has no table or was not
+compared, that a `new` Blick did not build in the baseline or was skipped there, and why, or why a
+skipped Blick has no table (`skipped: ...`). `baseline_data` and `baseline_hash`, the path of the
+copied baseline table in the build directory and its hash in the baseline manifest, are set by
+`check` (below) for the Blicks flagged `value` or `schema`, and are `null` otherwise.
 
 `blicket push` copies a build into the store, where it is never changed again:
 
@@ -321,8 +362,9 @@ was compared with, the latest written last. Checking against the same baseline a
 directory. When `GITHUB_STEP_SUMMARY` is set, as in GitHub Actions, `check` appends a Markdown
 summary to the file it names, which GitHub shows as the job's summary: the two builds, the
 counts, a table of the flagged Blicks with their largest change as a percent of the chart's scale
-and where they changed most, the values that appeared or vanished, and the errors; or why there is
-no baseline. A summary that cannot be appended is a warning.
+and where they changed most, the values that appeared or vanished, the messages of the `new` and
+`removed` Blicks, and the errors; or why there is no baseline. A skipped Blick that is removed has
+the flags `removed (skipped)` there. A summary that cannot be appended is a warning.
 
 `check` exits 0 when no Blick is flagged, 1 when one is flagged `value`, `schema`, `new` or
 `removed`, and 2 on errors: a Blick in error, removed Blicks not judged, a baseline that cannot be

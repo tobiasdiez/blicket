@@ -1,6 +1,6 @@
 // Requests to `blicket dev`: what a failed one says, and the shapes of what it answers.
 import type { BuilderOptions, BuilderRequest } from './builder'
-import type { BlickEntry } from './manifest'
+import { isStatus, type BlickEntry } from './manifest'
 
 /** `blicket dev` did not answer; the message is what the page says under "Cannot reach blicket dev". */
 export class Unreachable extends Error {
@@ -35,7 +35,7 @@ export function messageOf(body: unknown): string | null {
 
 /** Whether a body is a manifest entry, as `dev/query` answers one. */
 export function isEntry(body: unknown): body is BlickEntry {
-  return isObject(body) && typeof body.name === 'string' && (body.status === 'ok' || body.status === 'error') && Array.isArray(body.problems)
+  return isObject(body) && typeof body.name === 'string' && isStatus(body.status) && Array.isArray(body.problems)
 }
 
 /** Whether a body is what the builder offers, as `dev/dataset` answers it. */

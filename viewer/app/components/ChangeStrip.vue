@@ -3,16 +3,18 @@ import type { ControlState } from '~/lib/controls'
 import { buildParts, percent, schemaDetails, whereState, whereText, type BlickComparison, type BuildRef } from '~/lib/comparison'
 import type { TableSchema } from '~/lib/manifest'
 
-// `state` and `schema` are null for a Blick without a table, whose problems the page lists, the
-// comparison's message among them.
+// `state` and `schema` are null for a Blick without a table, which the strip draws no controls for
+// and whose message it leaves to the page.
 const props = defineProps<{ blick: BlickComparison, baseline: BuildRef, state: ControlState | null, schema: TableSchema | null, mapping: Record<string, string> }>()
 const emit = defineEmits<{ update: [state: ControlState] }>()
 
 const change = computed(() => props.blick.change)
 const against = computed(() => `against ${buildParts(props.baseline, false).join(' · ')}`)
-// A Blick in error was not compared, so its sentence names no baseline.
+// A Blick in error was not compared, so its sentence names no baseline; a skipped one that the
+// comparison removes was built in the baseline.
 const sentence = computed(() => {
   const { where, magnitude, flags } = change.value
+  if (props.blick.skipped && flags.includes('removed')) return `built in run ${props.baseline.run}, skipped for this run`
   if (flags.includes('error')) return ''
   if (!where || !magnitude || !props.state) return against.value
   return `largest change ${percent(magnitude)} of the chart's scale at ${whereText(where, props.state, props.mapping)}, ${against.value}`

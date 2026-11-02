@@ -70,6 +70,13 @@ export interface BlickDefinition {
   order: Record<string, Value[]>
 }
 
+/** What became of a Blick in a build: it built a table, its transformation skipped the run, or it failed. */
+export const STATUSES = ['ok', 'skipped', 'error'] as const
+export type Status = typeof STATUSES[number]
+
+/** Whether `value` is one of `STATUSES`. */
+export const isStatus = (value: unknown): value is Status => (STATUSES as readonly unknown[]).includes(value)
+
 export interface BlickEntry {
   id: string | null
   name: string
@@ -85,8 +92,11 @@ export interface BlickEntry {
   columns: TableSchema | null
   controls: Control[]
   timing_ms: number | null
+  /** Why the transformation skipped the run with `bk.Skip`; such a Blick has no table, controls or problems. */
+  skipped: string | null
   problems: Problem[]
-  status: 'ok' | 'error'
+  /** `skipped` when `skipped` is set, else `error` when a problem is an error, else `ok`. */
+  status: Status
 }
 
 export interface Group {
@@ -122,6 +132,18 @@ export interface Manifest {
   groups: Group[]
   blicks: BlickEntry[]
   problems: Problem[]
+}
+
+/** The entries of each status, each list in the order of `entries`. */
+export function byStatus(entries: readonly BlickEntry[]): Record<Status, BlickEntry[]> {
+  const found: Record<Status, BlickEntry[]> = { ok: [], skipped: [], error: [] }
+  for (const entry of entries) found[entry.status].push(entry)
+  return found
+}
+
+/** The first line of a text, such as the reason a Blick was skipped; empty for none. */
+export function firstLine(text: string | null): string {
+  return text?.split(/\r?\n/, 1)[0] ?? ''
 }
 
 /** Where a definition or problem is, as `file:line`. */

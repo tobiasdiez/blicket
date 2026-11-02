@@ -34,13 +34,21 @@ export interface BuildRef {
 }
 
 export interface BlickComparison {
-  /** The current id; the baseline id of a removed Blick. */
+  /** The current id; the baseline id of a removed Blick that no current Blick claims. */
   id: string | null
   name: string
   /** The id of the baseline Blick compared, when it is another one, as for an alias. */
   matched: string | null
   change: Change
-  /** Why an `error` Blick was not compared, or why a `new` one has no baseline table. */
+  /**
+   * Whether the current Blick was skipped for the run, so that no tables were compared: `removed`
+   * when the baseline has a table for it, otherwise without a flag, and never unchanged.
+   */
+  skipped: boolean
+  /**
+   * Why an `error` Blick was not compared, why a `new` one has no baseline table, or why a skipped
+   * one has none: `skipped: ` and the first line of the reason.
+   */
   message: string | null
   /** The copy of the baseline table in the build directory, for Blicks flagged `value` or `schema`. */
   baseline_data: string | null
@@ -55,7 +63,7 @@ export interface Comparison {
   current: BuildRef
   /** Why removed Blicks were not judged; empty when they were. */
   incomplete: string[]
-  /** The current Blicks, then the removed ones. */
+  /** The current Blicks, then the removed ones that no current Blick claims. */
   blicks: BlickComparison[]
 }
 
@@ -110,6 +118,9 @@ export const FLAG_COLORS: Record<Flag, 'warning' | 'info' | 'neutral' | 'error'>
 // The flags other than `value` as words, which their badges are read as.
 const SPOKEN: Record<Exclude<Flag, 'value'>, string> = { schema: 'columns or values changed', new: 'new', removed: 'removed', error: 'in error' }
 
+// What the badge `removed` of a Blick that was skipped for the run means.
+const REMOVED_SKIPPED = 'removed, skipped for this run'
+
 /**
  * The badge of `flag`: for `value` the change's `magnitude` as a share of the chart's scale,
  * `Δ 2.1%` when `short` and `Δ 2.1% of scale` otherwise; the flag itself for the others.
@@ -135,20 +146,27 @@ export function badges(change: Change): Badge[] {
 
 /**
  * The one badge of a Blick wherever Blicks are listed: of the flag it is ranked by, the first of
- * its flags in the order of `ranked`, with `value` as `Δ 2.1%`; or `error` for a Blick in error
- * that no comparison flags. `null` for an unchanged Blick.
+ * its flags in the order of `ranked`, with `value` as `Δ 2.1%`, and `removed` of a Blick skipped
+ * for the run saying so in its title and words; or `error` for a Blick in error that no comparison
+ * flags. `null` for an unchanged Blick, and for a skipped one that no comparison flags.
  */
 export function blickBadge(entry: Pick<BlickEntry, 'status'> | null, compared: BlickComparison | null): Badge | null {
   const flag = ORDER.find(f => compared?.change.flags.includes(f))
-  if (flag) return badge(flag, compared?.change.magnitude ?? null, true)
-  return entry?.status === 'error' ? badge('error', null, true) : null
+  if (!flag) return entry?.status === 'error' ? badge('error', null, true) : null
+  const shown = badge(flag, compared?.change.magnitude ?? null, true)
+  return flag === 'removed' && compared?.skipped ? { ...shown, title: REMOVED_SKIPPED, spoken: REMOVED_SKIPPED } : shown
 }
 
-/** The Blicks per flag, as `9 unchanged · 1 value`, then whether removed was judged, the errors. */
+/**
+ * The Blicks per flag, as `6 unchanged · 24 skipped · 1 value`, then whether removed was judged,
+ * the errors. The skipped Blicks were not compared: they are never unchanged, and those the
+ * comparison removes count as skipped and as removed.
+ */
 export function counts(comparison: Comparison): string {
   const flagged = (flag: Flag) => comparison.blicks.filter(b => b.change.flags.includes(flag)).length
   const numbers: [string, number][] = [
-    ['unchanged', comparison.blicks.filter(b => !b.change.flags.length).length],
+    ['unchanged', comparison.blicks.filter(b => !b.change.flags.length && !b.skipped).length],
+    ['skipped', comparison.blicks.filter(b => b.skipped).length],
     ...(['value', 'schema', 'new', 'removed'] as const).map((flag): [string, number] => [flag, flagged(flag)]),
   ]
   const parts = numbers.filter(([, n]) => n).map(([word, n]) => `${n} ${word}`)

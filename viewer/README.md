@@ -63,7 +63,10 @@ and a picked Blick closes. Whether it is open on a wide window is kept in the br
 sidebar closes itself on a narrow window. The search and the "Changed" filter are the sidebar's
 own state, not in the URL, since the sidebar outlives the page; `app/lib/sidebar.ts` groups,
 searches and filters the Blicks, and `app/lib/comparison.ts` gives each its badge
-(`blickBadge`, drawn by `FlagBadge`). The pins are a list of Blick ids under `blicket:pins`
+(`blickBadge`, drawn by `FlagBadge`). A Blick skipped for the run that no comparison flags has no
+badge but its label in italics, its search text holds `skipped` and the reason, and the sidebar's
+foot counts the skipped Blicks; a group of nothing but such Blicks starts closed
+(`initiallyOpen`). The pins are a list of Blick ids under `blicket:pins`
 (`usePins`, `app/lib/pins.ts`): per origin, read again on another tab's `storage` event, and
 matched with the build's Blicks through their aliases too. `app/lib/storage.ts` reads and writes
 both keys so that a browser that blocks storage only forgets them.
@@ -78,7 +81,9 @@ keyboard on the button of the card in its place (`data-blick`, `data-pin`). A ca
 Blick page uses too, as the builder uses its `chartPropsOf`. Its chart is compact,
 `PlotArgs.compact`: 160 px high, without legend and export menu, the tooltips, the highlights and
 the baseline kept. `frame()` turns off the legend of each encoding, since an encoding's own
-`legend` wins over the config's `legend.disable`. Under the cards, whatever the comparison, the
+`legend` wins over the config's `legend.disable`. A card of a skipped Blick says so with the first
+line of the reason, and its page with the whole reason; a line under the comparison says how many
+Blicks the run skipped (`skippedLine`). Under the cards, whatever the comparison, the
 overview lists the Blicks in error with their problems, the build's own problems from
 `manifest.json`, and whether a Blick module failed to import: a Blick's problems are in its entry
 only, and the sidebar, collapsed or a drawer, may not be in view. A line at the top (`troubles`)

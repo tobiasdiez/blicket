@@ -13,7 +13,7 @@ from typing import Any
 
 import polars as pl
 
-from blicket.errors import Kind, Problem
+from blicket.errors import Kind, Problem, Skip
 from blicket.model import Blick
 from blicket.schema import Dimension, Measure, TableSchema, dimension_type
 from blicket.tracebacks import locate, project_traceback, raised_at
@@ -48,19 +48,26 @@ class Raised(Exception):
 
 @dataclass(frozen=True)
 class Checked:
-    """A table checked against its Blick.
+    """A table checked against its Blick, or why there is none.
 
-    ``frame`` and ``schema`` are set exactly when no problem is an error; ``frame`` then holds the
-    dimensions first, then the measures, its rows sorted by the dimensions.
+    ``frame`` and ``schema`` are set exactly when no problem is an error and the transformation
+    did not skip the run; ``frame`` then holds the dimensions first, then the measures, its rows
+    sorted by the dimensions. ``skipped`` is the reason of the ``Skip`` the transformation raised,
+    which leaves no table and no problem.
     """
 
     frame: pl.DataFrame | None
     schema: TableSchema | None
     problems: tuple[Problem, ...]
+    skipped: str | None = None
 
     @classmethod
     def failed(cls, *problems: Problem) -> Checked:
         return cls(None, None, problems)
+
+    @classmethod
+    def skip(cls, reason: str) -> Checked:
+        return cls(None, None, (), reason)
 
 
 def _type_name(value: object) -> str:
@@ -436,9 +443,11 @@ def ordered(schema: TableSchema, order: Mapping[str, Sequence[Any]]) -> TableSch
 def compute(blick: Blick, run: object, root: Path) -> Checked:
     """Run the transformation on ``run``, convert what it returned, and check the table.
 
-    Nothing raised in these steps escapes; it becomes a problem located in the code of the
-    project at ``root``. An exception the transformation wraps in ``Raised`` is reported as raised
-    by the action it names.
+    A ``Skip`` that the transformation itself raises gives its reason, and neither a table nor a
+    problem. Nothing else escapes, including a ``Skip`` raised while converting or checking what
+    the transformation returned; it becomes a problem located in the code of the project at
+    ``root``. An exception the transformation wraps in ``Raised`` is reported as raised by the
+    action it names.
     """
     action = "transformation"
     try:
@@ -450,6 +459,8 @@ def compute(blick: Blick, run: object, root: Path) -> Checked:
     except TableError as error:
         return Checked.failed(blick.problem(Kind.TRANSFORMATION, str(error)))
     except (Exception, SystemExit) as error:
+        if isinstance(error, Skip) and action == "transformation":
+            return Checked.skip(str(error))
         cause: BaseException = error
         if isinstance(error, Raised):
             action, cause = error.action, error.error

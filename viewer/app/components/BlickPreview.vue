@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { blickBadge, type BlickComparison } from '~/lib/comparison'
 import { yAxisOf } from '~/lib/controls'
-import type { BlickEntry } from '~/lib/manifest'
+import { firstLine, type BlickEntry } from '~/lib/manifest'
 import { firstProblem, previewCaption, previewLink, previewState } from '~/lib/preview'
 import { PLOT_TYPES } from '~/plots'
 
@@ -24,6 +24,11 @@ const caption = computed(() => previewCaption(props.entry, preview.value, props.
 const badge = computed(() => blickBadge(props.entry, props.change))
 const pinned = computed(() => !!props.entry.id && isPinned(props.entry.id))
 const problem = computed(() => firstProblem(props.entry))
+// The first line of why the Blick was skipped, with an ellipsis when there is more on its page.
+const reason = computed(() => {
+  const first = firstLine(props.entry.skipped)
+  return first === (props.entry.skipped ?? '').trimEnd() ? first : `${first} …`
+})
 const drawable = computed(() => !!definition.value && Object.hasOwn(PLOT_TYPES, definition.value.plot.type))
 
 // The rows are fetched once the card first comes near the window, so a long list of cards costs
@@ -78,6 +83,14 @@ const SILENT = { 'aria-hidden': 'true', 'role': undefined, 'aria-label': undefin
       <PinMark v-else-if="pinned" />
     </div>
     <ProblemList v-if="entry.status === 'error'" :problems="problem ? [problem] : []" />
+    <div v-else-if="entry.status === 'skipped'" class="text-sm text-muted">
+      <p class="font-medium">
+        Skipped for this run
+      </p>
+      <p class="break-words">
+        {{ reason }}
+      </p>
+    </div>
     <p v-else-if="!drawable" class="text-sm text-muted">
       no chart for the plot type <code>{{ definition?.plot.type }}</code>
     </p>

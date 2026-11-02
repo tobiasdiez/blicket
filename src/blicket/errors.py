@@ -40,6 +40,22 @@ class DefinitionError(ValueError):
         self.kind = kind
 
 
+class Skip(Exception):
+    """Raised by a transformation whose Blick does not apply to the run, such as one that reads a
+    module the run was made without: ``raise bk.Skip("the run has no trade module")``.
+
+    Not a failure: the build records the Blick as skipped, with ``reason``, without a table and
+    without an error. ``str(skip)`` is the reason; constructing one with an empty or blank reason
+    raises ``ValueError``.
+    """
+
+    def __init__(self, reason: str) -> None:
+        if not reason.strip():
+            raise ValueError("bk.Skip needs a reason")
+        super().__init__(reason)
+        self.reason = reason
+
+
 class BlicketError(Exception):
     """Something blicket cannot work around, said in one line; ``traceback`` is the traceback of
     project code that raised it, if any."""
@@ -61,7 +77,7 @@ class DatasetError(BlicketError):
     """``dataset(run)`` raised, or what it returned does not follow the dataset protocol."""
 
 
-SKIPPED = "the Blicks in this file were skipped"
+MISSING = "the Blicks in this file are missing"
 
 
 def issue_field(issue: Mapping[str, Any]) -> str:

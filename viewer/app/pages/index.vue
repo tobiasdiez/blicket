@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { PREVIEWS, pinnedHint, previewSections, troubles } from '~/lib/preview'
+import { byStatus } from '~/lib/manifest'
+import { PREVIEWS, pinnedHint, previewSections, skippedLine, troubles } from '~/lib/preview'
 import { sidebarOrder } from '~/lib/sidebar'
 
 const { manifest, dev } = useManifest()
@@ -18,7 +19,12 @@ const more = computed(() => {
   const changed = sections.value?.changed
   return changed?.cards.length && changed.listed.length ? `${changed.listed.length} more changed` : null
 })
-const broken = computed(() => (manifest.value?.blicks ?? []).filter(b => b.status === 'error'))
+const statuses = computed(() => byStatus(manifest.value?.blicks ?? []))
+const broken = computed(() => statuses.value.error)
+// How many Blicks the run skipped, which neither the cards nor the problems show.
+const skipped = computed(() => skippedLine(manifest.value?.blicks ?? []))
+// With every Blick skipped and nothing pinned, the pinned section has nothing to offer.
+const pinnedShown = computed(() => !sections.value?.unpinned || statuses.value.skipped.length < total.value)
 const errors = computed(() => (manifest.value?.problems ?? []).filter(p => p.severity === 'error'))
 const warnings = computed(() => (manifest.value?.problems ?? []).filter(p => p.severity === 'warning'))
 // The trouble of the build in a line, at the top, since the problems are far down the page.
@@ -71,6 +77,9 @@ async function refocus(name: string, index: number) {
       orientation="horizontal"
       :actions="[{ label: 'See problems', color: 'error', variant: 'outline', size: 'xs', onClick: seeProblems }]"
     />
+    <p v-if="skipped" class="text-sm text-muted">
+      {{ skipped }}
+    </p>
     <template v-if="sections && total">
       <section v-if="sections.changed" class="space-y-3" aria-labelledby="changed">
         <h2 id="changed" class="text-sm font-semibold text-highlighted">
@@ -93,14 +102,14 @@ async function refocus(name: string, index: number) {
               </NuxtLink>
               <span v-else class="min-w-0 font-mono text-muted">{{ item.label }}</span>
               <FlagBadge v-if="item.badge" :badge="item.badge" size="sm" />
-              <p v-if="item.problem" class="w-full whitespace-pre-wrap break-words text-muted">
-                {{ item.problem }}
+              <p v-if="item.note" class="w-full whitespace-pre-wrap break-words text-muted">
+                {{ item.note }}
               </p>
             </li>
           </ul>
         </template>
       </section>
-      <section class="space-y-3" aria-labelledby="pinned">
+      <section v-if="pinnedShown" class="space-y-3" aria-labelledby="pinned">
         <h2 id="pinned" ref="pinnedHeading" tabindex="-1" class="text-sm font-semibold text-highlighted">
           {{ firstLook ? 'A first look' : 'Pinned' }}
         </h2>

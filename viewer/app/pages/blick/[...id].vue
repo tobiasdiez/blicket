@@ -31,6 +31,8 @@ watch(() => parsed.value?.unknown.join(', '), (unknown) => {
 
 // The Blick in the comparison shown, and the baseline drawn behind its chart while the switch is on.
 const change = computed(() => (entry.value ? blicks.value.get(entry.value.name) ?? null : null))
+// A skipped Blick that no flag marks was not compared, so a strip would wrongly say unchanged.
+const strip = computed(() => (change.value && !(change.value.skipped && !change.value.change.flags.length) ? change.value : null))
 const compare = ref(true)
 // `fileName` names exported images and the CSV file; `chartProps` is what the chart and the
 // change charts are drawn from.
@@ -122,8 +124,8 @@ const source = computed(() => (entry.value?.source ? sourceText(entry.value.sour
     </div>
 
     <ChangeStrip
-      v-if="change"
-      :blick="change"
+      v-if="strip"
+      :blick="strip"
       :baseline="comparison!.baseline"
       :state="state"
       :schema="schema"
@@ -131,6 +133,7 @@ const source = computed(() => (entry.value?.source ? sourceText(entry.value.sour
       @update="showWhere"
     />
     <ProblemList v-if="entry.status === 'error'" :problems="entry.problems" />
+    <UAlert v-else-if="entry.status === 'skipped'" color="neutral" variant="subtle" icon="i-lucide-circle-slash" title="Skipped for this run" :description="entry.skipped ?? undefined" :ui="{ description: 'whitespace-pre-wrap wrap-anywhere' }" />
     <template v-else-if="schema && state && definition">
       <ProblemList v-if="warnings.length" :problems="warnings" />
       <UAlert v-for="notice in parsed?.notices" :key="notice" color="neutral" variant="subtle" icon="i-lucide-info" :title="notice" />

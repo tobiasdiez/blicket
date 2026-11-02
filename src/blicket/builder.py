@@ -267,4 +267,5 @@ def _run_blick(blick: Blick, run: object, directory: Path, root: Path) -> BlickE
         rows=rows,
         columns=checked.schema,
         timing_ms=round((time.perf_counter() - start) * 1000, 1),
+        skipped=checked.skipped,
     )

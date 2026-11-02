@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import type { NavigationMenuItem } from '@nuxt/ui'
 import type { Badge } from '~/lib/comparison'
-import { changedCount, noMatch, sidebarGroups } from '~/lib/sidebar'
+import { byStatus } from '~/lib/manifest'
+import { changedCount, initiallyOpen, noMatch, sidebarGroups } from '~/lib/sidebar'
 
 const route = useRoute()
 const { manifest, dev } = useManifest()
@@ -12,10 +13,14 @@ const current = useBlickId()
 
 // The search, the filter and the groups left open live as long as the sidebar, which is mounted
 // once and outlives the pages; they are not in the URL. `chosen` are the groups the user left
-// open, `null` for all; `filtered` those open while a search or the filter is active.
+// open, `null` before the user opened or closed one, when those of `initiallyOpen` are, together
+// with `opened`, the groups that a Blick's page opened meanwhile; `filtered` those open while a
+// search or the filter is active. `opened` is kept apart from `chosen` so that the groups open at
+// first follow the comparison, which may load after the page.
 const search = ref('')
 const changedOnly = ref(false)
 const chosen = ref<string[] | null>(null)
+const opened = ref<string[]>([])
 const filtered = ref<string[]>([])
 
 const pinnedNames = computed(() => new Set(pinned.value.map(entry => entry.name)))
@@ -24,7 +29,7 @@ const changed = computed(() => (manifest.value ? changedCount(manifest.value, bl
 const filtering = computed(() => search.value.trim() !== '' || changedOnly.value)
 const total = computed(() => manifest.value?.blicks.length ?? 0)
 const matching = computed(() => groups.value.reduce((sum, group) => sum + group.entries.length, 0))
-const failed = computed(() => manifest.value?.blicks.filter(b => b.status === 'error').length ?? 0)
+const statuses = computed(() => byStatus(manifest.value?.blicks ?? []))
 
 // Without a flagged Blick the toggle is gone, and so is its filter.
 watch(changed, (count) => {
@@ -38,7 +43,7 @@ watch(() => filtering.value && groups.value.map(group => group.value).join('\n')
 }, { immediate: true })
 
 const expanded = computed({
-  get: () => (filtering.value ? filtered.value : chosen.value ?? groups.value.map(group => group.value)),
+  get: () => (filtering.value ? filtered.value : chosen.value ?? initiallyOpen(groups.value, opened.value)),
   set: (value: string | string[] | undefined) => {
     const list = Array.isArray(value) ? value : value ? [value] : []
     if (filtering.value) filtered.value = list
@@ -49,6 +54,8 @@ const expanded = computed({
 /** A Blick's item of the navigation menu, whose slots know only the groups' items. */
 interface BlickItem extends NavigationMenuItem {
   flag: Badge | null
+  /** A Blick skipped for the run that no comparison flags: its label is in italics. */
+  muted: boolean
   pinned: boolean
 }
 
@@ -61,6 +68,7 @@ const items = computed<NavigationMenuItem[]>(() => groups.value.map(group => ({
     disabled: shown.disabled,
     slot: 'blick',
     flag: shown.badge,
+    muted: shown.muted,
     pinned: shown.pinned,
   })),
 })))
@@ -71,7 +79,8 @@ watch([current, manifest], async () => {
   const group = manifest.value?.blicks.find(b => b.id === current.value)?.group
   if (!group || !groups.value.some(g => g.value === group)) return
   const opening = !expanded.value.includes(group)
-  if (opening) expanded.value = [...expanded.value, group]
+  if (opening && !filtering.value && chosen.value === null) opened.value = [...opened.value, group]
+  else if (opening) expanded.value = [...expanded.value, group]
   await nextTick()
   setTimeout(() => {
     for (const link of document.querySelectorAll<HTMLElement>('[data-blick-list] [aria-current="page"]')) link.scrollIntoView({ block: 'nearest' })
@@ -160,6 +169,9 @@ function focusOnOpen(event: Event) {
           link: 'before:outline-primary',
         }"
       >
+        <template #blick-label="{ item }: { item: BlickItem }">
+          <span :class="{ italic: item.muted }">{{ item.label }}</span><span v-if="item.muted" class="sr-only"> (skipped)</span>
+        </template>
         <template #blick-trailing="{ item }: { item: BlickItem }">
           <FlagBadge v-if="item.flag" :badge="item.flag" size="sm" inline />
           <PinMark v-if="item.pinned" />
@@ -173,7 +185,7 @@ function focusOnOpen(event: Event) {
 
     <template #footer>
       <p v-if="manifest">
-        <template v-if="filtering">{{ matching }} of </template>{{ total }} Blicks<span v-if="failed"> · {{ failed }} with errors</span><span v-if="manifest.build.incomplete"> · incomplete, a module failed to import</span>
+        <template v-if="filtering">{{ matching }} of </template>{{ total }} Blicks<span v-if="statuses.error.length"> · {{ statuses.error.length }}&nbsp;with&nbsp;errors</span><span v-if="statuses.skipped.length"> · {{ statuses.skipped.length }}&nbsp;skipped</span><span v-if="manifest.build.incomplete"> · incomplete, a module failed to import</span>
       </p>
       <UButton v-if="dev" to="/builder" icon="i-lucide-wand-sparkles" label="Build a Blick" color="neutral" variant="outline" size="sm" />
     </template>

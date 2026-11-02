@@ -12,7 +12,7 @@ from pathlib import Path
 from blicket._validation import SEGMENT_RULE, default_title, validate_group
 from blicket.config import PYPROJECT
 from blicket.definitions import Definition, ModuleRecord
-from blicket.errors import NOWHERE, SKIPPED, Kind, Problem, Source
+from blicket.errors import MISSING, NOWHERE, Kind, Problem, Source
 from blicket.model import Blick, BlickEntry, Group, Registry
 
 
@@ -93,7 +93,7 @@ def _finalise(record: ModuleRecord) -> _Finalised:
         return None, None, [], []
     group, group_messages, line = _resolve_group(record)
     if group is None:
-        return None, line, [], [_group_problem(record, [*group_messages, SKIPPED], line)]
+        return None, line, [], [_group_problem(record, [*group_messages, MISSING], line)]
     problems = [_group_problem(record, group_messages, line)] if group_messages else []
 
     entries: list[_Entry] = []

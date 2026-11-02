@@ -16,6 +16,7 @@ import blicket as bk
 from blicket import cli, loader, manifest, viewer
 from tests.support import (
     PROJECTS,
+    SKIPPING_VALUES,
     VALUES,
     commit_all,
     line_of,
@@ -43,7 +44,7 @@ errors
   blicks/broken.py:1  import failed   (-v for the traceback)
     ModuleNotFoundError: No module named 'nothere'
     is 'nothere' installed in {prefix}?
-    the Blicks in this file were skipped
+    the Blicks in this file are missing
 """
 
 
@@ -92,7 +93,7 @@ def test_verbose_puts_the_project_traceback_before_the_message(broken: Path) -> 
     assert 'broken.py", line 1, in <module>' in errors
     assert "importlib" not in errors
     assert errors.index("Traceback") < errors.index("is 'nothere' installed")
-    assert errors.rstrip().endswith("the Blicks in this file were skipped")
+    assert errors.rstrip().endswith("the Blicks in this file are missing")
 
 
 def test_failed_blicks_are_listed_under_their_group(tmp_path: Path) -> None:
@@ -328,10 +329,78 @@ def test_build_with_errors_and_warnings(tmp_path: Path, monkeypatch: pytest.Monk
         "  blicks/broken.py:1  import failed   (-v for the traceback)",
         "    ModuleNotFoundError: No module named 'nothere'",
         f"    is 'nothere' installed in {sys.prefix}?",
-        "    the Blicks in this file were skipped",
+        "    the Blicks in this file are missing",
     ]
     verbose = invoke("build", "runs/a", "-v").stdout
     assert f'blicks/a.py", line {raised}, in missing' in verbose
+
+
+# Three Blicks that skip every run, two of them for the same reason.
+SKIPPING = """
+
+@bk.blick(plot=bk.plots.line(x="year", y="value"))
+def trade(run):
+    raise bk.Skip("the run has no trade module")
+
+
+@bk.blick(plot=bk.plots.line(x="year", y="value"))
+def ports(run):
+    raise bk.Skip("the run has no ports\\nnor ships")
+
+
+@bk.blick(plot=bk.plots.line(x="year", y="value"))
+def exports(run):
+    raise bk.Skip("the run has no trade module")
+"""
+
+
+def test_build_counts_the_skipped_blicks_and_lists_them_by_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    build_project(tmp_path, monkeypatch, {"blicks/a.py": VALUES + SKIPPING})
+    result = build("runs/a")
+    assert result.exit_code == 0, result.output
+    lines = result.stdout.splitlines()
+    assert lines[1] == "4 Blicks: 1 built · 3 skipped"
+    assert lines[3:] == [
+        "",
+        "skipped",
+        "  the run has no trade module",
+        "    a/trade, a/exports",
+        "  the run has no ports",
+        "    nor ships",
+        "    a/ports",
+    ]
+
+
+def test_build_wraps_the_names_of_the_blicks_skipped_for_a_reason(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = "import blicket as bk\n" + "".join(
+        f'\n\n@bk.blick(plot=bk.plots.line(x="year", y="value"))\n'
+        f"def a_rather_long_blick_name_{number}(run):\n"
+        '    raise bk.Skip("the run has no trade module")\n'
+        for number in range(5)
+    )
+    build_project(tmp_path, monkeypatch, {"blicks/a.py": source})
+    assert build("runs/a").stdout.splitlines()[5:] == [
+        "  the run has no trade module",
+        "    a/a_rather_long_blick_name_0, a/a_rather_long_blick_name_1, "
+        "a/a_rather_long_blick_name_2,",
+        "    a/a_rather_long_blick_name_3, a/a_rather_long_blick_name_4",
+    ]
+
+
+def test_build_lists_the_skipped_blicks_before_the_warnings_and_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    warning = VALUES.replace("@bk.blick(plot", '@bk.blick(order={"year": [1999]}, plot')
+    build_project(tmp_path, monkeypatch, {"blicks/a.py": warning + SKIPPING + RAISING})
+    result = build("runs/a")
+    assert result.exit_code == 2
+    text = result.stdout
+    assert text.splitlines()[1] == "5 Blicks: 1 built · 3 skipped · 1 error · 1 warning"
+    assert text.index("\nskipped\n") < text.index("\nwarnings\n") < text.index("\nerrors\n")
 
 
 def test_build_names_the_project_outside_it(
@@ -586,6 +655,27 @@ def test_diff_says_which_new_blicks_did_not_build_in_the_baseline(commit: str) -
         "new",
         "  a/missing  did not build in the baseline",
     ]
+
+
+def test_diff_of_a_blick_skipped_in_one_build_or_both(commit: str) -> None:
+    before = built("runs/a")
+    Path("blicks/a.py").write_text(SKIPPING_VALUES)
+    after = built("runs/a")
+    removed = invoke("diff", before, after)
+    assert removed.exit_code == 0
+    assert removed.stdout.splitlines()[2:] == [
+        "1 Blick: 1 skipped · 1 removed",
+        "",
+        "removed",
+        "  a/values  skipped: the run has no trade module",
+    ]
+    assert invoke("diff", after, before).stdout.splitlines()[2:] == [
+        "1 Blick: 1 new",
+        "",
+        "new",
+        "  a/values  skipped in the baseline: the run has no trade module",
+    ]
+    assert invoke("diff", after, after).stdout.splitlines()[2:] == ["1 Blick: 1 skipped"]
 
 
 def test_diff_says_how_many_more_blicks_moved(commit: str) -> None:

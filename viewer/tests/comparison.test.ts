@@ -9,6 +9,7 @@ function blick(name: string, flags: Flag[], change: Partial<Change> = {}, extra:
     name,
     matched: null,
     change: { flags, magnitude: null, columns_added: {}, columns_removed: {}, values_added: {}, values_removed: {}, where: null, ...change },
+    skipped: false,
     message: null,
     baseline_data: null,
     baseline_hash: null,
@@ -66,12 +67,28 @@ describe('badges', () => {
     expect(blickBadge(null, blick('a', ['removed']))!.label).toBe('removed')
     expect([blickBadge({ status: 'error' }, null)!.label, blickBadge({ status: 'ok' }, blick('a', [])), blickBadge({ status: 'ok' }, null)]).toEqual(['error', null, null])
   })
+
+  it('give a skipped Blick none unless the comparison removes it, and then say it was skipped', () => {
+    expect([blickBadge({ status: 'skipped' }, null), blickBadge({ status: 'skipped' }, blick('a', [], {}, { skipped: true }))]).toEqual([null, null])
+    expect(blickBadge({ status: 'skipped' }, blick('a', ['removed'], {}, { skipped: true }))).toEqual({
+      flag: 'removed',
+      label: 'removed',
+      title: 'removed, skipped for this run',
+      spoken: 'removed, skipped for this run',
+    })
+  })
 })
 
 describe('counts', () => {
   it('counts the Blicks per flag, the errors last', () => {
     const blicks = [blick('a', []), blick('b', []), blick('c', ['value']), blick('d', ['error']), blick('e', ['error'])]
     expect(counts(comparison(blicks))).toBe('2 unchanged · 1 value · 2 errors')
+  })
+
+  it('counts every skipped Blick as skipped, never as unchanged, and a removed one as removed too', () => {
+    const skipped = { skipped: true }
+    const blicks = [blick('a', []), blick('b', [], {}, skipped), blick('c', [], {}, skipped), blick('d', ['removed'], {}, skipped), blick('e', ['value'])]
+    expect(counts(comparison(blicks))).toBe('1 unchanged · 3 skipped · 1 value · 1 removed')
   })
 
   it('says when removed Blicks were not judged', () => {

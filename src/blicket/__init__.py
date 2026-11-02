@@ -15,7 +15,7 @@ from blicket.config import Config, find_project_root, load_config
 from blicket.dataset import Dataset, Frames, Quantity
 from blicket.definitions import blick, group, register, slug
 from blicket.discovery import discover
-from blicket.errors import BlicketError, ConfigError, DefinitionError, LoaderError, Problem
+from blicket.errors import BlicketError, ConfigError, DefinitionError, LoaderError, Problem, Skip
 from blicket.loader import RunSelection, fingerprint
 from blicket.manifest import Manifest, RunInfo
 from blicket.model import Blick, BlickEntry, Group, Registry
@@ -48,6 +48,7 @@ __all__ = [
     "Registry",
     "RunInfo",
     "RunSelection",
+    "Skip",
     "blick",
     "build",
     "discover",

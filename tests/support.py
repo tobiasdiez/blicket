@@ -106,6 +106,12 @@ def values(run):
 """
 
 
+# VALUES with a transformation that skips every run.
+SKIPPING_VALUES = VALUES.replace(
+    "    return", '    raise bk.Skip("the run has no trade module")\n    return'
+)
+
+
 def make_viewer(directory: Path, text: str = "viewer") -> Path:
     """A generated viewer: ``index.html`` and an asset, both naming ``text``."""
     (directory / "_nuxt").mkdir(parents=True)

@@ -2,7 +2,7 @@
 // small chart is drawn at.
 import { baselineTable, blickBadge, ranked, whereState, whereText, type Badge, type BlickComparison } from './comparison'
 import { queryFromState, stateFromQuery, withoutSplit, type ControlState, type YAxis } from './controls'
-import type { BlickEntry, Dimension, Manifest, Problem, Value } from './manifest'
+import { byStatus, firstLine, type BlickEntry, type Dimension, type Manifest, type Problem, type Value } from './manifest'
 import { display, valueKey } from './table'
 
 /** How many Blicks a section of the overview shows as cards, unless they are pinned. */
@@ -17,15 +17,15 @@ export interface PreviewCard {
 /** A flagged Blick in the list under the cards. */
 export interface ListedBlick {
   name: string
-  /** The title of a Blick that built, otherwise the name. */
+  /** The title of a Blick of the build that did not fail, otherwise the name. */
   label: string
-  /** Whether `label` is the name: of a removed Blick, one in error, or one without a title. */
+  /** Whether `label` is the name: of a Blick of the baseline only, one in error, or one without a title. */
   byName: boolean
-  /** The Blick's page; none for a removed Blick, or one without an id. */
+  /** The Blick's page; none for a Blick of the baseline only, or one without an id. */
   to: string | null
   badge: Badge | null
-  /** Why a Blick in error is: its first problem. */
-  problem: string | null
+  /** Why a Blick in error is, its first problem, or why a skipped one was skipped. */
+  note: string | null
 }
 
 /** The sections of the overview. */
@@ -46,16 +46,22 @@ export function firstProblem(entry: BlickEntry): Problem | null {
   return entry.problems.find(p => p.severity === 'error') ?? entry.problems[0] ?? null
 }
 
+/** Why a Blick has no table, if it has none: its first error, or the first line of why it was skipped. */
+function noteOf(entry: BlickEntry): string | null {
+  if (entry.status === 'skipped') return `skipped: ${firstLine(entry.skipped)}`
+  return entry.status === 'error' ? firstProblem(entry)?.message ?? null : null
+}
+
 /** `n` things, `one` or `many` of them: `1 error`, `2 errors`. */
 const counted = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
 /**
  * The build's trouble in a line, for the top of the overview, `1 Blick failed to build · build
  * incomplete · 1 error in files or the project`; empty when there is none. Warnings, such as a
- * project outside git, are no trouble.
+ * project outside git, and skipped Blicks are no trouble.
  */
 export function troubles(manifest: Pick<Manifest, 'blicks' | 'build' | 'problems'>): string {
-  const failed = manifest.blicks.filter(b => b.status === 'error').length
+  const failed = byStatus(manifest.blicks).error.length
   const errors = manifest.problems.filter(p => p.severity === 'error').length
   return [
     ...(failed ? [`${counted(failed, 'Blick', 'Blicks')} failed to build`] : []),
@@ -65,12 +71,25 @@ export function troubles(manifest: Pick<Manifest, 'blicks' | 'build' | 'problems
 }
 
 /**
+ * What the overview says of the Blicks skipped for this run, `24 of 33 Blicks are skipped for this
+ * run.`, and that nothing is left to show when every Blick is; empty when none is.
+ */
+export function skippedLine(entries: readonly BlickEntry[]): string {
+  const skipped = byStatus(entries).skipped.length
+  if (!skipped) return ''
+  const all = skipped === entries.length ? '; nothing to show' : ''
+  return `${skipped} of ${counted(entries.length, 'Blick', 'Blicks')} ${skipped === 1 ? 'is' : 'are'} skipped for this run${all}.`
+}
+
+/**
  * The overview's sections, from the build's Blicks in the sidebar's order, `entries`, the Blicks
  * of the comparison shown, `compared`, removed ones included, the build's among them by name,
  * `changes`, and the pinned Blicks. *Changed*, when the comparison flags a Blick: the flagged
  * Blicks in ranked order, the first `limit` with a table as cards and the others listed, removed
- * Blicks and Blicks in error among them. *Pinned*: the pinned Blicks in the sidebar's order as
- * cards, a Blick in error too; while none is pinned, no cards when *changed* has some, and
+ * Blicks, skipped ones and Blicks in error among them. A flagged Blick is the build's Blick of its
+ * name, if any: a skipped Blick of the build can be removed, and a Blick of the baseline only has a
+ * name no Blick of the build has. *Pinned*: the pinned Blicks in the sidebar's order as cards, a
+ * Blick in error or skipped too; while none is pinned, no cards when *changed* has some, and
  * otherwise the first `limit` Blicks with a table. A Blick both changed and pinned is a card in both.
  */
 export function previewSections(
@@ -89,19 +108,19 @@ export function previewSections(
     const cards: PreviewCard[] = []
     const listed: ListedBlick[] = []
     for (const blick of flagged) {
-      const entry = blick.change.flags.includes('removed') ? null : byName.get(blick.name) ?? null
+      const entry = byName.get(blick.name) ?? null
       if (entry && hasTable(entry) && cards.length < limit) {
         cards.push({ entry, change: blick })
         continue
       }
-      const title = entry?.status === 'ok' ? entry.definition?.title : undefined
+      const title = entry && entry.status !== 'error' ? entry.definition?.title : undefined
       listed.push({
         name: blick.name,
         label: title ?? blick.name,
         byName: title === undefined,
         to: entry?.id ? `/blick/${entry.id}` : null,
         badge: blickBadge(entry, blick),
-        problem: entry?.status === 'error' ? firstProblem(entry)?.message ?? null : null,
+        note: entry ? noteOf(entry) : null,
       })
     }
     changed = { cards, listed }

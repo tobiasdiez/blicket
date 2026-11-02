@@ -14,13 +14,22 @@ export const CATEGORICAL: Record<Theme, readonly string[]> = {
   dark: ['#3987e5', '#d95926', '#199e70', '#c98500', '#d55181', '#008300', '#9085e9', '#e66767'],
 }
 
+/**
+ * The colours of `count` series in display order: the categorical slots in order, the same for
+ * every filter, so a value keeps its colour; past the slots the hues repeat.
+ */
+export function seriesColors(count: number, theme: Theme): string[] {
+  return Array.from({ length: count }, (_, i) => CATEGORICAL[theme][i % SLOTS]!)
+}
+
 // `tick` is the axis labels' ink, at least 4.5:1 on the surface.
 export const INK: Record<Theme, { surface: string, primary: string, secondary: string, muted: string, tick: string, grid: string, baseline: string }> = {
   light: { surface: '#fcfcfb', primary: '#0b0b0b', secondary: '#52514e', muted: '#898781', tick: '#73716c', grid: '#e1e0d9', baseline: '#c3c2b7' },
   dark: { surface: '#1a1a19', primary: '#f0efec', secondary: '#c3c2b7', muted: '#898781', tick: '#898781', grid: '#2c2c2a', baseline: '#383835' },
 }
 
-const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif'
+/** The charts' font: the system's, which an exported image names too. */
+export const FONT = 'system-ui, -apple-system, "Segoe UI", sans-serif'
 
 /**
  * The least room a y axis's labels take, in px. It is a floor, which keeps the plot areas of the

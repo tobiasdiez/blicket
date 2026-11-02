@@ -59,8 +59,8 @@ const QUANTITY = 'Quantity'
 const DEFAULT_PLOT = 'line'
 
 /**
- * What a dimension does: a dimension channel of the plot (`x`, `color`, `linetype`), one panel
- * per value, a filter control, or summed over.
+ * What a dimension does: a dimension channel of the plot (`x`, `color`, `linetype`, `source`,
+ * `target`), one panel per value, a filter control, or summed over.
  */
 export type Role = string
 const PANELS = 'panels'
@@ -319,17 +319,18 @@ function timeDimension(options: BuilderOptions, dimensions: string[]): string | 
 
 /**
  * The state for the quantities `names` picked in a fresh form: a chart of the type `plot`, a
- * line chart by default, with the time dimension on x, every other dimension summed for an
- * additive quantity and a filter for an intensive one, and with several quantities, `Quantity`
- * on colour.
+ * line chart by default, with the time dimension on x, or a filter for a plot without x, every
+ * other dimension summed for an additive quantity and a filter for an intensive one, and with
+ * several quantities, `Quantity` on colour.
  */
 export function defaults(options: BuilderOptions, names: string[], plot = DEFAULT_PLOT): BuilderState {
   let state: BuilderState = { ...emptyState(offeredPlot(options, plot)), quantities: names }
   const [first] = picked(state, options)
   if (!first) return state
   const time = timeDimension(options, first.dimensions)
-  if (time) state.channels.x = time
-  if (!first.additive) state.keep = first.dimensions.filter(d => d !== time)
+  const onX = channelsOf(options, state.plot).some(c => c.name === 'x') ? time : undefined
+  if (onX) state.channels.x = onX
+  state.keep = first.dimensions.filter(d => d !== onX && (d === time || !first.additive))
   if (names.length > 1) state = withQuantityPlaced(state, options)
   return normalized(state, options)
 }
@@ -509,6 +510,8 @@ export function roleItem(role: Role, dimension: string): { label: string, descri
     x: 'the horizontal axis',
     color: 'one colour per value',
     linetype: 'one dash pattern per value',
+    source: 'the nodes flows leave',
+    target: 'the nodes flows enter',
     [PANELS]: 'one panel per value',
     [FILTER]: 'pick the value above the chart',
     [SUM]: `add up over ${dimension}`,

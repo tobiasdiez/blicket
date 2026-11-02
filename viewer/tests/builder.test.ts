@@ -15,6 +15,7 @@ import {
   request,
   requiredHeld,
   requiredHint,
+  roleItem,
   roleOf,
   rolesFor,
   setOnly,
@@ -35,6 +36,12 @@ const line = { name: 'line', channels: [
   { name: 'linetype', kind: 'dimension' as const, required: false, doc: '' },
 ] }
 const bar = { name: 'bar', channels: line.channels.slice(0, 3) }
+const sankey = { name: 'sankey', channels: [
+  { name: 'source', kind: 'dimension' as const, required: true, doc: '' },
+  { name: 'target', kind: 'dimension' as const, required: true, doc: '' },
+  { name: 'value', kind: 'measure' as const, required: true, doc: '' },
+  { name: 'color', kind: 'dimension' as const, required: false, doc: '' },
+] }
 
 function quantity(name: string, fields: Partial<Quantity> = {}): Quantity {
   return { name, title: name.split('/').at(-1)!, unit: 't', dimensions: ['Time', 'Region', 'Polymer'], additive: true, group: name.split('/')[0]!, ...fields }
@@ -53,7 +60,7 @@ const options: BuilderOptions = {
     { name: 'Region', dtype: 'string', values: ['LAM', 'SSA', 'EUR'] },
     { name: 'Polymer', dtype: 'string', values: ['PE', 'PP'] },
   ],
-  plots: [line, bar],
+  plots: [line, bar, sankey],
 }
 
 const one = defaults(options, ['flows/production'])
@@ -95,6 +102,20 @@ describe('the defaults of a pick', () => {
     const removed = pick(setPlot(one, options, 'bar'), options, []).state
     expect(picking(removed, ['flows/recycling']).plot).toBe('bar')
     expect(mergeBuilder({}, emptyState(), picking(removed, ['flows/recycling']))._plot).toBe('bar') // in the URL
+  })
+
+  it('keeps time as a filter for a plot type without x, a Sankey diagram', () => {
+    const flows = defaults(options, ['flows/production'], 'sankey')
+    expect(flows).toEqual({ ...emptyState('sankey'), quantities: ['flows/production'], keep: ['Time'] })
+    expect(request(flows, options)).toEqual({ quantities: ['flows/production'], plot: 'sankey', mapping: {}, keep: ['Time'], values: {} })
+    expect(defaults(options, ['parameters/rate'], 'sankey').keep).toEqual(['Time', 'Region'])
+    expect(rows(flows).get('Region')).toEqual(['source', 'target', 'color', 'panels', 'filter', 'sum'])
+    // From a line chart, the dimension on x becomes a filter too.
+    expect(setPlot(one, options, 'sankey')).toEqual(flows)
+    const bound = setRole(setRole(flows, options, 'Region', 'source'), options, 'Polymer', 'target')
+    expect(request(bound, options)!.mapping).toEqual({ source: 'Region', target: 'Polymer' })
+    expect(requiredHint(bound, options, 'Region')).toBe('source always has a dimension. To move Region, give another dimension the role source.')
+    expect(roleItem('target', 'Polymer')).toEqual({ label: 'target', description: 'the nodes flows enter', value: 'target' })
   })
 
   it('falls back to a line chart for a plot type the builder does not offer', () => {

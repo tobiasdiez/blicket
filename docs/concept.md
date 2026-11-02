@@ -56,7 +56,7 @@ one value, or split by the dimension.
 
 **Plot type.** A named chart kind with a fixed contract (see below). A small vocabulary ships
 with the tool: line, stacked area, bar, and similar. A project can define its own plot types,
-for example a Sankey diagram for MFA, and then has to implement the full contract.
+for example a map of regions, and then has to implement the full contract.
 
 **Snapshot.** The stored transformed table of a Blick from a build. Snapshots live in a
 snapshot store outside git: a directory on a shared filesystem or the cluster, remote backends

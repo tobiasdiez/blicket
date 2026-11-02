@@ -5,7 +5,7 @@ import type { Dimension } from '../lib/manifest'
 import { display, formatter, formatValue, isTime, numberFormat, type Cell } from '../lib/table'
 import { BASELINE_VALUE, type Channels, combinations, type FrameChannels, from, labelOf, magnitude, PANEL, plain, plotHeight, plotWidth, SEPARATOR, SERIES, seriesDimensions, type Spec } from './layout'
 import { scaled } from './scales'
-import { CATEGORICAL, GHOST, INK, SLOTS } from './theme'
+import { GHOST, INK, seriesColors, SLOTS } from './theme'
 import type { PlotArgs, Quantity, Theme } from './types'
 
 /** The size of a scatter's point and of the dot on a hovered point, in px². */
@@ -32,7 +32,7 @@ const NONE = '\u2013'
  * A number as a tooltip writes it: three significant digits chosen per value, a change with its
  * sign, `+1.2M` or `−300k`, a relative one in percent, `+2.1%`; an en dash for none.
  */
-function written(value: unknown, quantity: Quantity = 'measure'): string {
+export function written(value: unknown, quantity: Quantity = 'measure'): string {
   if (typeof value !== 'number' || Number.isNaN(value)) return NONE
   const text = quantity === 'relative' ? asPercent(value) : formatValue(value)
   return quantity !== 'measure' && value > 0 ? `+${text}` : text
@@ -119,10 +119,18 @@ export function overX(args: PlotArgs, ch: Channels, width: number, stacked: bool
   return { x: scaled(xEncoding(ch.x, across), args, 'x', across), y: scaled(yAxis(args, ch, stacked, quantity), args, 'y', plotHeight(args, quantity)) }
 }
 
-/** As many legend columns as fit `width`, at most six. */
+/**
+ * A legend of `labels` in a chart `width` wide: the width of an entry, about that of the longest
+ * label, and as many columns as fit, at most six.
+ */
+export function legendGrid(labels: string[], width: number): { columns: number, entryWidth: number } {
+  const entryWidth = Math.max(...labels.map(label => label.length), 4) * 6.5 + 32
+  return { columns: Math.max(1, Math.min(labels.length, 6, Math.floor(width / entryWidth))), entryWidth }
+}
+
+/** As many legend columns of the values of `d` as fit `width`, at most six. */
 function legendColumns(d: Dimension, width: number): number {
-  const entry = Math.max(...d.values.map(value => display(value, d).length), 4) * 6.5 + 32
-  return Math.max(1, Math.min(d.values.length, 6, Math.floor(width / entry)))
+  return legendGrid(d.values.map(value => display(value, d)), width).columns
 }
 
 /** The dash pattern of the `i`-th value of a line type, or of the `i`-th round of hues. */
@@ -150,7 +158,7 @@ function dashEncoding(d: Dimension, patterns: number[][], width: number): Spec {
 export function colorEncodings(d: Dimension, theme: Theme, symbol: string, width: number, dashed = false): Spec {
   const values = domain(d)
   const legend = { title: d.name, symbolType: symbol, columns: legendColumns(d, width) }
-  const range = values.map((_, i) => CATEGORICAL[theme][i % SLOTS])
+  const range = seriesColors(values.length, theme)
   const encodings: Spec = { color: { field: field(d.name), type: 'nominal', sort: values, scale: { domain: values, range }, legend } }
   if (dashed && values.length > SLOTS) encodings.strokeDash = dashEncoding(d, values.map((_, i) => dash(Math.floor(i / SLOTS))), width)
   return encodings

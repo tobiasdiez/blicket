@@ -2,6 +2,7 @@ import type { Row } from '../lib/table'
 import { bar, barChange } from './bar'
 import { comparable, type Compared } from './change'
 import { line, lineChange } from './line'
+import { flowsChanged, sankey, sankeyChange } from './sankey'
 import { belowZero, logChannels } from './scales'
 import { leftOut, scatter, scatterChange } from './scatter'
 import { stackedArea, stackedAreaChange } from './stacked_area'
@@ -11,7 +12,11 @@ import type { ChangeBuilder, PlotArgs, PlotType } from './types'
 /** What tells whether a chart draws a row of its table: the plot's mapping and scales. */
 type Drawable = Pick<PlotArgs, 'mapping' | 'scales'>
 
-/** A built-in plot type: its browser half, and how it draws its change against a baseline. */
+/**
+ * A built-in plot type: its browser half, how it draws its change against a baseline, and, when it
+ * is not `comparable`, how it knows that its change charts draw something. `drawsBaseline` is
+ * false for a type whose chart does not draw the baseline behind its marks.
+ */
 export interface BuiltIn {
   plot: PlotType
   change: ChangeBuilder
@@ -21,6 +26,8 @@ export interface BuiltIn {
    * its own account defines it; the others draw every row whose values their axes have a place for.
    */
   leftOut?: (args: Pick<PlotArgs, 'mapping'>, row: Row) => string | null
+  changed?: (args: Compared) => boolean
+  drawsBaseline?: boolean
 }
 
 /**
@@ -33,6 +40,7 @@ export const PLOT_TYPES: Record<string, BuiltIn> = {
   bar: { plot: bar, change: barChange },
   stacked_bar: { plot: stackedBar, change: stackedBarChange },
   scatter: { plot: scatter, change: scatterChange, leftOut },
+  sankey: { plot: sankey, change: sankeyChange, changed: flowsChanged, drawsBaseline: false },
 }
 
 /**
@@ -41,7 +49,13 @@ export const PLOT_TYPES: Record<string, BuiltIn> = {
  * change charts, is not asked: its mapping need not have the built-ins' channels.
  */
 export function nothingToCompare(type: string, args: Compared): boolean {
-  return Object.hasOwn(PLOT_TYPES, type) && !!args.baseline?.length && !comparable(args)
+  if (!Object.hasOwn(PLOT_TYPES, type) || !args.baseline?.length) return false
+  return !(PLOT_TYPES[type]!.changed ?? comparable)(args)
+}
+
+/** Whether a chart of the plot `type` draws the baseline behind its marks: the Sankey diagram's does not. */
+export function drawsBaseline(type: string): boolean {
+  return PLOT_TYPES[type]?.drawsBaseline ?? true
 }
 
 /**

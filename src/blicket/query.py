@@ -161,8 +161,8 @@ def _quantities(contents: Contents, names: tuple[str, ...]) -> tuple[Quantity, .
 
 
 def _check_mapping(plot_type: PlotType, mapping: Mapping[str, str]) -> None:
-    """Refuse a mapping that names a channel the plot type has not, or leaves a required one
-    empty, in the builder's words."""
+    """Refuse a mapping that names a channel the plot type has not, or leaves required ones
+    empty, all of them in one message, in the builder's words."""
     dimension_channels = [c.name for c in plot_type.channels if c.kind == "dimension"]
     for channel in mapping:
         if channel not in dimension_channels:
@@ -170,12 +170,19 @@ def _check_mapping(plot_type: PlotType, mapping: Mapping[str, str]) -> None:
                 f"plot type {plot_type.name} has no dimension channel {channel!r}; its dimension "
                 f"channels are {', '.join(dimension_channels)}"
             )
-    for channel in plot_type.channels:
-        if channel.kind == "dimension" and channel.required and channel.name not in mapping:
-            raise _Refused(
-                f"{_channel(channel.name)} needs a dimension; give one the role "
-                f"{_CHANNEL_WORDS.get(channel.name, channel.name)}"
-            )
+    empty = [
+        channel.name
+        for channel in plot_type.channels
+        if channel.kind == "dimension" and channel.required and channel.name not in mapping
+    ]
+    if not empty:
+        return
+    words = [_CHANNEL_WORDS.get(name, name) for name in empty]
+    roles = " and one the ".join(f"role {word}" for word in words)
+    if len(empty) == 1:
+        raise _Refused(f"{_channel(empty[0])} needs a dimension; give one the {roles}")
+    listed = f"{', '.join(words[:-1])} and {words[-1]}"
+    raise _Refused(f"the {listed} channels need a dimension; give one the {roles}")
 
 
 def _kept(contents: Contents, query: Query, picked: tuple[Quantity, ...]) -> list[str]:

@@ -79,9 +79,10 @@ first look" at the first six Blicks, whose buttons pin them. After a click the o
 keyboard on the button of the card in its place (`data-blick`, `data-pin`). A card
 (`BlickPreview`) fetches its tables once it comes into view, through `useBlickChart`, which the
 Blick page uses too, as the builder uses its `chartPropsOf`. Its chart is compact,
-`PlotArgs.compact`: 160 px high, without legend and export menu, the tooltips, the highlights and
-the baseline kept. `frame()` turns off the legend of each encoding, since an encoding's own
-`legend` wins over the config's `legend.disable`. A card of a skipped Blick says so with the first
+`PlotArgs.compact`: 160 px high (a Sankey diagram, which has no axes, 204 px), without legend and
+export menu; the tooltips and highlights are kept, and the baseline too except on a Sankey.
+`frame()` turns off the legend of each encoding, since an encoding's own `legend` wins over the
+config's `legend.disable`. A card of a skipped Blick says so with the first
 line of the reason, and its page with the whole reason; a line under the comparison says how many
 Blicks the run skipped (`skippedLine`). Under the cards, whatever the comparison, the
 overview lists the Blicks in error with their problems, the build's own problems from
@@ -116,13 +117,34 @@ none is left, which they say instead of a chart. A change chart gets the chart a
 `PlotArgs.above`, so a scatter's change charts share its x domain and name the baseline's x when x
 moved between the runs.
 
+The Sankey diagram is the exception. `app/plots/sankey.ts` holds what the plot types and the change
+charts need: its channels, the panels' grid and the change bars, a bar per link that changed. Its
+`render` holds about the chart's room and loads `app/plots/sankey_diagram.ts` by a dynamic import,
+so only a page that draws a Sankey fetches that chunk, with `app/plots/sankey_graph.ts`, the rules
+without the DOM, and `app/plots/svg_export.ts`, the export of SVG built by hand. Each panel's graph
+is a node per value of the source and target columns and a link per row with a positive value
+between two nodes; d3-sankey-diagram lays it out and draws the links and node bars, with
+d3-selection 1, and the module draws the legend, whose click fades the other colour values, the unit
+of the links' width, the panel and node labels, a caption that counts the rows not drawn, the
+tooltips through vega-tooltip, in the other charts' look, on hover and on a tap, and an export menu
+like vega-embed's. Given less than 61 px per layer of nodes, by more than 16 px in all, the diagram
+scrolls sideways in a box of its own under the legend. `app/plots/d3.d.ts` declares what of the two
+packages it uses, since they ship no types. The library breaks loops where a depth-first walk meets
+a node again; the module gives it the nodes and flows in the order whose walk turns back the least
+flow, so the main chain runs forward, drawn as ribbons rather than the library's arcs, and recycling
+loops back, under the other links and fainter, and lays a panel out again in a narrower box where
+such a loop would reach past its sides. A Sankey does not draw the baseline behind
+(`drawsBaseline: false` in `app/plots/index.ts`): its tooltips give the baseline's value and the
+change, and the overview's caption and the switch leave the faded baseline out.
+
 While "Compare with baseline" is on, `app/plots/change.ts` draws two charts under a built-in
 type's chart: the change of each row, absolute and relative, through the type's own specification
 builder, which each built-in module exports next to its `definePlot` and `app/plots/index.ts`
-collects, on the chart's x scale and a linear y, since a change crosses zero. Rows are compared as
-the Python diff routine compares them: a row missing from one table counts as 0, and a row with a
-dimension value only one table has gets no change drawn. A value counts as present when a row of
-the selection carries it, while the routine looks at the whole tables, so a sparse table under a
-filter can differ from the comparison's verdict.
+collects, on the chart's x scale and a linear y, since a change crosses zero; the page says there
+is nothing to compare when the Sankey's would draw no bar. Rows are compared as the Python diff
+routine compares them: a row missing from one table counts as 0, and a row with a dimension value
+only one table has gets no change drawn. A value counts as present when a row of the selection
+carries it, while the routine looks at the whole tables, so a sparse table under a filter can
+differ from the comparison's verdict.
 `tests/table.parquet` is the one checked-in file: the Parquet reader must read a real zstd file,
 and the test says how polars wrote it.

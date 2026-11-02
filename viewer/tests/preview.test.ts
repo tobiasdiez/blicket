@@ -162,6 +162,16 @@ describe('a card', () => {
     expect(previewCaption(plain, previewState(plain, gdp, 'shared'), gdp)).toBe('largest change at Region: EUR, Time: 2050')
   })
 
+  it('says nothing of the baseline for a chart that does not draw it, a Sankey diagram\'s', () => {
+    const sankey = entry('flows/sankey', { columns: columns(flow, time, region), controls: [split] }, { source: 'Flow', target: 'Time', value: 'value' })
+    const change = compared('flows/sankey', ['value'], 0.021, { Flow: 'Primary', Time: 2100, Region: 'SSA' }, 'compare/b/flows/sankey.parquet')
+    const preview = previewState(sankey, change, 'shared')
+    expect([previewCaption(sankey, preview, change, false), previewCaption(sankey, preview, change)]).toEqual([
+      'Region: SSA · largest change at Flow: Primary, Time: 2100',
+      'Region: SSA · largest change at Flow: Primary, Time: 2100 · baseline\u00A0faded',
+    ])
+  })
+
   it('names the panel it shows of how many, and leads to the page as laid out', () => {
     const first = previewState(rates, null, 'shared')
     expect([previewCaption(rates, first, null), previewLink(rates, first, 'shared')]).toEqual([

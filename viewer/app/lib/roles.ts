@@ -1,7 +1,7 @@
 import type { BlickEntry } from './manifest'
 
 /** The built-in dimension channels as the viewer names them. */
-export const CHANNEL_LABELS: Record<string, string> = { x: 'x', color: 'colour', linetype: 'line type' }
+export const CHANNEL_LABELS: Record<string, string> = { x: 'x', color: 'colour', linetype: 'line type', source: 'source', target: 'target' }
 
 /**
  * The text a search looks in: id, title, description, tags, plot type and dimension names, and of a

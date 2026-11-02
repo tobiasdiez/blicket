@@ -6,13 +6,15 @@ import { definePlot } from './embed'
 import { asNumber, baselineValues, cellKey, PADDING, rowKey } from './layout'
 import type { ChangeBuilder, ChangeKind, PlotArgs, PlotType } from './types'
 
-// The data fields of a row's change and relative change.
-const CHANGE = '__change'
-const RELATIVE = '__relative'
+/** The data fields of a row's change and relative change. */
+export const CHANGE = '__change'
+export const RELATIVE = '__relative'
 
-// A divisor counts as 0 within this fraction of the largest value compared: the relative change
-// against it is none. Numerical noise in a table lies many orders of magnitude below.
-const ZERO = 1e-9
+/**
+ * A divisor counts as 0 within this fraction of the largest value compared: the relative change
+ * against it is none. Numerical noise in a table lies many orders of magnitude below.
+ */
+export const ZERO = 1e-9
 
 // The titles of the change charts, which exported images carry, in two parts that go on two
 // lines where the chart is too narrow for one.
@@ -24,6 +26,13 @@ const TITLE_CHARACTER = 6 // px, about the width of a character of the 12 px tit
 
 /** What the change rows are made of: the rows after the filters, of both tables. */
 export type Compared = Pick<PlotArgs, 'table' | 'baseline' | 'schema' | 'mapping'>
+
+/** The channel of the measure the change charts compare: `y`, or a Sankey diagram's `value`. */
+function measureChannel(mapping: Record<string, string>): string {
+  const channel = 'y' in mapping ? 'y' : 'value'
+  if (!mapping[channel]) throw new Error('the plot maps no y or value')
+  return channel
+}
 
 /** A row of either table, with the current and the baseline's value it compares, or none. */
 type Pair = [row: Row, values: [current: number | null, baseline: number | null] | null]
@@ -50,8 +59,7 @@ function changes(current: number | null, baseline: number | null, zero: number):
  * differ from the comparison's verdict on the whole tables.
  */
 function pairs(args: Compared): Pair[] {
-  const y = args.mapping.y
-  if (!y) throw new Error('the plot maps no y')
+  const y = args.mapping[measureChannel(args.mapping)]!
   const dims = args.schema.dimensions
   const baselineRows = args.baseline ?? []
   const baselineByKey = baselineValues(baselineRows, dims, y)
@@ -109,7 +117,7 @@ function changeArgs(args: PlotArgs, kind: ChangeKind): PlotArgs {
     table: changeRows(args),
     baseline: null,
     schema: { ...args.schema, measures: [{ name: measure, dtype: 'float' }] },
-    mapping: { ...args.mapping, y: measure },
+    mapping: { ...args.mapping, [measureChannel(args.mapping)]: measure },
     scales,
     above: args,
     unit: kind === 'change' ? args.unit : null,

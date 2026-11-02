@@ -212,4 +212,11 @@ describe('where', () => {
     const where = { Time: 2100, Period: 'Projected', Flow: 'Primary', Region: 'SSA', Parameter: 'landfill' }
     expect(whereText(where, state, scatter)).toBe('Parameter: landfill, Region: SSA, Flow: Primary, Period: Projected, Time: 2100')
   })
+
+  it('names the ends of a Sankey link before its colour', () => {
+    const where = { Time: 2100, Region: 'CAZ', From: 'End-of-Life Management', To: 'Uncollected', Stage: 'Losses' }
+    const sankey = { source: 'From', target: 'To', value: 'value', color: 'Stage' }
+    expect(whereText(where, { filters: { Time: 2050, Region: 'World' }, splits: [], y: 'shared' }, sankey))
+      .toBe('Time: 2100, Region: CAZ, From: End-of-Life Management, To: Uncollected, Stage: Losses')
+  })
 })

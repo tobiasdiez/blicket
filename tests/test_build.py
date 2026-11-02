@@ -506,6 +506,44 @@ def derived(run):
 """
 
 
+SANKEY = """\
+import polars as pl
+
+import blicket as bk
+
+
+@bk.blick(
+    title="Flows",
+    unit="t",
+    plot=bk.plots.sankey(source="From", target="To", value="value", color="Stage"),
+    defaults={"Time": 2100},
+)
+def flows(run):
+    return pl.DataFrame({
+        "Time": [2050, 2050, 2100, 2100],
+        "From": ["Production", "Use", "Production", "Use"],
+        "To": ["Use", "Production", "Use", "Production"],
+        "Stage": ["Use", "Recycling", "Use", "Recycling"],
+        "value": run["values"],
+    })
+"""
+
+
+def test_a_sankey_blick_records_its_mapping_and_filters_the_other_dimensions(
+    tmp_path: Path,
+) -> None:
+    root = make_build_project(tmp_path, {"blicks/flows.py": SANKEY})
+    built = bk.build(root, [make_run(tmp_path / "run", "10 2 12 3")])
+    (entry,) = built.manifest.blicks
+    assert (entry.status, entry.rows) == ("ok", 4)
+    assert entry.controls == (Control(dimension="Time", kind="filter", default=2100),)
+    written = json.loads((built.path / "manifest.json").read_text())
+    assert written["blicks"][0]["definition"]["plot"] == {
+        "type": "sankey",
+        "mapping": {"source": "From", "target": "To", "value": "value", "color": "Stage"},
+    }
+
+
 def test_panels_are_the_filters_and_with_independent_y_axes_the_splits() -> None:
     schema = TableSchema(
         dimensions=[

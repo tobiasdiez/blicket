@@ -323,7 +323,7 @@ def test_an_unknown_plot_type_is_error_with_a_message(build: Path) -> None:
     assert (blick.change.flags, blick.message) == (
         {"error"},
         "no built-in plot type 'custom'; the built-ins are line, stacked_area, bar, stacked_bar, "
-        "scatter",
+        "scatter, sankey",
     )
 
 

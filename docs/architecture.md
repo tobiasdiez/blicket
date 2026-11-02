@@ -217,12 +217,17 @@ export default {
   used by the built-ins (an outer-join change table, a bounded magnitude, a Vega-Lite template
   renderer with a ghost overlay) may be promoted to public helpers later, once two project plot
   types have wanted the same thing.
-- Built-ins: line, stacked area, bar (grouped, stacked) in M0/M1; table in M2; scatter (amendment
-  of 2026-11-02 below). Their `render` uses Vega-Lite templates; their `diff` uses a shared
-  internal routine. Their `controls` turn each unbound dimension into a filter by default and
-  allow `split` where the chart supports facets. Hiding dimensions that are functionally
-  determined by other unbound dimensions (unit by variable) waits for a project that needs it
-  (amendment of 2026-10-24).
+- Built-ins: line, stacked area, bar (grouped, stacked) in M0/M1; table in M2; scatter and sankey
+  (amendments of 2026-11-02, scatter's below). Their `render` uses Vega-Lite templates; their
+  `diff` uses a shared internal routine. Their `controls` turn each unbound dimension into a filter
+  by default and allow `split` where the chart supports facets. Hiding dimensions that are
+  functionally determined by other unbound dimensions (unit by variable) waits for a project that
+  needs it (amendment of 2026-10-24). Amendment of 2026-11-02
+  ([plans/sankey-plot.md](plans/sankey-plot.md)): a built-in `sankey` (`source` and `target`
+  dimensions, `value`, `color`), whose `diff` compares `value` per row against the largest flow of
+  its panel and whose browser half is the first that is not a Vega-Lite template:
+  d3-sankey-diagram lays it out, loops included, and draws it into one SVG, in a chunk that only a
+  page drawing a Sankey loads. It draws no baseline behind; its change charts are bars per link.
 - Amendment of 2026-10-24 (M0.5): `diff` takes `panels` instead of `controls`, the dimensions
   whose value combinations each get their own scale. The core derives them, since it lays out the
   panels (the filters, and the splits when the Blick sets `independent_y`); the plot type scales
@@ -367,9 +372,10 @@ one `BLICKET_VIEWER` names in a checkout.
   collapsible, a drawer below 1280 px; the search is not in the URL, and the tag and group chips
   are gone. The overview keeps the baseline and its counts and shows small charts: the flagged
   Blicks in ranked order, six as cards and the rest as a ranked list under a line "N more
-  changed", each card at the panel of its largest change with the baseline drawn behind; and the
-  Blicks the user pinned, kept in the browser per origin, or, while nothing is pinned or changed,
-  the first six Blicks as "A first look", whose cards can pin them. Whatever the comparison, a line
+  changed", each card at the panel of its largest change with the baseline drawn behind (but the
+  Sankey diagram); and the Blicks the user pinned, kept in the browser per origin, or, while
+  nothing is pinned or changed, the first six Blicks as "A first look", whose cards can pin them.
+  Whatever the comparison, a line
   at the top says when Blicks failed to build or the build is incomplete, and the Blicks in error
   are listed with their problems, next to the build's own. The plot type and role chips are gone
   from the overview.
@@ -517,8 +523,11 @@ planned for the dev server, are not needed: `blicket serve` and `blicket dev` sh
 server, whose daemon threads let Ctrl-C end a session with tabs open, and the dev loop polls
 instead of streaming events. Build backend: meson-python, with the viewer's `nuxt generate` as a
 meson custom target whose output is installed into the wheel. Viewer: Nuxt 4 with Vue, vega-lite
-+ vega-embed, hyparquet for reading Parquet in the browser. Sankey (M4): d3-sankey-diagram, which
-supports loops. TypeScript types for the manifest are hand-written for now.
++ vega-embed, hyparquet for reading Parquet in the browser. Sankey: d3-sankey-diagram 0.9.4, which
+supports loops, with d3-selection 1 to draw it and vega-tooltip, a dependency of its own as of
+vega-embed, for its tooltips; a built-in plot type since 2026-11-02 rather than a project's (M4).
+TypeScript types for the manifest, and declarations for d3-sankey-diagram and d3-selection, which
+ship none, are hand-written for now.
 
 ## Project basics (decided 2026-10-23)
 
@@ -569,7 +578,8 @@ supports loops. TypeScript types for the manifest are hand-written for now.
   the link from a cluster run to a branch or PR, the PR comment and commit status, and the store
   backend that makes the UI reach the builds. This completes job 2.
 - **M4 Plugins and hardening.** A project plot type end to end (Sankey for MFA), `spec` version
-  documented as the protocol, difference chart, store `gc`.
+  documented as the protocol, difference chart, store `gc`. Amendment of 2026-11-02: the Sankey
+  is a built-in plot type already, so the project plot type of M4 is another one.
 - **Later.** R; composition of several models or runs; preview deploys; DuckDB in the browser for
   large tables; the concept's deferred items (variants, checks, auto-accept, grouping).
 
@@ -615,17 +625,17 @@ the loader takes a run directory and returns the run object plus `RunInfo`.
    Behind this: discovery imports the Blick modules, the loader runs once and stays in memory,
    every transformation runs, tables go to canonical form, the store is searched for the baseline
    build, each plot type's diff runs against it, and a build directory with a fresh id is written.
-3. The overview opens with the flagged Blicks ranked by magnitude, the first six as small charts
-   of the panel where each changed most, the baseline drawn behind, the rest as a list, each with
-   its flag; then the Blicks the user pinned, or "A first look" at the first six while nothing is
-   pinned or changed. A sidebar on every page lists the groups, searchable, with a filter for the
-   flagged Blicks. The schema summary says which value appeared, for example
+3. The overview opens with the flagged Blicks ranked by magnitude, the first six as small charts of
+   the panel where each changed most, the baseline drawn behind (but the Sankey diagram), the rest
+   as a list, each with its flag; then the Blicks the user pinned, or "A first look" at the first
+   six while nothing is pinned or changed. A sidebar on every page lists the groups, searchable,
+   with a filter for the flagged Blicks. The schema summary says which value appeared, for example
    "process 'EAF-DRI' appeared in 3 Blicks". (Amended on 2026-10-28; see the viewer section.)
 4. You open the top mover. The chart has the controls the plot type derived: a scenario dropdown, a
    region split toggle. The URL carries the control state, so a link reproduces the view. A toggle
-   shows the plot type's comparison, for the built-ins a ghost of the baseline, on by default. A
-   strip names the flags, the largest change and where it is; its "Show where" button sets the
-   controls there.
+   shows the plot type's comparison, for the built-ins but the Sankey diagram a ghost of the
+   baseline, on by default. A strip names the flags, the largest change and where it is; its "Show
+   where" button sets the controls there.
 5. Two outcomes. If the Blick's transformation is at fault, you edit its code; saving reloads the
    project code without reloading the run data, only that Blick is rebuilt, and the chart updates
    in under a second with the controls unchanged. If the model is at fault, you fix it and rerun;

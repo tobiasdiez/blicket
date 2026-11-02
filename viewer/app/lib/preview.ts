@@ -183,11 +183,11 @@ function summary(entry: BlickEntry): string {
  * What a card's caption says, in one line: the filter values it shows, in the order of the
  * controls, such as `Region: SSA`; where the comparison finds the largest change, the rest of its
  * row, `largest change at Flow: Primary, Time: 2100`, whose size the card's badge gives, and
- * `baseline faded` when the baseline is drawn behind; or, for a panel the comparison did not
- * choose, which of how many it is. The first sentence of the description when there is nothing of
- * that.
+ * `baseline faded` when the chart draws the baseline behind, as `baselineDrawn` says of its plot
+ * type; or, for a panel the comparison did not choose, which of how many it is. The first sentence
+ * of the description when there is nothing of that.
  */
-export function previewCaption(entry: BlickEntry, preview: Preview | null, change: BlickComparison | null): string {
+export function previewCaption(entry: BlickEntry, preview: Preview | null, change: BlickComparison | null, baselineDrawn = true): string {
   if (!preview) return summary(entry)
   const { state } = preview
   const dimensions = new Map((entry.columns?.dimensions ?? []).map(d => [d.name, d]))
@@ -203,7 +203,7 @@ export function previewCaption(entry: BlickEntry, preview: Preview | null, chang
     const rest = Object.fromEntries(Object.entries(where).filter(([name]) => state.filters[name] === undefined))
     const at = whereText(rest, state, entry.definition?.plot.mapping ?? {})
     parts.push(at ? `largest change at ${at}` : 'largest change')
-    if (baselineTable(change)) parts.push('baseline\u00A0faded')
+    if (baselineTable(change) && baselineDrawn) parts.push('baseline\u00A0faded')
   }
   else {
     // The panels the Blick's splits draw on its page, of which the card shows one: the first, when

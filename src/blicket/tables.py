@@ -264,10 +264,12 @@ def _check_plot(
     errors: list[str],
 ) -> None:
     """The plot's columns against the table; ``roles`` holds the dimensions and the columns
-    whose type was rejected already."""
+    whose type was rejected already. A channel with a scale needs numbers: a measure, or an
+    integer dimension."""
     dims, rejected = roles
     for channel, column in blick.plot.mapping.items():
         dtype = frame.schema.get(column)
+        scale = blick.plot.scales.get(channel)
         if dtype is None:
             hint = f" ({_INDEX_HINT})" if index_dropped else ""
             errors.append(
@@ -295,6 +297,12 @@ def _check_plot(
                     f"{column!r} on {channel}= is a {dimension_type(dtype) or dtype} column and "
                     "cannot be a measure"
                 )
+        elif scale is not None and column in dims and dimension_type(dtype) != "integer":
+            errors.append(
+                f"{channel}_scale={scale!r} needs numbers on {channel}, but {column!r} is a "
+                f"{dimension_type(dtype)} column; bind an integer dimension to {channel} or drop "
+                f"{channel}_scale"
+            )
 
 
 def _check_rows(frame: pl.DataFrame, dims: Sequence[str], errors: list[str]) -> None:

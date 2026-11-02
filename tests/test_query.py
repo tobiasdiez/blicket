@@ -409,6 +409,7 @@ def test_the_options_list_the_plot_types_of_one_measure() -> None:
         "kind": "dimension",
         "required": True,
         "doc": "Horizontal axis, usually time.",
+        "scales": ["log"],
     }
     assert dumped["quantities"][0]["title"] == "steel"
 

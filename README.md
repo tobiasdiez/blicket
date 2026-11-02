@@ -88,6 +88,23 @@ def steel_by_process(run):
 split then gets its own y axis by default; otherwise the panels share one, and the viewer's toggle
 changes either. Both are part of the Blick's definition in the manifest.
 
+A line chart takes a logarithmic axis for values that span orders of magnitude, such as GDP
+across regions:
+
+```python
+@bk.blick(plot=bk.plots.line(x="year", y="value", color="region", y_scale="log"))
+def gdp_per_capita(run):
+    return run["gdp_per_capita"]
+```
+
+`x_scale="log"` does the same for x, which then needs an integer dimension. `bar`, `stacked_bar`
+and `stacked_area` take no scale: bars and stacks stand on zero, which a logarithmic axis has
+not. Nor has it a place for a negative value, so a value at or below zero is drawn as missing:
+on y the line breaks there and the tooltip shows a dash, on x the row is left out, and a note
+under the chart says how many values it left out. The charts of the change against a baseline keep the x scale and draw the change,
+which crosses zero, on a linear y axis. The scales are part of the plot's definition in the
+manifest; `linear`, the default, is not recorded.
+
 ```console
 $ blicket list
 flows  Material flows  [mfa]

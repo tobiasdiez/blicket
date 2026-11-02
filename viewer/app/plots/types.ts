@@ -1,6 +1,6 @@
 import type { TopLevelSpec } from 'vega-lite'
 import type { YAxis } from '../lib/controls'
-import type { TableSchema } from '../lib/manifest'
+import type { Scale, TableSchema } from '../lib/manifest'
 import type { Row } from '../lib/table'
 
 export type Theme = 'light' | 'dark'
@@ -24,6 +24,8 @@ export interface PlotArgs {
   schema: TableSchema
   /** The plot's channels, such as `x`, mapped to column names. */
   mapping: Record<string, string>
+  /** The scales of the channels whose axis is not linear, such as `{ y: 'log' }`; without it, every axis is linear. */
+  scales?: Record<string, Scale>
   /** The unit of the measure, if the Blick names one. */
   unit: string | null
   state: { splits: string[], y: YAxis }

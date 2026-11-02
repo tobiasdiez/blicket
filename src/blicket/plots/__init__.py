@@ -4,7 +4,7 @@ A plot type declares its channels as data, so they can be listed before any mapp
 """
 
 from blicket.errors import DefinitionError
-from blicket.plots._base import Channel, ChannelKind, PlotSpec, PlotType
+from blicket.plots._base import Channel, ChannelKind, PlotSpec, PlotType, Scale
 from blicket.plots.bar import BAR, STACKED_BAR, bar, stacked_bar
 from blicket.plots.line import LINE, line
 from blicket.plots.stacked_area import STACKED_AREA, stacked_area
@@ -34,6 +34,7 @@ __all__ = [
     "ChannelKind",
     "PlotSpec",
     "PlotType",
+    "Scale",
     "bar",
     "builtin",
     "builtins",

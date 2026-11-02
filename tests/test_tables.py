@@ -409,6 +409,17 @@ def test_an_empty_table_is_a_warning() -> None:
             {},
             "dimension column 'year' has 1 null value(s)",
         ),
+        (
+            FRAME,
+            {"plot": bk.plots.line(x="region", y="value", x_scale="log")},
+            "x_scale='log' needs numbers on x, but 'region' is a string column; bind an integer "
+            "dimension to x or drop x_scale",
+        ),
+        (
+            pl.DataFrame({"day": [dt.date(2020, 1, 1)], "value": [1.0]}),
+            {"plot": bk.plots.line(x="day", y="value", x_scale="log")},
+            "x_scale='log' needs numbers on x, but 'day' is a date column",
+        ),
         (FRAME, {"controls": {"year": "split"}}, "the plot binds 'year' to x="),
         (FRAME, {"controls": {"scenario": "split"}}, "has no dimension 'scenario'"),
         (FRAME, {"order": {"value": (1.0,)}}, "order['value']: the table has no dimension"),
@@ -444,6 +455,11 @@ def test_an_absent_column_in_dims_or_measures_is_the_only_error(options: dict[st
     plot = bk.plots.line(x="year", y="value", color="region")
     (error,) = errors(FRAME, plot, **options)
     assert "names the column 'nope', which the table lacks" in error
+
+
+def test_an_integer_and_a_measure_take_a_log_scale_with_values_at_or_below_zero() -> None:
+    plot = bk.plots.line(x="year", y="value", color="region", x_scale="log", y_scale="log")
+    assert checked(FRAME.with_columns(value=pl.Series([0.0, -1.0])), plot=plot).height == 2
 
 
 def test_a_column_of_a_rejected_type_is_reported_once() -> None:

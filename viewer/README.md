@@ -101,14 +101,20 @@ controls select, and from the baseline's rows after the same filters when the ch
 (`PlotArgs.baseline`): the built-ins draw them behind the current marks, faded and broader, in the
 series' colours, and solid whatever the line style, as remind-mfa draws its reference run; the
 legend click and the tooltip tell lines of a repeated hue apart. Their colours are the validated
-palette in `app/plots/theme.ts`.
+palette in `app/plots/theme.ts`. A channel the plot puts on a logarithmic axis (`PlotArgs.scales`)
+gets its encoding from `scaled` in `app/plots/scales.ts`: "(log scale)" in its title, ends at the
+data, and grid lines at the labelled ticks only. `frame` hands Vega the values at or below zero
+on such an axis as null, since Vega-Lite filters only null, NaN and infinite values; the line
+breaks there, a tooltip shows the en dash of a missing value (the data tab keeps the number), and
+`BlickChart` says below the chart how many current values it left out.
 
 While "Compare with baseline" is on, `app/plots/change.ts` draws two charts under a built-in
 type's chart: the change of each row, absolute and relative, through the type's own specification
 builder, which each built-in module exports next to its `definePlot` and `app/plots/index.ts`
-collects. Rows are compared as the Python diff routine compares them: a row missing from one table
-counts as 0, and a row with a dimension value only one table has gets no change drawn. A value
-counts as present when a row of the selection carries it, while the routine looks at the whole
-tables, so a sparse table under a filter can differ from the comparison's verdict.
+collects, on the chart's x scale and a linear y, since a change crosses zero. Rows are compared as
+the Python diff routine compares them: a row missing from one table counts as 0, and a row with a
+dimension value only one table has gets no change drawn. A value counts as present when a row of
+the selection carries it, while the routine looks at the whole tables, so a sparse table under a
+filter can differ from the comparison's verdict.
 `tests/table.parquet` is the one checked-in file: the Parquet reader must read a real zstd file,
 and the test says how polars wrote it.

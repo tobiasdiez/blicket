@@ -194,16 +194,21 @@ class StackedArea(bk.PlotType):
 ```ts
 // stacked_area.js — browser half, loaded by dynamic import; framework-agnostic, never sees Vue
 export default {
-  render({ el, table, baseline, schema, mapping, unit, state, theme, name }) { ...; return cleanup },
+  render({ el, table, baseline, schema, mapping, scales, unit, state, theme, name }) { ...; return cleanup },
 }
 ```
 
 - **Channels are declared as data.** `controls(schema, mapping)` derives controls once a mapping
   exists; the builder needs the list of channels before any mapping exists, to offer dropdowns.
   So a plot type also declares `channels`: for each channel its name, whether it takes a
-  dimension or a measure, whether it is required, and constraints such as "line type only for
-  line plots" or "x defaults to time". The builder reads this list; nothing else about the
-  contract changes.
+  dimension or a measure, whether it is required, the axis scales it takes besides `linear`,
+  which every axis has (`log` for a continuous axis, none for a colour or a band), and
+  constraints such as "line type only for line plots" or "x defaults to time". The builder reads
+  this list; nothing else about the contract changes. A Blick's plot spec holds the axis scales
+  it gives its channels, checked against these declarations; the manifest records them in the
+  plot definition, and `render` receives them as `scales`, keyed by channel, without the channels
+  whose axis is linear. A factory takes the axis scale of a channel `x` as the argument
+  `x_scale`, as `bk.plots.line` does, and messages name it so.
 - The build-side half runs in Python at build time, because the terminal summary, the report and
   CI need flags and magnitude without a browser. The browser half renders the chart and the
   comparison.

@@ -3,7 +3,8 @@
 import * as vega from 'vega'
 import type { Dimension } from '../lib/manifest'
 import { display, formatter, formatValue, isTime, numberFormat, type Cell } from '../lib/table'
-import { BASELINE_VALUE, type Channels, combinations, from, labelOf, magnitude, PANEL, plain, plotWidth, SEPARATOR, SERIES, seriesDimensions, type Spec } from './layout'
+import { BASELINE_VALUE, type Channels, combinations, from, labelOf, magnitude, PANEL, plain, plotHeight, plotWidth, SEPARATOR, SERIES, seriesDimensions, type Spec } from './layout'
+import { scaled } from './scales'
 import { CATEGORICAL, GHOST, INK, SLOTS } from './theme'
 import type { PlotArgs, Quantity, Theme } from './types'
 
@@ -102,9 +103,10 @@ export function yAxis(args: PlotArgs, ch: Channels, stacked: boolean, quantity: 
   }
 }
 
-/** The x and y encodings of a chart over x; `stacked` sizes the axis by the stacks. */
+/** The x and y encodings of a chart over x, on the plot's scales; `stacked` sizes the axis by the stacks. */
 export function overX(args: PlotArgs, ch: Channels, width: number, stacked: boolean, quantity: Quantity = 'measure'): { x: Spec, y: Spec } {
-  return { x: xEncoding(ch.x, plotWidth(args, width)), y: yAxis(args, ch, stacked, quantity) }
+  const across = plotWidth(args, width)
+  return { x: scaled(xEncoding(ch.x, across), args, 'x', across), y: scaled(yAxis(args, ch, stacked, quantity), args, 'y', plotHeight(args, quantity)) }
 }
 
 /** As many legend columns as fit `width`, at most six. */
@@ -199,7 +201,7 @@ export function shown(args: PlotArgs, measure: string, quantity: Quantity = 'mea
 
 /** The first tooltip entries of a chart: the x value, and the panel when there are panels. */
 export function tooltipHead(args: PlotArgs, x: Spec, d: Dimension): Spec[] {
-  const entry = { field: x.field, title: x.title }
+  const entry = { field: x.field, title: d.name }
   let head: Spec
   if (d.dtype === 'date') head = { ...entry, type: 'temporal', timeUnit: 'utcyearmonthdate' }
   else if (d.dtype === 'datetime') head = { ...entry, type: 'temporal', timeUnit: 'utcyearmonthdatehoursminutesseconds' }

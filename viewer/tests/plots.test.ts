@@ -1,13 +1,14 @@
 import { describe, expect, it } from 'vitest'
 import { compile } from 'vega-lite'
 import { parse, View } from 'vega'
-import type { Dimension, TableSchema } from '../app/lib/manifest'
+import type { Dimension, Scale, TableSchema } from '../app/lib/manifest'
 import type { Row } from '../app/lib/table'
 import { barSpec } from '../app/plots/bar'
 import { nothingToCompare, PLOT_TYPES } from '../app/plots'
 import { changeRows, changeSpec, comparable, exportName } from '../app/plots/change'
 import { magnitude } from '../app/plots/layout'
 import { lineSpec } from '../app/plots/line'
+import { belowZeroNote } from '../app/plots/scales'
 import { stackedAreaSpec } from '../app/plots/stacked_area'
 import { CATEGORICAL, INK } from '../app/plots/theme'
 import type { ChangeKind, PlotArgs, Theme } from '../app/plots/types'
@@ -27,6 +28,8 @@ interface Options {
   value?: (i: number) => number
   /** The baseline's value of the `i`-th row; without it, no baseline. */
   baseline?: (i: number) => number
+  /** The scales of the channels whose axis is not linear. */
+  scales?: Record<string, Scale>
 }
 
 /** Arguments for a table with every combination of the dimensions' values. */
@@ -46,6 +49,7 @@ function args(dimensions: Dimension[], mapping: Record<string, string>, options:
     baseline: baseline ? table.map((row, i) => ({ ...row, [measure]: baseline(i) })) : null,
     schema,
     mapping: { y: measure, ...mapping },
+    scales: options.scales,
     unit: options.unit ?? null,
     state: { splits: options.splits ?? [], y: options.y ?? 'shared' },
     theme: options.theme ?? 'light',
@@ -664,6 +668,146 @@ describe('the change against the baseline', () => {
         expect((await run(change(plotArgs, type, kind))).warnings).toEqual([])
       }
     }
+  })
+})
+
+const age: Dimension = { name: 'Age', dtype: 'integer', values: [0, 1, 10, 100] }
+/** A line per region over the years on a log y axis, the values -1500 to 10500 in steps of 1500. */
+const log = (options: Options = {}) => args([year, region], { x: 'Time', color: 'Region' }, { value: i => (i - 1) * 1.5e3, scales: { y: 'log' }, ...options })
+
+/**
+ * The ticks Vega draws on the axes of the scale `name` of a chart without panels: the labels, the
+ * empty ones left out, and per grid line whether its tick is labelled and its opacity.
+ */
+async function ticks(spec: Any, name: string): Promise<{ labels: string[], grid: [labelled: boolean, opacity: number][] }> {
+  const view = new View(parse(compile(spec as never).spec), { renderer: 'none' })
+  await view.runAsync()
+  const labels: string[] = []
+  const grid: [boolean, number][] = []
+  const visit = (node: Any, axis: boolean) => {
+    const own = axis || (node.role === 'axis' && node.items[0]?.datum?.scale === name)
+    if (own && node.role === 'axis-label') labels.push(...node.items.map((item: Any) => item.text).filter(Boolean))
+    if (own && node.role === 'axis-grid') grid.push(...node.items.map((item: Any): [boolean, number] => [item.datum.label !== '', item.opacity]))
+    for (const item of node.items ?? []) visit(item, own)
+  }
+  visit((view.scenegraph() as Any).root, false)
+  view.finalize()
+  return { labels, grid }
+}
+
+/** The tick count of the y axis of a line chart of `plotArgs`, 900 px wide. */
+const tickCount = (plotArgs: PlotArgs) => layers(line(plotArgs, 900))[0].encoding.y.axis.tickCount
+
+describe('a logarithmic axis', () => {
+  it('puts y on a log scale in every layer of a line chart, ending at the data, and says so in its title', async () => {
+    const spec = line(log())
+    for (const layer of layers(spec).slice(0, 2)) expect([layer.encoding.y.scale, layer.encoding.y.title]).toEqual([{ type: 'log', nice: false }, 'value (log scale)'])
+    expect(spec.encoding.x.scale).toEqual({ nice: false, zero: false })
+    const result = await run(spec)
+    expect([result.warnings, result.vega.scales.find((scale: Any) => scale.name === 'y').type, result.y]).toEqual([[], 'log', [1500, 10500]])
+  })
+
+  it('draws grid lines at its labelled ticks only, with labels written each by itself', async () => {
+    const { labels, grid } = await ticks(line(args([year], { x: 'Time' }, { value: i => [0.002, 0.5, 4e3][i]!, scales: { y: 'log' } })), 'y')
+    // Not in the axis's format for 4k, `.3~s`, which writes 0.01 as 10m.
+    expect(labels.every(label => /^\d+(\.\d+)?[kMGT]?$/.test(label))).toBe(true)
+    expect(labels.some(label => label.startsWith('0.')) && labels.some(label => label.endsWith('k'))).toBe(true)
+    expect(new Set(grid.map(([labelled, opacity]) => `${labelled} ${opacity}`))).toEqual(new Set(['true 1', 'false 0']))
+    expect(grid.filter(([labelled]) => labelled)).toHaveLength(labels.length)
+  })
+
+  it('has a tick per 40 px of the plot\'s height', () => {
+    expect([tickCount(log()), tickCount({ ...log(), compact: true })]).toEqual([8, 4])
+    expect(tickCount(args([year, region, scenario], { x: 'Time', color: 'Region' }, { splits: ['Scenario'], scales: { y: 'log' } }))).toBe(5)
+  })
+
+  it('tells the ticks of a narrow axis apart', async () => {
+    const { labels } = await ticks(line(args([year], { x: 'Time' }, { value: i => [100, 100.5, 101][i]!, scales: { y: 'log' } })), 'y')
+    expect(labels.length).toBeGreaterThan(2)
+    expect(new Set(labels).size).toBe(labels.length)
+    expect(labels.map(Number).every(value => value >= 100 && value <= 101)).toBe(true)
+  })
+
+  it('puts an integer x on a log scale', async () => {
+    const spec = line(args([age], { x: 'Age' }, { value: i => i + 1, scales: { x: 'log' } }))
+    expect([spec.encoding.x.scale, spec.encoding.x.title]).toEqual([{ nice: false, type: 'log' }, 'Age (log scale)'])
+    expect(layers(spec)[0].encoding.y.scale).toBeUndefined()
+    expect(layers(spec).at(-1).encoding.tooltip[0].title).toBe('Age')
+    const result = await run(spec)
+    expect([result.warnings, result.x]).toEqual([[], [1, 100]])
+  })
+
+  it('keeps the integer labels and ticks of an integer x', async () => {
+    const plotArgs = args([{ name: 'Size', dtype: 'integer', values: [1000, 2000, 5000, 10000, 100000] }], { x: 'Size' })
+    const linear = line(plotArgs).encoding.x.axis
+    const spec = line({ ...plotArgs, scales: { x: 'log' } })
+    expect([spec.encoding.x.axis.format, spec.encoding.x.axis.tickCount, spec.encoding.x.axis.labelExpr]).toEqual(['d', linear.tickCount, undefined])
+    const { labels } = await ticks(spec, 'x')
+    expect(labels.length).toBeGreaterThan(2)
+    expect(labels.every(label => /^\d+$/.test(label))).toBe(true)
+  })
+
+  it('draws a value at or below zero as missing, the other columns untouched', async () => {
+    const plotArgs = log()
+    const values = line(plotArgs).data.values
+    expect(values.map((row: Any) => row.value).slice(0, 4)).toEqual([null, null, 1500, 3000])
+    expect(values.map((row: Any) => [row.Time, row.Region])).toEqual(plotArgs.table.map(row => [row.Time, row.Region]))
+    expect(plotArgs.table[0]!.value).toBe(-1500)
+    expect((await run(line(plotArgs))).warnings).toEqual([])
+    const ages = line(args([age], { x: 'Age' }, { value: i => i - 1, scales: { x: 'log' } })).data.values
+    expect(ages.map((row: Any) => [row.Age, row.value])).toEqual([[null, -1], [1, 0], [10, 1], [100, 2]])
+  })
+
+  it('draws the baseline on the same scale, its values at or below zero missing, which tooltips name', async () => {
+    const plotArgs = log({ baseline: i => (i - 2) * 1e3 })
+    const spec = line(plotArgs)
+    expect(layers(spec)[0].encoding.y.scale.type).toBe('log')
+    const baseline = spec.data.values.filter((row: Any) => row.__source === 'baseline')
+    expect(baseline.map((row: Any) => row.value).slice(0, 4)).toEqual([null, null, null, 1000])
+    const current = spec.data.values.filter((row: Any) => row.__source === 'current')
+    expect(current.map((row: Any) => row.__baseline).slice(0, 4)).toEqual([-2000, -1000, 0, 1000])
+    const result = await run(spec)
+    expect(result.warnings).toEqual([])
+    // The current rows of 2020: USA −1.5k, EUR 0 and CHA 1.5k, against −2k, −1k and 0.
+    expect(rowsAfter(result, { type: 'pivot' })[0]).toMatchObject({ USA: '(baseline \u22122k)', EUR: '(baseline \u22121k)', CHA: '1.5k (baseline 0)' })
+  })
+
+  it('splits into panels with a shared or an independent log y axis, its title shorter', async () => {
+    for (const y of ['shared', 'independent'] as const) {
+      const spec = line(args([year, region, scenario], { x: 'Time', color: 'Region' }, { splits: ['Scenario'], y, scales: { y: 'log' } }), 900)
+      const encoding = spec.spec.layer[0].encoding.y
+      expect([spec.resolve.scale.y, encoding.scale.type, encoding.title, encoding.axis.tickCount]).toEqual([y, 'log', 'value (log)', 5])
+      expect((await run(spec)).warnings).toEqual([])
+    }
+  })
+
+  it('keeps x on its scale under the change charts, the change on a linear y', async () => {
+    const plotArgs = args([age, region], { x: 'Age', color: 'Region' }, { value: i => i + 1, baseline: i => i + 2, scales: { x: 'log', y: 'log' } })
+    for (const kind of ['change', 'relative'] as const) {
+      const spec = change(plotArgs, 'line', kind)
+      expect([spec.encoding.x.scale.type, spec.encoding.x.title, yOf(spec).scale, yOf(spec).title]).toEqual(['log', 'Age (log scale)', undefined, kind === 'change' ? 'change' : 'relative change'])
+      // Every change is -1, which a log y would leave out; x leaves out the age of 0.
+      expect(spec.data.values.map((row: Any) => [row.Age, row.__change]).slice(0, 4)).toEqual([[null, -1], [null, -1], [null, -1], [1, -1]])
+      expect((await run(spec)).warnings).toEqual([])
+    }
+  })
+
+  it('says below the chart how many current values at or below zero it leaves out, whatever the baseline', () => {
+    const plotArgs = log({ baseline: i => (i - 2) * 1e3 })
+    expect(belowZeroNote(plotArgs)).toBe('2 values at or below zero are not drawn on the logarithmic y axis.')
+    expect(belowZeroNote(log())).toBe(belowZeroNote(plotArgs))
+    const one = args([age], { x: 'Age' }, { value: i => i, scales: { x: 'log', y: 'log' } })
+    expect(belowZeroNote(one)).toBe('1 value at or below zero is not drawn on the logarithmic x axis. 1 value at or below zero is not drawn on the logarithmic y axis.')
+    expect([belowZeroNote({ ...plotArgs, scales: undefined }), belowZeroNote({ ...plotArgs, scales: { y: 'linear' } })]).toEqual(['', ''])
+    expect(belowZeroNote(log({ value: i => i + 1 }))).toBe('')
+  })
+
+  it('changes nothing without a log scale', () => {
+    const plotArgs = log({ scales: undefined })
+    expect(line({ ...plotArgs, scales: {} })).toEqual(line(plotArgs))
+    expect(line({ ...plotArgs, scales: { y: 'linear' } })).toEqual(line(plotArgs))
+    expect(layers(line(plotArgs))[0].encoding.y.scale).toBeUndefined()
+    expect(line(plotArgs).data.values[0].value).toBe(-1500)
   })
 })
 

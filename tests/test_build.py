@@ -178,7 +178,47 @@ def test_a_manifest_without_skipped_reads_as_before(project: Path) -> None:
     assert all(entry.skipped is None for entry in Manifest.model_validate(data).blicks)
 
 
+def test_a_plot_with_linear_axes_is_recorded_without_scales(project: Path) -> None:
+    data = json.loads((bk.build(project, ["runs/a"]).path / "manifest.json").read_text())
+    plots = [entry["definition"]["plot"] for entry in data["blicks"] if entry["definition"]]
+    assert plots
+    assert all(plot.keys() == {"type", "mapping"} for plot in plots)
+    read = [entry.definition for entry in Manifest.model_validate(data).blicks if entry.definition]
+    assert [definition.plot.scales for definition in read] == [{}] * len(plots)
+
+
 ERROR = bk.Problem(kind="transformation", message="transformation raised KeyError")
+
+
+def scaled_values(scale: str | None) -> str:
+    """The source of VALUES with the y scale ``scale`` on its plot, none for ``None``."""
+    argument = "" if scale is None else f", y_scale={scale!r}"
+    return (
+        "import polars as pl\n\nimport blicket as bk\n\n\n"
+        f'@bk.blick(plot=bk.plots.line(x="year", y="value"{argument}))\n'
+        "def values(run):\n"
+        '    return pl.DataFrame({"year": [2020, 2021, 2022], "value": run["values"]})\n'
+    )
+
+
+def test_the_manifest_records_the_scales_of_a_plot(tmp_path: Path) -> None:
+    root = make_build_project(tmp_path, {"blicks/a.py": scaled_values("log")})
+    built = bk.build(root, [make_run(tmp_path / "run")])
+    (entry,) = json.loads((built.path / "manifest.json").read_text())["blicks"]
+    assert (entry["status"], entry["definition"]["plot"]) == (
+        "ok",
+        {"type": "line", "mapping": {"x": "year", "y": "value"}, "scales": {"y": "log"}},
+    )
+
+
+def test_the_id_covers_a_log_scale_but_not_a_linear_one(tmp_path: Path) -> None:
+    root = make_build_project(tmp_path, {"blicks/a.py": scaled_values(None)})
+    run = make_run(tmp_path / "run")
+    ids = []
+    for scale in (None, "linear", "log"):
+        (root / "blicks" / "a.py").write_text(scaled_values(scale))
+        ids.append(bk.build(root, [run]).manifest.build.id)
+    assert ids[0] == ids[1] != ids[2]
 
 
 def test_the_status_is_skipped_with_a_reason_else_error_with_an_error_else_ok() -> None:

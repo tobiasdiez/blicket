@@ -24,10 +24,9 @@ from typing import Annotated, Any
 import typer
 from typer.core import TyperGroup
 
-from blicket import comparison, serve
-from blicket.baseline import resolve
+from blicket import check, comparison, dev, serve
 from blicket.builder import Build, NothingToBuild, build
-from blicket.config import find_project_root, load_config
+from blicket.config import find_project_root
 from blicket.discovery import discover
 from blicket.errors import BlicketError, ConfigError, display_path
 from blicket.model import Registry
@@ -109,6 +108,23 @@ OutOption = Annotated[
         show_default=False,
     ),
 ]
+AgainstOption = Annotated[
+    str | None,
+    typer.Option(
+        "--against",
+        help=(
+            "The baseline: a build id in the store or a build directory; or a git ref whose "
+            "history is searched instead of the build's commit."
+        ),
+        metavar="BUILD|REF",
+        show_default=False,
+    ),
+]
+PortOption = Annotated[
+    int, typer.Option(help="The port to listen on (0: any free port).", min=0, max=65535)
+]
+HostOption = Annotated[str, typer.Option(help="The address to listen on.")]
+OpenOption = Annotated[bool, typer.Option("--open", help="Open the viewer in your browser.")]
 
 app = typer.Typer(
     name="blicket",
@@ -185,13 +201,9 @@ def serve_command(
             show_default=False,
         ),
     ] = None,
-    port: Annotated[
-        int, typer.Option(help="The port to listen on (0: any free port).", min=0, max=65535)
-    ] = serve.DEFAULT_PORT,
-    host: Annotated[str, typer.Option(help="The address to listen on.")] = serve.DEFAULT_HOST,
-    open_browser: Annotated[
-        bool, typer.Option("--open", help="Open the viewer in your browser.")
-    ] = False,
+    port: PortOption = serve.DEFAULT_PORT,
+    host: HostOption = serve.DEFAULT_HOST,
+    open_browser: OpenOption = False,
     project: ProjectOption = None,
     verbose: VerboseOption = False,
 ) -> None:
@@ -223,7 +235,7 @@ def push_command(
     The store is .blicket/store unless the store setting of the project names another directory.
     A build already in the store is left as it is.
     """
-    pushed = _store(_root(project)).push(serve.build_directory(directory))
+    pushed = Store.of_project(_root(project)).push(serve.build_directory(directory))
     finish(render_push(pushed), failed=False)
 
 
@@ -262,18 +274,7 @@ def diff_command(
 @app.command("check")
 def check_command(
     runs: RunsArgument,
-    against: Annotated[
-        str | None,
-        typer.Option(
-            "--against",
-            help=(
-                "The baseline: a build id in the store or a build directory; or a git ref whose "
-                "history is searched instead of the build's commit."
-            ),
-            metavar="BUILD|REF",
-            show_default=False,
-        ),
-    ] = None,
+    against: AgainstOption = None,
     push: Annotated[
         bool, typer.Option("--push", help="Push the build into the store, comparison included.")
     ] = False,
@@ -308,17 +309,10 @@ def check_command(
     """
     root = _root(project)
     built = _build_or_exit(root, runs, out, as_json, verbose, null=True)
-    store = _store(root)
-    listing = store.list()
-    resolution = resolve(listing, built.manifest, root, against)
-    compared = None
-    if (found := resolution.baseline) is not None:
-        compared = comparison.write(
-            comparison.compare_builds(found.path, built.path), found.path, built.path
-        )
-    pushed = store.push(built.path) if push else None
-    warnings = [f"skipped a build in the store: {damaged}" for damaged in listing.damaged]
-    text = render_check(built, resolution, compared, pushed, warnings, verbose=verbose)
+    result = check.compare(built, root, against)
+    resolution, compared = result.resolution, result.comparison
+    pushed = Store.of_project(root).push(built.path) if push else None
+    text = render_check(built, resolution, compared, pushed, result.warnings, verbose=verbose)
     markdown = (
         render_markdown(compared)
         if compared is not None
@@ -335,6 +329,43 @@ def check_command(
         or (compared is not None and compared.has_errors)
     )
     finish(text, failed=failed, flagged=compared is not None and compared.flagged > 0)
+
+
+@app.command("dev")
+def dev_command(
+    runs: RunsArgument,
+    against: AgainstOption = None,
+    port: PortOption = serve.DEFAULT_PORT,
+    host: HostOption = serve.DEFAULT_HOST,
+    open_browser: OpenOption = False,
+    project: ProjectOption = None,
+    out: OutOption = None,
+    verbose: VerboseOption = False,
+) -> None:
+    """Check a run without pushing it, then serve it with the Blick builder; Ctrl-C stops.
+
+    Builds the run and compares it with its baseline as blicket check
+    does, then keeps the run in memory: "Build a Blick" in the viewer
+    charts any quantity of the dataset that dataset(run) in the loader's
+    module returns.
+
+    Exit codes: 0 when stopped with Ctrl-C, whatever the build holds; 2
+    when the session cannot start.
+    """
+    root = _root(project)
+    # Bound first, so that a port in use fails before the run is loaded.
+    server = serve.make_server(host=host, port=port)
+    try:
+        session, report = dev.start(root, runs, out=out, against=against, verbose=verbose)
+    except BaseException:
+        server.server_close()
+        raise
+    server.session = session
+    _echo(report)
+    typer.echo(f"viewer: {server.url}#/   (Ctrl-C stops)")
+    if open_browser:
+        webbrowser.open(server.url)
+    serve.run(server)
 
 
 def _build_or_exit(
@@ -372,10 +403,6 @@ def _append_step_summary(markdown: str) -> str | None:
     return None
 
 
-def _store(root: Path) -> Store:
-    return Store(root / load_config(root).store)
-
-
 def _build_path(given: str, project: Path | None) -> Path:
     """A build directory, given as its path or as the id of a build in the project's store."""
     if Path(given).is_dir():
@@ -388,7 +415,7 @@ def _build_path(given: str, project: Path | None) -> Path:
             f"{neither} a build id (no project here, so no store; run inside the project or pass "
             "--project)"
         ) from None
-    store = _store(root)
+    store = Store.of_project(root)
     if (found := store.path(given)) is not None:
         return found
     where = display_path(store.directory, Path.cwd())

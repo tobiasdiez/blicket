@@ -1,21 +1,12 @@
 import type { BlickEntry } from './manifest'
 
-const CHANNELS: Record<string, string> = { x: 'x', color: 'colour', linetype: 'line type' }
+/** The built-in dimension channels as the viewer names them. */
+export const CHANNEL_LABELS: Record<string, string> = { x: 'x', color: 'colour', linetype: 'line type', source: 'source', target: 'target' }
 
 /**
- * What each dimension of a Blick does, for its card: the channels it is bound to (x, colour,
- * line type), then the splits into panels, then the filters.
+ * The text a search looks in: id, title, description, tags, plot type and dimension names, and of a
+ * Blick skipped for the run the word `skipped` and the reason.
  */
-export function roles(entry: BlickEntry): string[] {
-  const mapping = entry.definition?.plot.mapping ?? {}
-  const bound = Object.entries(CHANNELS)
-    .filter(([channel]) => mapping[channel])
-    .map(([channel, label]) => `${label}: ${mapping[channel]}`)
-  const of = (kind: string) => entry.controls.filter(control => control.kind === kind).map(control => control.dimension)
-  return [...bound, ...of('split').map(name => `panels: ${name}`), ...of('filter').map(name => `filter: ${name}`)]
-}
-
-/** The text a search looks in: id, title, description, tags, plot type and dimension names. */
 export function searchText(entry: BlickEntry, groupTags: string[]): string {
   const definition = entry.definition
   return [
@@ -26,5 +17,6 @@ export function searchText(entry: BlickEntry, groupTags: string[]): string {
     ...(definition?.tags ?? []),
     ...groupTags,
     ...(entry.columns?.dimensions.map(d => d.name) ?? []),
+    ...(entry.status === 'skipped' ? ['skipped', entry.skipped] : []),
   ].join(' ').toLowerCase()
 }

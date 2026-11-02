@@ -12,14 +12,15 @@ from blicket import plots
 from blicket.builder import Build, NothingToBuild, build
 from blicket.comparison import Comparison
 from blicket.config import Config, find_project_root, load_config
+from blicket.dataset import Dataset, Frames, Quantity
 from blicket.definitions import blick, group, register, slug
 from blicket.discovery import discover
-from blicket.errors import BlicketError, ConfigError, DefinitionError, LoaderError, Problem
+from blicket.errors import BlicketError, ConfigError, DefinitionError, LoaderError, Problem, Skip
 from blicket.loader import RunSelection, fingerprint
 from blicket.manifest import Manifest, RunInfo
 from blicket.model import Blick, BlickEntry, Group, Registry
 from blicket.plots import Channel, PlotSpec, PlotType
-from blicket.schema import Change, Control
+from blicket.schema import Change, Control, Dimension
 
 __all__ = [
     "Blick",
@@ -32,7 +33,10 @@ __all__ = [
     "Config",
     "ConfigError",
     "Control",
+    "Dataset",
     "DefinitionError",
+    "Dimension",
+    "Frames",
     "Group",
     "LoaderError",
     "Manifest",
@@ -40,9 +44,11 @@ __all__ = [
     "PlotSpec",
     "PlotType",
     "Problem",
+    "Quantity",
     "Registry",
     "RunInfo",
     "RunSelection",
+    "Skip",
     "blick",
     "build",
     "discover",

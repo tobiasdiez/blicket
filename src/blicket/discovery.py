@@ -18,7 +18,7 @@ from types import ModuleType
 from blicket import definitions
 from blicket.assembly import assemble
 from blicket.config import PYPROJECT, Config, load_config
-from blicket.errors import SKIPPED, DefinitionError, Kind, Problem, Source, display_path
+from blicket.errors import MISSING, DefinitionError, Kind, Problem, Source, display_path
 from blicket.model import Registry
 from blicket.tracebacks import in_project, locate, project_traceback, raised_at
 
@@ -82,7 +82,7 @@ def discover(project: str | os.PathLike[str], config: Config | None = None) -> R
 
 
 def _bad_filename(path: Path, message: str) -> Problem:
-    return Problem(kind=Kind.BAD_FILENAME, message=f"{message}\n{SKIPPED}", source=Source(path))
+    return Problem(kind=Kind.BAD_FILENAME, message=f"{message}\n{MISSING}", source=Source(path))
 
 
 def _targets(root: Path, patterns: Sequence[str]) -> tuple[list[_Target], list[Problem]]:
@@ -224,7 +224,7 @@ def _execution_error(target: _Target, root: Path, error: BaseException) -> Probl
     plain = isinstance(error, DefinitionError | SyntaxError)
     return Problem(
         kind=error.kind if isinstance(error, DefinitionError) else Kind.IMPORT,
-        message="\n".join([*lines, SKIPPED]),
+        message="\n".join([*lines, MISSING]),
         source=source,
         module=target.name,
         traceback=None if plain else project_traceback(error, root),
@@ -263,7 +263,7 @@ def _clash_error(target: _Target, root: Path, other: ModuleType, source: Source)
         )
     return Problem(
         kind=Kind.NAME_CLASH,
-        message=f"{other.__name__} resolves to {shown}, not to this project; {advice}\n{SKIPPED}",
+        message=f"{other.__name__} resolves to {shown}, not to this project; {advice}\n{MISSING}",
         source=source,
         module=target.name,
     )

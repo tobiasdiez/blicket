@@ -2,7 +2,7 @@
 // blicket package: BuildRef, BlickComparison and Comparison in src/blicket/comparison.py, Change
 // in schema.py.
 import { parseValue, type ControlState } from './controls'
-import type { Repository, TableSchema, Value } from './manifest'
+import type { BlickEntry, Repository, TableSchema, Value } from './manifest'
 import { formatter, valueKey, type TableFile } from './table'
 
 export type Flag = 'new' | 'removed' | 'schema' | 'value' | 'error'
@@ -34,13 +34,21 @@ export interface BuildRef {
 }
 
 export interface BlickComparison {
-  /** The current id; the baseline id of a removed Blick. */
+  /** The current id; the baseline id of a removed Blick that no current Blick claims. */
   id: string | null
   name: string
   /** The id of the baseline Blick compared, when it is another one, as for an alias. */
   matched: string | null
   change: Change
-  /** Why an `error` Blick was not compared, or why a `new` one has no baseline table. */
+  /**
+   * Whether the current Blick was skipped for the run, so that no tables were compared: `removed`
+   * when the baseline has a table for it, otherwise without a flag, and never unchanged.
+   */
+  skipped: boolean
+  /**
+   * Why an `error` Blick was not compared, why a `new` one has no baseline table, or why a skipped
+   * one has none: `skipped: ` and the first line of the reason.
+   */
   message: string | null
   /** The copy of the baseline table in the build directory, for Blicks flagged `value` or `schema`. */
   baseline_data: string | null
@@ -55,7 +63,7 @@ export interface Comparison {
   current: BuildRef
   /** Why removed Blicks were not judged; empty when they were. */
   incomplete: string[]
-  /** The current Blicks, then the removed ones. */
+  /** The current Blicks, then the removed ones that no current Blick claims. */
   blicks: BlickComparison[]
 }
 
@@ -94,23 +102,71 @@ export function ranked(blicks: BlickComparison[]): BlickComparison[] {
     .toSorted((a, b) => rank(a) - rank(b) || twoDigits(b.change.magnitude) - twoDigits(a.change.magnitude) || byName(a, b))
 }
 
+/** A flag as a badge shows it. */
+export interface Badge {
+  flag: Flag
+  label: string
+  /** What the label means where it is short. */
+  title?: string
+  /** The badge as words, where it is read as part of a Blick's name: `changed by 2.1% of scale`. */
+  spoken: string
+}
+
+/** The colour of each flag's badge, wherever a flag is shown. */
+export const FLAG_COLORS: Record<Flag, 'warning' | 'info' | 'neutral' | 'error'> = { value: 'warning', schema: 'warning', new: 'info', removed: 'neutral', error: 'error' }
+
+// The flags other than `value` as words, which their badges are read as.
+const SPOKEN: Record<Exclude<Flag, 'value'>, string> = { schema: 'columns or values changed', new: 'new', removed: 'removed', error: 'in error' }
+
+// What the badge `removed` of a Blick that was skipped for the run means.
+const REMOVED_SKIPPED = 'removed, skipped for this run'
+
+/**
+ * The badge of `flag`: for `value` the change's `magnitude` as a share of the chart's scale,
+ * `Δ 2.1%` when `short` and `Δ 2.1% of scale` otherwise; the flag itself for the others.
+ */
+function badge(flag: Flag, magnitude: number | null, short: boolean): Badge {
+  if (flag !== 'value') return { flag, label: flag, spoken: SPOKEN[flag] }
+  const share = percent(magnitude ?? 0)
+  return {
+    flag,
+    label: short ? `Δ ${share}` : `Δ ${share} of scale`,
+    title: `largest change: ${share} of the largest value in its panel`,
+    spoken: `changed by ${share} of scale`,
+  }
+}
+
 /**
  * The badges of a Blick's flags: `Δ 2.1% of scale` for `value`, with a title that says what the
  * number is, and the flag itself for the others, `schema`, `new`, `removed`, `error`.
  */
-export function badges(change: Change): { flag: Flag, label: string, title?: string }[] {
-  return change.flags.map((flag) => {
-    if (flag !== 'value') return { flag, label: flag }
-    const share = percent(change.magnitude ?? 0)
-    return { flag, label: `Δ ${share} of scale`, title: `largest change: ${share} of the largest value in its panel` }
-  })
+export function badges(change: Change): Badge[] {
+  return change.flags.map(flag => badge(flag, change.magnitude, false))
 }
 
-/** The Blicks per flag, as `9 unchanged · 1 value`, then whether removed was judged, the errors. */
+/**
+ * The one badge of a Blick wherever Blicks are listed: of the flag it is ranked by, the first of
+ * its flags in the order of `ranked`, with `value` as `Δ 2.1%`, and `removed` of a Blick skipped
+ * for the run saying so in its title and words; or `error` for a Blick in error that no comparison
+ * flags. `null` for an unchanged Blick, and for a skipped one that no comparison flags.
+ */
+export function blickBadge(entry: Pick<BlickEntry, 'status'> | null, compared: BlickComparison | null): Badge | null {
+  const flag = ORDER.find(f => compared?.change.flags.includes(f))
+  if (!flag) return entry?.status === 'error' ? badge('error', null, true) : null
+  const shown = badge(flag, compared?.change.magnitude ?? null, true)
+  return flag === 'removed' && compared?.skipped ? { ...shown, title: REMOVED_SKIPPED, spoken: REMOVED_SKIPPED } : shown
+}
+
+/**
+ * The Blicks per flag, as `6 unchanged · 24 skipped · 1 value`, then whether removed was judged,
+ * the errors. The skipped Blicks were not compared: they are never unchanged, and those the
+ * comparison removes count as skipped and as removed.
+ */
 export function counts(comparison: Comparison): string {
   const flagged = (flag: Flag) => comparison.blicks.filter(b => b.change.flags.includes(flag)).length
   const numbers: [string, number][] = [
-    ['unchanged', comparison.blicks.filter(b => !b.change.flags.length).length],
+    ['unchanged', comparison.blicks.filter(b => !b.change.flags.length && !b.skipped).length],
+    ['skipped', comparison.blicks.filter(b => b.skipped).length],
     ...(['value', 'schema', 'new', 'removed'] as const).map((flag): [string, number] => [flag, flagged(flag)]),
   ]
   const parts = numbers.filter(([, n]) => n).map(([word, n]) => `${n} ${word}`)
@@ -237,13 +293,14 @@ export function whereState(state: ControlState, where: Record<string, Value>, sc
 }
 
 /**
- * The row `where` in the order a reader finds it: the filtered values, the panel, the series and
- * the x value, each with its dimension, such as `Region SSA, Flow Primary, Time 2100`.
+ * The row `where` in the order a reader finds it: the filtered values, the panel, a Sankey link's
+ * ends, the series, the value of the dimension along which a scatter connects its points and the
+ * x value, each with its dimension, such as `Region: SSA, Flow: Primary, Time: 2100`.
  */
 export function whereText(where: Record<string, Value>, state: ControlState, mapping: Record<string, string>): string {
-  const order = new Set([...Object.keys(state.filters), ...state.splits, mapping.color, mapping.linetype, mapping.x])
+  const order = new Set([...Object.keys(state.filters), ...state.splits, mapping.source, mapping.target, mapping.color, mapping.linetype, mapping.along, mapping.x])
   return [...order]
     .filter((name): name is string => name !== undefined && name in where)
-    .map(name => `${name} ${String(where[name])}`)
+    .map(name => `${name}: ${String(where[name])}`)
     .join(', ')
 }

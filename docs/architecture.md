@@ -124,6 +124,9 @@ def steel_by_process(run):
 
 `bk.register(...)` exists for families generated in loops. blicket requires only that the run
 object is reusable across Blicks in one process; what it is comes from the adapter.
+Amendment of 2026-11-02: a transformation raises `bk.Skip(reason)` when its Blick does not apply
+to the run, a cement Blick on a steel run or a validation Blick without its data; the Blick is
+then `skipped`, a status beside `ok` and `error` (see the change detection section).
 
 ## Adapter and loader protocol
 
@@ -148,6 +151,23 @@ ships with blicket for now; a standard IAMC adapter is a later option.
   with the plus-sign convention), display order, a style registry per dimension value, and
   `select(...)` returning a labelled long table for a set of dimension values. The core's
   generic query transformation is written against this protocol and nothing else.
+  Amendment of 2026-10-27 (M2.1), the protocol as built: `dataset(run)` in the loader's module
+  (`blicketconf` by default; no config key) returns the dataset, a wrapper the adapter writes,
+  since blicket cannot add methods to a model's run object. It has `quantities()`, each a
+  `bk.Quantity` with a unique name, a title, a unit, its dimensions, a group and `additive`
+  (false for rates, shares and prices, which the builder never sums); `dimensions()`, the
+  dataset's dimensions once, as `bk.Dimension` with dtype and values in display order; and
+  `select(quantity, keep, values)`, the quantity's table with the `keep` dimensions as columns,
+  restricted to `values` before the adapter aggregates over the others, which blicket filters
+  once more. The hierarchy, the summation groups and the styles wait for a project that needs
+  them, the IAMC adapter. A project without `dataset` has no builder; one that raises is a
+  warning, and the session goes on without it. Additivity is per quantity; whether it must be per
+  dimension (an IAMC variable summable over regions is never summable over scenarios) is decided
+  with the IAMC adapter, together with the hierarchy. `bk.Frames` (2026-10-28) is the stock
+  dataset: tables, one per quantity, given as frames or as functions that return them; the
+  dimensions declared ahead or read from the tables; `select` as a polars filter and sum, which a
+  subclass overrides for a model's own aggregation. remind-mfa's dataset is one, over the arrays'
+  `to_df()`.
 
 The default id does not depend on the module path, because moving a file would otherwise turn
 every Blick in it into `removed` plus `new` and skip the comparison. A module without a group
@@ -174,16 +194,21 @@ class StackedArea(bk.PlotType):
 ```ts
 // stacked_area.js — browser half, loaded by dynamic import; framework-agnostic, never sees Vue
 export default {
-  render({ el, table, baseline, schema, mapping, unit, state, theme, name }) { ...; return cleanup },
+  render({ el, table, baseline, schema, mapping, scales, unit, state, theme, name }) { ...; return cleanup },
 }
 ```
 
 - **Channels are declared as data.** `controls(schema, mapping)` derives controls once a mapping
   exists; the builder needs the list of channels before any mapping exists, to offer dropdowns.
   So a plot type also declares `channels`: for each channel its name, whether it takes a
-  dimension or a measure, whether it is required, and constraints such as "line type only for
-  line plots" or "x defaults to time". The builder reads this list; nothing else about the
-  contract changes.
+  dimension or a measure, whether it is required, the axis scales it takes besides `linear`,
+  which every axis has (`log` for a continuous axis, none for a colour or a band), and
+  constraints such as "line type only for line plots" or "x defaults to time". The builder reads
+  this list; nothing else about the contract changes. A Blick's plot spec holds the axis scales
+  it gives its channels, checked against these declarations; the manifest records them in the
+  plot definition, and `render` receives them as `scales`, keyed by channel, without the channels
+  whose axis is linear. A factory takes the axis scale of a channel `x` as the argument
+  `x_scale`, as `bk.plots.line` does, and messages name it so.
 - The build-side half runs in Python at build time, because the terminal summary, the report and
   CI need flags and magnitude without a browser. The browser half renders the chart and the
   comparison.
@@ -192,11 +217,17 @@ export default {
   used by the built-ins (an outer-join change table, a bounded magnitude, a Vega-Lite template
   renderer with a ghost overlay) may be promoted to public helpers later, once two project plot
   types have wanted the same thing.
-- Built-ins: line, stacked area, bar (grouped, stacked) in M0/M1; scatter and table in M2. Their
-  `render` uses Vega-Lite templates; their `diff` uses a shared internal routine. Their `controls`
-  turn each unbound dimension into a filter by default and allow `split` where the chart supports
-  facets. Hiding dimensions that are functionally determined by other unbound dimensions (unit by
-  variable) waits for a project that needs it (amendment of 2026-10-24).
+- Built-ins: line, stacked area, bar (grouped, stacked) in M0/M1; table in M2; scatter and sankey
+  (amendments of 2026-11-02, scatter's below). Their `render` uses Vega-Lite templates; their
+  `diff` uses a shared internal routine. Their `controls` turn each unbound dimension into a filter
+  by default and allow `split` where the chart supports facets. Hiding dimensions that are
+  functionally determined by other unbound dimensions (unit by variable) waits for a project that
+  needs it (amendment of 2026-10-24). Amendment of 2026-11-02
+  ([plans/sankey-plot.md](plans/sankey-plot.md)): a built-in `sankey` (`source` and `target`
+  dimensions, `value`, `color`), whose `diff` compares `value` per row against the largest flow of
+  its panel and whose browser half is the first that is not a Vega-Lite template:
+  d3-sankey-diagram lays it out, loops included, and draws it into one SVG, in a chunk that only a
+  page drawing a Sankey loads. It draws no baseline behind; its change charts are bars per link.
 - Amendment of 2026-10-24 (M0.5): `diff` takes `panels` instead of `controls`, the dimensions
   whose value combinations each get their own scale. The core derives them, since it lays out the
   panels (the filters, and the splits when the Blick sets `independent_y`); the plot type scales
@@ -212,6 +243,25 @@ export default {
   their change against the baseline is drawn, in the charts under the chart; a browser half may
   later declare that too, so that a project plot type opts into those charts through the
   contract.
+- Amendment of 2026-11-02: the stacked built-ins stack positive values up from zero and negative
+  ones down at each x of a panel, as Vega's zero offset does. Since Vega stacks a zero on the
+  positive side, a stacked area stacks a computed value: a missing x or value of a layer is 0, and
+  a zero of a layer that is never positive in its panel, and negative at least once, is the
+  negative number closest to zero, so it lies at the running sum of the negative layers instead of
+  at the top of the positive ones; the baseline's faded stack and the current lines on top of it do
+  the same. A layer with values of both signs stacks each value by its sign.
+
+- Amendment of 2026-11-02: scatter is built, `bk.plots.scatter(x, y, color, linetype, along,
+  x_scale, y_scale)`, with two measure channels, `x` and `y`: a plot type may declare several
+  measure channels, and a column takes its role from the kind of the channel it is bound to. The
+  dimension on `along` orders the points of each series into a line. The builder offers only the
+  plot types of one measure, since a query makes one. Its `diff` compares `y` as `line` does; the
+  other measures of the mapping are neither keys nor compared, though a measure column that
+  appeared, vanished or changed type is a `schema` change, as any column is. A plot's definition
+  records `scales` beside `type` and `mapping`, the axes drawn logarithmic, such as
+  `{"x": "log"}`, and `render` receives them; the field is left out of the manifest when empty, so
+  the spec stays 0.2 and the ids of builds without scales stay as they were, and it is part of the
+  build id when set.
 
 ## Change detection, as implemented by the built-in diff routine
 
@@ -223,8 +273,8 @@ disagree, and `new`, `removed` and `error`.
 
 | Flag | Meaning | Shown as |
 |---|---|---|
-| `new` | no baseline exists | needs a look |
-| `removed` | baseline Blick without a current Blick, after complete discovery | reported |
+| `new` | no baseline table exists | needs a look |
+| `removed` | baseline Blick without a current Blick, after complete discovery; or, since 2026-11-02, a current Blick skipped now that the baseline built | reported |
 | `schema` | columns, or dimension values, appeared or vanished | diagnostics name the values, summarised across Blicks |
 | `value` | some common row differs beyond tolerance | ranked by magnitude |
 | `error` | the module failed to import, the transformation raised, or the output is invalid | exit code 2; never aborts the build; a failed module or another file-level error marks the build incomplete; that, or a Blick without a usable id, disables `removed` |
@@ -234,12 +284,28 @@ because dimension values appeared or vanished; it is `None` when the columns dif
 nothing is compared (amendment of 2026-10-24). What happens to flagged Blicks after a human has
 looked at them belongs to the deferred accept design.
 
+Amendment of 2026-11-02: a Blick whose transformation raised `bk.Skip(reason)` has the status
+`skipped`; the manifest records the reason and no table, and it is no error, so a build whose
+other Blicks built exits 0. The build report counts the skipped Blicks and lists them grouped by
+reason, since a steel run skips every cement and plastics Blick for the same reason. In a
+comparison a skipped Blick is never `error`: skipped now and built in the baseline, it is `removed`
+with the reason; built now and skipped in the baseline, it is `new` with the baseline's reason;
+skipped in both builds, it carries no flag and is counted as `skipped`, never as unchanged, since
+nothing was compared. `blicket list` runs no transformation and does not know what a run will
+skip.
+
 **Tolerance.** `[tool.blicket] tolerance = 1e-5` project-wide, `tolerance=` per Blick, in the
 same relative-to-panel-scale units as the magnitude. A row is *same* when
 |current − baseline| / s ≤ tolerance, with s the panel scale. Amendment of 2026-10-24: nothing
 rounds and nothing is flushed to zero, so the `digits` key is gone; the tolerance alone absorbs
 solver noise and must be positive and below 1. The defaults are validated in M0: a rerun of remind-mfa on another machine must produce
-zero `value` flags. Small changes are never hidden; they rank low.
+zero `value` flags. Small changes are never hidden; they rank low. Amendment of 2026-10-26: the
+default was validated on one machine; the run on a second machine was waived. Two reruns of
+remind-mfa gave identical tables (magnitude 0 in all ten Blicks), so 1e-5 stays: far below what a
+chart resolves, and ten to eleven orders of magnitude above the largest float-rounding difference
+seen in any comparison (1.2e-16 as a magnitude, 1.3e-15 per value against a column's scale). The
+numbers, and the risk left unmeasured (remind-mfa's fits), are in
+[plans/m0-8-measurements-and-verification.md](plans/m0-8-measurements-and-verification.md).
 
 **Magnitude** (built-in routine), of the measure on `y`, bounded to [0, 1]:
 
@@ -301,6 +367,22 @@ one `BLICKET_VIEWER` names in a checkout.
   terminal ranks its movers (`value` by magnitude, then `schema`, `new`, `removed`, `error`), each
   with its flag badges, which is the filter by flag; then the groups, with badges; search, tag and
   group filters apply to both.
+- Amendment of 2026-10-28 ([overview-sidebar-and-previews.md](plans/overview-sidebar-and-previews.md)):
+  the groups, the badges, the search and a filter by flag live in a sidebar on every page,
+  collapsible, a drawer below 1280 px; the search is not in the URL, and the tag and group chips
+  are gone. The overview keeps the baseline and its counts and shows small charts: the flagged
+  Blicks in ranked order, six as cards and the rest as a ranked list under a line "N more
+  changed", each card at the panel of its largest change with the baseline drawn behind (but the
+  Sankey diagram); and the Blicks the user pinned, kept in the browser per origin, or, while
+  nothing is pinned or changed, the first six Blicks as "A first look", whose cards can pin them.
+  Whatever the comparison, a line
+  at the top says when Blicks failed to build or the build is incomplete, and the Blicks in error
+  are listed with their problems, next to the build's own. The plot type and role chips are gone
+  from the overview.
+- Amendment of 2026-11-02: a skipped Blick is in the sidebar in italics and without a badge,
+  unless the comparison flags it; a group whose Blicks are all skipped starts collapsed; the
+  overview says how many Blicks are skipped for the run, and a skipped Blick's page and card
+  show the reason instead of a chart.
 - Blick page: chart, controls derived by the plot type, URL-carried control state, a comparison
   switch on by default, a strip with the flags, the largest change (as a percent of the chart's
   scale), where it is and against which baseline, with a button that sets the controls there.
@@ -310,7 +392,9 @@ one `BLICKET_VIEWER` names in a checkout.
   lists; a build without it looks as before. The switch draws the baseline's table behind the
   chart when its columns did not change. The chosen baseline is not in the URL, so a link or a
   reload shows the one checked last.
-- Builder page, dev mode only: see the Blick builder section.
+- Builder page, dev mode only: see the Blick builder section. Amendment of 2026-10-27 (M2.1):
+  the viewer is in dev mode when `manifest.json` comes with the header `Blicket-Dev: 1`, which
+  `blicket dev` sends and a static host does not, so dev mode costs a static build no request.
 - The viewer's own dev server proxies a Python-built build directory during viewer development.
 - Opening from `file://` is blocked by browsers for `fetch`; `blicket serve` is the answer, a
   folder picker a later nicety.
@@ -330,8 +414,10 @@ memoised.
 - A changed Blick or helper module reloads **code, not data**: project modules are reloaded in
   import order except the loader, the memoised run object survives, only the affected Blicks are
   rebuilt, the server and the SSE connection stay alive. Only a change to the loader or the config
-  restarts the process.
+  restarts the process. (Amended for M2.2: every Blick is rebuilt, a change to the loader or a
+  new run restarts the session, and there is no event connection; see the amendment below.)
 - A server-sent event tells the browser to refetch the changed Blicks while keeping control state.
+  (Amended for M2.2: the viewer polls `dev/info` instead.)
 - The run directory is polled with a quiet period, because inotify is unreliable on cluster
   filesystems and fires mid-write; `--no-watch-run` and a "reload run" button exist.
 - The loader output is fingerprinted before and after a build, so a transformation that mutates
@@ -341,6 +427,10 @@ memoised.
 - Loader time on remind-mfa is measured in M0; a cached loader output is added only if it exceeds
   about ten seconds. No separate worker process.
 - Target: under one second from save to updated chart for typical transformations.
+- Amendment of 2026-10-27 (M2.1): `blicket dev` exists as a check without the push and a server
+  that keeps the run, on the standard library's server; the loop above is M2.2's, which polls
+  `dev/info` instead of server-sent events and restarts on a run change (see
+  [plans/m2-2-dev-loop.md](plans/m2-2-dev-loop.md)).
 
 ## Blick builder (dev mode)
 
@@ -362,9 +452,28 @@ same controls and plot types.
   transformation over the dataset protocol, canonicalises the table and returns it. The
   browser renders it with the plot type's browser half, exactly like a code Blick. The state
   also lives in the URL, so a link reproduces the ad hoc Blick within the session.
-- **Nothing is saved.** Ad hoc Blicks sit in a scratch group for the session, are not built,  
-  have no snapshot and never reach the guard. There is no declarative definition format. A  
-  saved Blick is Python or R code; "export as code" is a later feature.
+- **Nothing is saved.** Ad hoc Blicks sit in a scratch group for the session, are not built,
+  have no snapshot and never reach the guard. There is no declarative definition format. A
+  saved Blick is Python or R code; "export as code" is a later feature. (Amended in M2.1: there is
+  no scratch group on the overview; an ad hoc Blick lives in the builder page and its URL.)
+- Amendment of 2026-10-27 (M2.1), the builder as built: **one run per session**, the one
+  `blicket dev` loaded; the run picker waits for the adapter's `discover` and a loader that
+  combines runs. Each dimension of the quantities picked has a **role**: a dimension channel of
+  the plot type (x, colour, line type), panels, a filter, or summed (never for a quantity that is
+  not `additive`); choosing a channel another dimension holds swaps the two, and a required
+  channel is never left empty. Every kept dimension, a filter too, has item selection; a summed
+  one has none. **Several quantities** share a chart when they agree on the dimensions kept and
+  on their unit: a dimension `Quantity` holds their titles, on colour at first, and summed adds
+  them up; arithmetic between quantities stays outside the builder. The query carries what
+  shapes the data (quantities, plot type, mapping, the dimensions kept, the values kept), and
+  **the view state stays outside it**: every kept dimension the plot leaves unbound is a filter
+  control of the result, and the split, the filter values and the y axes are URL keys of the
+  Blick page, so changing them runs no query. The result is a manifest entry and a Parquet table,
+  kept by the session by content hash; a table over 100,000 rows is a problem that names the
+  dimensions and their sizes. The session (`dev.py`) holds the build, its comparison, the run and
+  its dataset; the stdlib server answers from it through a narrow protocol. In `dev`, a project
+  with a loader and no Blick yet is no error: its build is complete and empty, and the report
+  says `no Blicks yet` and, as for every project, whether the builder is on (`builder:`).
 - **Later extensions** from the feature list, all deferred: differences relative to a
   reference run and a difference heatmap, run groups as a second label dimension, separate row
   and column facets, several hierarchy levels in one dimension, default years for bar charts,
@@ -408,15 +517,21 @@ that use built-in plot types are the realistic first step.
 
 ## Libraries (reversible)
 
-Python: polars, typer, starlette + uvicorn, watchfiles, pydantic (manifest models and JSON
-Schema). Build backend: meson-python, with the viewer's `nuxt generate` as a meson custom target
-whose output is installed into the wheel. Viewer: Nuxt 4 with Vue, vega-lite + vega-embed,
-hyparquet for reading Parquet in the browser. Sankey (M4): d3-sankey-diagram, which supports
-loops. TypeScript types for the manifest are hand-written for now.
+Python: polars, typer, watchfiles, pydantic (manifest models and JSON Schema); the HTTP server
+is the standard library's threading one (amendment of 2026-10-27, M2.1). Starlette and uvicorn,
+planned for the dev server, are not needed: `blicket serve` and `blicket dev` share the stdlib
+server, whose daemon threads let Ctrl-C end a session with tabs open, and the dev loop polls
+instead of streaming events. Build backend: meson-python, with the viewer's `nuxt generate` as a
+meson custom target whose output is installed into the wheel. Viewer: Nuxt 4 with Vue, vega-lite
++ vega-embed, hyparquet for reading Parquet in the browser. Sankey: d3-sankey-diagram 0.9.4, which
+supports loops, with d3-selection 1 to draw it and vega-tooltip, a dependency of its own as of
+vega-embed, for its tooltips; a built-in plot type since 2026-11-02 rather than a project's (M4).
+TypeScript types for the manifest, and declarations for d3-sankey-diagram and d3-selection, which
+ship none, are hand-written for now.
 
 ## Project basics (decided 2026-10-23)
 
-- Licence MIT. The repository lives under Tobias's own GitHub account for now, later under
+- Licence MIT. The repository is public at https://github.com/tobiasdiez/blicket, later under
   pik-piam. The GitHub organisation `blicket` is taken; the PyPI name was free on 2026-10-22 and
   is to be reserved.
 - Python floor: the latest stable release at the time, 3.15. Tooling: uv, ruff, pytest,
@@ -426,6 +541,15 @@ loops. TypeScript types for the manifest are hand-written for now.
   repository, together with Blicks ported from remind-mfa's existing visualisations; they may
   look different from the originals. Example runs sit in `data_out/`, which is gitignored and
   never pushed. The remind-mfa checkout at `~/code/remind-mfa` can produce further runs.
+  Amendment of 2026-10-29: a second dogfooding project, `examples/remind/`, reads REMIND output
+  folders, one per scenario, into one run with the scenario as a dimension, and carries the
+  "Summary" chapter of REMIND's `compareScenarios` report as 20 Blicks
+  ([plans/example-remind-summary.md](plans/example-remind-summary.md)); its runs are two weekly
+  sets of REMIND's automated model tests in `data_out/remind/`. The concept's deferred question of
+  reference and historical data is settled for this example only, as a dimension value: its two
+  per-capita line Blicks show the IEA's history as the scenario `historical (IEA)`, with no change
+  to the core for it; a viewer fix found on the way (the tooltip of a series without a row at the
+  hovered x) is recorded in the plan.
 
 ## Milestones
 
@@ -445,12 +569,17 @@ loops. TypeScript types for the manifest are hand-written for now.
   task after M0.7 (M0.7b), since M0.7 writes what it reads.
 - **M2 Dev loop.** `blicket dev` with code reload, SSE, run-directory polling. Scatter and table
   plot types. The Blick builder with run picker, variable picker, channel mapping and item
-  selection, on the remind-mfa adapter. This completes job 1.
+  selection, on the remind-mfa adapter. This completes job 1. Amendment of 2026-10-27: in three
+  tasks, the builder first: M2.1 the dataset protocol, the query, `blicket dev` without the watch
+  and the builder page, one run per session and no run picker
+  ([plans/m2-1-blick-builder.md](plans/m2-1-blick-builder.md)); M2.2 the dev loop, polling instead
+  of SSE ([plans/m2-2-dev-loop.md](plans/m2-2-dev-loop.md)); M2.3 scatter and table.
 - **M3 Review and accept.** Its own design session first, in the direction above. Then: the UI,
   the link from a cluster run to a branch or PR, the PR comment and commit status, and the store
   backend that makes the UI reach the builds. This completes job 2.
 - **M4 Plugins and hardening.** A project plot type end to end (Sankey for MFA), `spec` version
-  documented as the protocol, difference chart, store `gc`.
+  documented as the protocol, difference chart, store `gc`. Amendment of 2026-11-02: the Sankey
+  is a built-in plot type already, so the project plot type of M4 is another one.
 - **Later.** R; composition of several models or runs; preview deploys; DuckDB in the browser for
   large tables; the concept's deferred items (variants, checks, auto-accept, grouping).
 
@@ -469,6 +598,11 @@ loops. TypeScript types for the manifest are hand-written for now.
   sign flip gives 1, an added value gives `schema`, near-zero and sign-crossing cases).
 - Hot reload (M2): editing a transformation updates the chart without reloading the page, control
   state preserved; editing a helper does not reload the run data.
+
+Amendment of 2026-10-26: M0 walked this list on one machine, the cross-machine items waived
+(decision 3 of 2026-10-23 in [plans/m0-tasks.md](plans/m0-tasks.md)); each item with what shows
+it and its result is in
+[plans/m0-8-measurements-and-verification.md](plans/m0-8-measurements-and-verification.md).
 
 ## Two walkthroughs
 
@@ -491,14 +625,17 @@ the loader takes a run directory and returns the run object plus `RunInfo`.
    Behind this: discovery imports the Blick modules, the loader runs once and stays in memory,
    every transformation runs, tables go to canonical form, the store is searched for the baseline
    build, each plot type's diff runs against it, and a build directory with a fresh id is written.
-3. The overview opens with the flagged Blicks ranked by magnitude, each with its flags, then the
-   groups, with search, tag and group filters. The schema summary says which value appeared, for
-   example "process 'EAF-DRI' appeared in 3 Blicks".
+3. The overview opens with the flagged Blicks ranked by magnitude, the first six as small charts of
+   the panel where each changed most, the baseline drawn behind (but the Sankey diagram), the rest
+   as a list, each with its flag; then the Blicks the user pinned, or "A first look" at the first
+   six while nothing is pinned or changed. A sidebar on every page lists the groups, searchable,
+   with a filter for the flagged Blicks. The schema summary says which value appeared, for example
+   "process 'EAF-DRI' appeared in 3 Blicks". (Amended on 2026-10-28; see the viewer section.)
 4. You open the top mover. The chart has the controls the plot type derived: a scenario dropdown, a
    region split toggle. The URL carries the control state, so a link reproduces the view. A toggle
-   shows the plot type's comparison, for the built-ins a ghost of the baseline, on by default. A
-   strip names the flags, the largest change and where it is; its "Show where" button sets the
-   controls there.
+   shows the plot type's comparison, for the built-ins but the Sankey diagram a ghost of the
+   baseline, on by default. A strip names the flags, the largest change and where it is; its "Show
+   where" button sets the controls there.
 5. Two outcomes. If the Blick's transformation is at fault, you edit its code; saving reloads the
    project code without reloading the run data, only that Blick is rebuilt, and the chart updates
    in under a second with the controls unchanged. If the model is at fault, you fix it and rerun;
@@ -555,6 +692,11 @@ the loader takes a run directory and returns the run object plus `RunInfo`.
    same Blick. Nothing is written to the project. If the Blick is worth keeping, you write it
    as code, until "export as code" exists.
 
+Amendment of 2026-10-27 (M2.1): as built, there is no run picker (one run per session, the one
+`blicket dev` loaded), the quantities are a flat list grouped by the adapter, without a tree or
+sub-variables, and "facet" is the role `panels`; the walk as built is flow 1 of
+[plans/m2-1-blick-builder.md](plans/m2-1-blick-builder.md).
+
 ## Decisions taken on 2026-10-23
 
 - Python core, static Nuxt viewer vendored in the wheel, files as the API.
@@ -582,3 +724,7 @@ the loader takes a run directory and returns the run object plus `RunInfo`.
 - Deferred: the accept and review workflow (M3, UI plus PR-first), TypeScript type generation,
   per-PR preview deploys, difference chart (M4), the `definition` change type, remote store
   backends until M3, export of ad hoc Blicks as code, a shipped IAMC adapter.
+- Amendment of 2026-11-02: a Blick that does not apply to a run is `skipped`, a status of its
+  own raised by the transformation as `bk.Skip(reason)`, with the constraint recorded when it was
+  deferred: it stays in the manifest, neither `error` nor `removed` by itself, and a Blick that
+  the baseline built and the current run skips is reported as `removed`.

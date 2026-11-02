@@ -6,6 +6,8 @@ import math
 import subprocess
 import sys
 import textwrap
+from dataclasses import replace
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -17,7 +19,7 @@ import xarray as xr
 
 import blicket as bk
 from blicket.plots._base import BuiltinPlotType
-from blicket.tables import Checked, TableError, check, to_polars
+from blicket.tables import Checked, Raised, TableError, check, compute, ordered, to_polars
 
 LINE = bk.plots.line(x="year", y="value")
 FRAME = pl.DataFrame({"year": [2020, 2021], "region": ["a", "b"], "value": [1.0, 2.0]})
@@ -407,6 +409,17 @@ def test_an_empty_table_is_a_warning() -> None:
             {},
             "dimension column 'year' has 1 null value(s)",
         ),
+        (
+            FRAME,
+            {"plot": bk.plots.line(x="region", y="value", x_scale="log")},
+            "x_scale='log' needs numbers on x, but 'region' is a string column; bind an integer "
+            "dimension to x or drop x_scale",
+        ),
+        (
+            pl.DataFrame({"day": [dt.date(2020, 1, 1)], "value": [1.0]}),
+            {"plot": bk.plots.line(x="day", y="value", x_scale="log")},
+            "x_scale='log' needs numbers on x, but 'day' is a date column",
+        ),
         (FRAME, {"controls": {"year": "split"}}, "the plot binds 'year' to x="),
         (FRAME, {"controls": {"scenario": "split"}}, "has no dimension 'scenario'"),
         (FRAME, {"order": {"value": (1.0,)}}, "order['value']: the table has no dimension"),
@@ -444,6 +457,11 @@ def test_an_absent_column_in_dims_or_measures_is_the_only_error(options: dict[st
     assert "names the column 'nope', which the table lacks" in error
 
 
+def test_an_integer_and_a_measure_take_a_log_scale_with_values_at_or_below_zero() -> None:
+    plot = bk.plots.line(x="year", y="value", color="region", x_scale="log", y_scale="log")
+    assert checked(FRAME.with_columns(value=pl.Series([0.0, -1.0])), plot=plot).height == 2
+
+
 def test_a_column_of_a_rejected_type_is_reported_once() -> None:
     (error,) = errors(FRAME.with_columns(value=pl.Series([1, 2], dtype=pl.Decimal(10, 2))))
     assert error.startswith("column 'value' (bound to y=) is Decimal")
@@ -478,3 +496,76 @@ def test_order_and_default_values_missing_from_the_run_are_warnings() -> None:
         "order['region'] names 'c', which this run's table does not contain",
         "defaults['region'] names 'd', which this run's table does not contain",
     ]
+
+
+# ---------------------------------------------------------------------------------------------
+# The display order of a schema, and running a transformation
+
+
+def test_ordered_puts_the_values_order_names_first() -> None:
+    schema = check(FRAME.with_columns(process=pl.lit("x")), blick()).schema
+    assert schema is not None
+    result = ordered(schema, {"region": ["b", "zzz"]})  # zzz: a value the table lacks
+    assert [d.values for d in result.dimensions] == [[2020, 2021], ["b", "a"], ["x"]]
+    assert ordered(schema, {}) == schema  # a dimension order does not name stays as it was
+
+
+def test_compute_reports_the_call_a_transformation_wraps() -> None:
+    def failing(run: object) -> pl.DataFrame:
+        try:
+            raise KeyError("flows")
+        except KeyError as error:
+            raise Raised("select('flows/steel') of the dataset", error) from error
+
+    here = Path(__file__).parent
+    (problem,) = compute(replace(blick(), transform=failing), None, here).problems
+    assert problem.message.startswith(
+        "select('flows/steel') of the dataset raised KeyError: 'flows' (raised at test_tables.py:"
+    )
+    assert problem.traceback is not None
+    assert "raise KeyError" in problem.traceback
+    assert str(Raised("f()", ValueError("no"))) == "f() raised ValueError: no"
+
+
+def test_compute_converts_and_checks_what_the_transformation_returns() -> None:
+    result = compute(blick(), FRAME, Path(__file__).parent)
+    assert (result.problems, result.frame is not None) == ((), True)
+    (problem,) = compute(replace(blick(), transform=lambda run: None), FRAME, Path()).problems
+    assert problem.message == "the transformation returned None; did it forget return?"
+
+
+def test_compute_records_the_skip_of_a_transformation() -> None:
+    def skipping(run: object) -> pl.DataFrame:
+        raise bk.Skip("the run has no trade module")
+
+    result = compute(replace(blick(), transform=skipping), None, Path())
+    assert result == Checked.skip("the run has no trade module")
+    assert (result.frame, result.schema, result.problems) == (None, None, ())
+
+
+class SkippingLate:
+    """Skips in ``to_df()``, after the transformation returned."""
+
+    def to_df(self) -> pd.DataFrame:
+        raise bk.Skip("too late")
+
+
+def skip_in_a_call(run: object) -> pl.DataFrame:
+    try:
+        raise bk.Skip("not mine")
+    except bk.Skip as error:
+        raise Raised("select('flows/steel') of the dataset", error) from error
+
+
+@pytest.mark.parametrize(
+    ("transform", "message"),
+    [
+        (lambda run: SkippingLate(), "converting the returned SkippingLate raised Skip: too late"),
+        (skip_in_a_call, "select('flows/steel') of the dataset raised Skip: not mine"),
+    ],
+)
+def test_a_skip_outside_the_transformation_itself_is_an_error(transform: Any, message: str) -> None:
+    result = compute(replace(blick(), transform=transform), None, Path(__file__).parent)
+    (problem,) = result.problems
+    assert (result.skipped, problem.severity) == (None, "error")
+    assert problem.message.startswith(f"{message} (raised at test_tables.py:")

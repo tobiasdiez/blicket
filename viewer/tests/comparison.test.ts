@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { ControlState } from '../app/lib/controls'
-import { badges, baselineTable, buildParts, counts, offered, percent, ranked, schemaDetails, schemaSummary, whereState, whereText, type BlickComparison, type BuildRef, type Change, type Comparison, type Flag } from '../app/lib/comparison'
+import { badges, baselineTable, blickBadge, buildParts, counts, offered, percent, ranked, schemaDetails, schemaSummary, whereState, whereText, type BlickComparison, type BuildRef, type Change, type Comparison, type Flag } from '../app/lib/comparison'
 import type { TableSchema } from '../app/lib/manifest'
 
 function blick(name: string, flags: Flag[], change: Partial<Change> = {}, extra: Partial<BlickComparison> = {}): BlickComparison {
@@ -9,6 +9,7 @@ function blick(name: string, flags: Flag[], change: Partial<Change> = {}, extra:
     name,
     matched: null,
     change: { flags, magnitude: null, columns_added: {}, columns_removed: {}, values_added: {}, values_removed: {}, where: null, ...change },
+    skipped: false,
     message: null,
     baseline_data: null,
     baseline_hash: null,
@@ -56,9 +57,25 @@ describe('percent', () => {
 describe('badges', () => {
   it('labels the value with its share of the chart\'s scale and says what the number is', () => {
     expect(badges(blick('a', ['schema', 'value'], { magnitude: 0.020961 }).change)).toEqual([
-      { flag: 'schema', label: 'schema' },
-      { flag: 'value', label: 'Δ 2.1% of scale', title: 'largest change: 2.1% of the largest value in its panel' },
+      { flag: 'schema', label: 'schema', spoken: 'columns or values changed' },
+      { flag: 'value', label: 'Δ 2.1% of scale', title: 'largest change: 2.1% of the largest value in its panel', spoken: 'changed by 2.1% of scale' },
     ])
+  })
+
+  it('give a listed Blick one, of the flag it is ranked by, or error when no comparison judged it', () => {
+    expect(blickBadge(null, blick('a', ['schema', 'value'], { magnitude: 0.020961 }))).toEqual({ flag: 'value', label: 'Δ 2.1%', title: 'largest change: 2.1% of the largest value in its panel', spoken: 'changed by 2.1% of scale' })
+    expect(blickBadge(null, blick('a', ['removed']))!.label).toBe('removed')
+    expect([blickBadge({ status: 'error' }, null)!.label, blickBadge({ status: 'ok' }, blick('a', [])), blickBadge({ status: 'ok' }, null)]).toEqual(['error', null, null])
+  })
+
+  it('give a skipped Blick none unless the comparison removes it, and then say it was skipped', () => {
+    expect([blickBadge({ status: 'skipped' }, null), blickBadge({ status: 'skipped' }, blick('a', [], {}, { skipped: true }))]).toEqual([null, null])
+    expect(blickBadge({ status: 'skipped' }, blick('a', ['removed'], {}, { skipped: true }))).toEqual({
+      flag: 'removed',
+      label: 'removed',
+      title: 'removed, skipped for this run',
+      spoken: 'removed, skipped for this run',
+    })
   })
 })
 
@@ -66,6 +83,12 @@ describe('counts', () => {
   it('counts the Blicks per flag, the errors last', () => {
     const blicks = [blick('a', []), blick('b', []), blick('c', ['value']), blick('d', ['error']), blick('e', ['error'])]
     expect(counts(comparison(blicks))).toBe('2 unchanged · 1 value · 2 errors')
+  })
+
+  it('counts every skipped Blick as skipped, never as unchanged, and a removed one as removed too', () => {
+    const skipped = { skipped: true }
+    const blicks = [blick('a', []), blick('b', [], {}, skipped), blick('c', [], {}, skipped), blick('d', ['removed'], {}, skipped), blick('e', ['value'])]
+    expect(counts(comparison(blicks))).toBe('1 unchanged · 3 skipped · 1 value · 1 removed')
   })
 
   it('says when removed Blicks were not judged', () => {
@@ -177,10 +200,23 @@ describe('where', () => {
   })
 
   it('names the panel, the series and the x value with their dimensions', () => {
-    expect(whereText({ Flow: 'Primary', Time: 2100, Region: 'SSA' }, { ...state, filters: {} }, mapping)).toBe('Region SSA, Flow Primary, Time 2100')
+    expect(whereText({ Flow: 'Primary', Time: 2100, Region: 'SSA' }, { ...state, filters: {} }, mapping)).toBe('Region: SSA, Flow: Primary, Time: 2100')
   })
 
   it('names the filtered values first', () => {
-    expect(whereText({ Time: 2050, Region: 'EUR', Parameter: 'landfill' }, state, mapping)).toBe('Parameter landfill, Region EUR, Time 2050')
+    expect(whereText({ Time: 2050, Region: 'EUR', Parameter: 'landfill' }, state, mapping)).toBe('Parameter: landfill, Region: EUR, Time: 2050')
+  })
+
+  it('names a scatter\'s along value after its series; its x is a measure, which no row names', () => {
+    const scatter = { x: 'GDP per capita', y: 'value', color: 'Flow', linetype: 'Period', along: 'Time' }
+    const where = { Time: 2100, Period: 'Projected', Flow: 'Primary', Region: 'SSA', Parameter: 'landfill' }
+    expect(whereText(where, state, scatter)).toBe('Parameter: landfill, Region: SSA, Flow: Primary, Period: Projected, Time: 2100')
+  })
+
+  it('names the ends of a Sankey link before its colour', () => {
+    const where = { Time: 2100, Region: 'CAZ', From: 'End-of-Life Management', To: 'Uncollected', Stage: 'Losses' }
+    const sankey = { source: 'From', target: 'To', value: 'value', color: 'Stage' }
+    expect(whereText(where, { filters: { Time: 2050, Region: 'World' }, splits: [], y: 'shared' }, sankey))
+      .toBe('Time: 2100, Region: CAZ, From: End-of-Life Management, To: Uncollected, Stage: Losses')
   })
 })

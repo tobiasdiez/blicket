@@ -5,7 +5,10 @@ its aliases that has one, and the two tables are compared by the plot type's ``d
 are those of ``Flag``: ``schema`` from the plot type, ``value`` when the magnitude exceeds the
 Blick's tolerance, ``new`` for a Blick without a baseline table, ``removed`` for a baseline Blick
 with a table that no current Blick claims, and ``error`` for a Blick that has no table or cannot
-be compared.
+be compared. A Blick whose transformation skipped the run has no table and is no error. Skipped
+in the current build, it is ``removed`` when the baseline has a table for it, and otherwise has no
+flag and counts as skipped, not as unchanged, since nothing was compared; skipped in the baseline
+only, it is ``new``.
 
 ``write`` puts a comparison into the current build directory, under ``compare/<baseline id>/``:
 ``comparison.json`` and the baseline tables of the Blicks flagged ``value`` or ``schema`` as
@@ -54,10 +57,20 @@ class BuildRef(BaseModel):
 class BlickComparison(BaseModel):
     """A Blick of a comparison.
 
-    ``id`` is the current id, the baseline id for a removed Blick, and ``None`` for a current
-    Blick without a usable id; ``name`` is the entry's name. ``matched`` is the id of the baseline
-    Blick whose table was compared when it differs from the current one, as for a Blick matched
-    through an alias. ``message`` says why an ``error`` Blick has no table or was not compared.
+    ``id`` is the current id, the baseline id for a removed Blick that no current Blick claims,
+    and ``None`` for a current Blick without a usable id; ``name`` is the entry's name.
+    ``matched`` is the id of the baseline Blick matched when it differs from the current one, as
+    for a Blick matched through an alias. ``skipped`` says that the current Blick's transformation
+    skipped the run, so that no tables were compared: such a Blick is ``removed`` when the
+    baseline has a table for it, and otherwise has no flag and is not unchanged.
+
+    ``message`` says why a Blick has no table or was not compared. For an ``error`` Blick, it is
+    the cause. For a ``new`` one whose Blick in the baseline has no table, it says that the Blick
+    did not build in the baseline, or that it was skipped there, with the first line of the
+    reason. For a skipped one, it is ``skipped:`` and the first line of the reason; without a
+    flag, what the baseline holds of the Blick follows in parentheses: that it was skipped there
+    too, with the first line of that reason, that it did not build there, or that it is not there.
+
     ``baseline_data`` is the copy of the baseline table that ``write`` makes for a Blick flagged
     ``value`` or ``schema``, relative to the build directory, and ``baseline_hash`` that table's
     hash in the baseline manifest; both are ``None`` for the other Blicks and before ``write``.
@@ -69,6 +82,7 @@ class BlickComparison(BaseModel):
     name: str
     matched: str | None = None
     change: Change
+    skipped: bool = False
     message: str | None = None
     baseline_data: BuildPath | None = None
     baseline_hash: str | None = None
@@ -79,9 +93,9 @@ class Comparison(BaseModel):
 
     ``spec`` is the current manifest's, ``blicket`` the version that compared, which names the
     formula of the magnitude. ``blicks`` lists the current Blicks in the current manifest's order,
-    then the removed ones. ``incomplete`` holds the reasons why removed Blicks were not judged: a
-    file of the current build that failed, a current Blick without a usable id; it is empty when
-    they were.
+    the skipped ones among them, then the removed ones that no current Blick claims.
+    ``incomplete`` holds the reasons why removed Blicks were not judged: a file of the current
+    build that failed, a current Blick without a usable id; it is empty when they were.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -105,6 +119,11 @@ class Comparison(BaseModel):
         return sum(bool(blick.change.flags) for blick in self.blicks)
 
     @property
+    def skipped(self) -> int:
+        """How many current Blicks were skipped, flagged ``removed`` or not."""
+        return sum(blick.skipped for blick in self.blicks)
+
+    @property
     def has_errors(self) -> bool:
         """Whether removed Blicks were not judged or a Blick is flagged ``error``."""
         return bool(self.incomplete) or self.counts["error"] > 0
@@ -120,33 +139,58 @@ def compare_builds(baseline: Path, current: Path) -> Comparison:
     """Compare the build in the directory ``current`` with the one in ``baseline``.
 
     Every current Blick claims the baseline Blicks of its id and its aliases, whether or not it
-    has a table, so a Blick that failed is never also removed. A baseline Blick with a table that
-    no current Blick claims is removed, unless ``incomplete`` names a reason. A new Blick whose
-    baseline Blick had no table says so in its ``message``. A plot type that this blicket does not
-    know, or whose ``diff`` rejects the tables, makes the Blick ``error``. Raises
-    ``BlicketError`` when a manifest or a table cannot be read.
+    has a table, so a Blick that failed or was skipped is never also removed. Its counterpart in
+    the baseline is the first of those Blicks with a table, else the first of them. A baseline
+    Blick with a table that no current Blick claims is removed, unless ``incomplete`` names a
+    reason. A skipped current Blick is removed when its counterpart has a table, and has no flag
+    otherwise. A new Blick whose counterpart has no table says why in its ``message``. A plot type
+    that this blicket does not know, or whose ``diff`` rejects the tables, makes the Blick
+    ``error``. Raises ``BlicketError`` when a manifest or a table cannot be read.
     """
     before, after = manifest.read(baseline), manifest.read(current)
-    tables = {e.id: e.data for e in before.blicks if e.id is not None and e.data is not None}
-    defined = {e.id for e in before.blicks}
+    by_id: dict[str, BlickEntry] = {}
+    for entry in before.blicks:
+        # Only Blicks that failed share an id; one with a table is the one to compare with.
+        if entry.id is not None and (entry.id not in by_id or entry.data is not None):
+            by_id[entry.id] = entry
     claimed: set[str] = set()
     blicks: list[BlickComparison] = []
     for entry in after.blicks:
-        claimed.update(name for name in (entry.id, *entry.aliases) if name is not None)
+        names = [name for name in (entry.id, *entry.aliases) if name is not None]
+        claimed.update(names)
+        found = [by_id[name] for name in names if name in by_id]
+        counterpart = next((e for e in found if e.data is not None), found[0] if found else None)
+        table = counterpart.data if counterpart else None
+        matched = counterpart.id if counterpart and counterpart.id != entry.id else None
+        if entry.status == "skipped":
+            message = _absence(entry)
+            if table is not None:
+                blicks.append(_flagged(entry, "removed", message, skipped=True, matched=matched))
+                continue
+            there = (
+                _absence(counterpart, "in the baseline") if counterpart else "not in the baseline"
+            )
+            blicks.append(
+                BlickComparison(
+                    id=entry.id,
+                    name=entry.name,
+                    change=Change(),
+                    skipped=True,
+                    message=f"{message} ({there})",
+                )
+            )
+            continue
         if entry.id is None or entry.definition is None or entry.data is None:
             blicks.append(_flagged(entry, "error", _cause(entry)))
             continue
-        match = next((name for name in (entry.id, *entry.aliases) if name in tables), None)
-        if match is None:
-            failed = not defined.isdisjoint((entry.id, *entry.aliases))
-            blicks.append(
-                _flagged(entry, "new", "did not build in the baseline" if failed else None)
-            )
+        if table is None:
+            message = _absence(counterpart, "in the baseline") if counterpart else None
+            blicks.append(_flagged(entry, "new", message))
             continue
         plot = entry.definition.plot
         try:
             change = builtin(plot.type).diff(
-                _table(baseline, tables[match]),
+                _table(baseline, table),
                 _table(current, entry.data),
                 plot.mapping,
                 entry.panels,
@@ -159,7 +203,6 @@ def compare_builds(baseline: Path, current: Path) -> Comparison:
             tolerance = after.config.tolerance
         if change.magnitude is not None and change.magnitude > tolerance:
             change = change.model_copy(update={"flags": change.flags | {"value"}})
-        matched = match if match != entry.id else None
         blicks.append(BlickComparison(id=entry.id, name=entry.name, matched=matched, change=change))
     incomplete = _incomplete(after)
     if not incomplete:
@@ -234,15 +277,43 @@ def write(comparison: Comparison, baseline: Path, current: Path) -> Comparison:
     return written
 
 
-def _flagged(entry: BlickEntry, flag: Flag, message: str | None = None) -> BlickComparison:
+def _flagged(
+    entry: BlickEntry,
+    flag: Flag,
+    message: str | None = None,
+    *,
+    skipped: bool = False,
+    matched: str | None = None,
+) -> BlickComparison:
     change = Change(flags=frozenset({flag}))
-    return BlickComparison(id=entry.id, name=entry.name, change=change, message=message)
+    return BlickComparison(
+        id=entry.id,
+        name=entry.name,
+        matched=matched,
+        change=change,
+        skipped=skipped,
+        message=message,
+    )
+
+
+def _first(text: str) -> str:
+    """The first line of ``text``, empty for an empty text."""
+    return next(iter(text.splitlines()), "")
 
 
 def _cause(entry: BlickEntry) -> str | None:
     """The first line of the entry's first error."""
     errors = [p for p in entry.problems if p.severity == "error"]
-    return errors[0].message.splitlines()[0] if errors else None
+    return _first(errors[0].message) if errors else None
+
+
+def _absence(entry: BlickEntry, where: str = "") -> str:
+    """Why ``entry`` has no table: skipped, with the first line of its reason, or did not build;
+    ``where`` follows the verb, such as ``in the baseline``."""
+    place = f" {where}" if where else ""
+    if entry.status == "skipped":
+        return f"skipped{place}: {_first(entry.skipped or '')}"
+    return f"did not build{place}"
 
 
 def _incomplete(built: Manifest) -> tuple[str, ...]:
@@ -252,7 +323,7 @@ def _incomplete(built: Manifest) -> tuple[str, ...]:
     for problem in built.problems:
         if problem.severity == "error":
             where = problem.source.file.as_posix() if problem.source else "the project"
-            first = problem.message.splitlines()[0]
+            first = _first(problem.message)
             reasons.append(
                 f"{where} failed to import: {first}"
                 if problem.kind == Kind.IMPORT

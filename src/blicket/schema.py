@@ -17,6 +17,8 @@ Flag = Literal["new", "removed", "schema", "value", "error"]
 
 _DIMENSION_TYPES: dict[Any, DimensionType] = {
     pl.String: "string",
+    pl.Categorical: "string",
+    pl.Enum: "string",
     pl.Boolean: "boolean",
     pl.Date: "date",
     pl.Datetime: "datetime",
@@ -24,8 +26,24 @@ _DIMENSION_TYPES: dict[Any, DimensionType] = {
 
 
 def dimension_type(dtype: pl.DataType) -> DimensionType | None:
-    """The type of a dimension column of ``dtype``, ``None`` for a dtype no dimension can have."""
+    """The type of a dimension column of ``dtype``, categoricals being strings; ``None`` for a
+    dtype no dimension can have."""
     return "integer" if dtype.is_integer() else _DIMENSION_TYPES.get(dtype.base_type())
+
+
+# The dtype of a dimension column of each type in a checked table, the inverse of dimension_type.
+_POLARS_TYPES: dict[DimensionType, pl.DataType] = {
+    "string": pl.String(),
+    "integer": pl.Int64(),
+    "boolean": pl.Boolean(),
+    "date": pl.Date(),
+    "datetime": pl.Datetime("us"),
+}
+
+
+def polars_type(dtype: DimensionType) -> pl.DataType:
+    """The polars dtype of a dimension column of the type ``dtype``, as a checked table has it."""
+    return _POLARS_TYPES[dtype]
 
 
 class Dimension(BaseModel):

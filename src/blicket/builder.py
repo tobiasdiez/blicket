@@ -1,5 +1,10 @@
 """The build: load a run, run every Blick's transformation, write a build directory.
 
+``build`` composes the steps: ``prepare`` reads the config and checks everything that can fail
+before the run is loaded, ``discover`` imports the Blicks, ``load`` loads the run, and ``write``
+runs the transformations and writes the build directory. ``blicket dev`` takes the steps one by
+one, since it keeps the run.
+
 A build directory holds ``manifest.json``, ``blicks/<id>.parquet`` for every Blick that built,
 and a copy of the viewer. It is assembled in a temporary directory next to its destination and
 renamed to its id at the end, so it appears complete or not at all. An existing directory of the
@@ -20,15 +25,15 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
-from blicket import manifest, tables, viewer
-from blicket.config import PYPROJECT, load_config
+from blicket import loader, manifest, tables, viewer
+from blicket.config import PYPROJECT, Config, load_config
 from blicket.discovery import discover
 from blicket.errors import NOWHERE, BlicketError, ConfigError, Kind, Problem
-from blicket.loader import DEFAULT_LOADER_MODULE, RunSelection, load
-from blicket.manifest import BuildConfig, BuildInfo, Manifest, Repository, Run
+from blicket.loader import DEFAULT_LOADER_MODULE, RunSelection
+from blicket.manifest import BuildConfig, BuildInfo, Manifest, Repository, Run, RunInfo
 from blicket.model import Blick, BlickEntry, Registry
-from blicket.tracebacks import locate, project_traceback, raised_at
 
 
 class NothingToBuild(BlicketError):
@@ -57,6 +62,140 @@ class Build:
     viewer: bool
 
 
+@dataclass(frozen=True)
+class Prepared:
+    """What a build needs before it loads the run: the project root and config, the viewer, the
+    loader target, the run paths and where the build goes.
+
+    ``paths`` are the run paths resolved; ``shown`` are the same as the manifest records them,
+    relative to the root inside it. ``default_out`` says that ``destination`` is
+    ``.blicket/build`` in the project.
+    """
+
+    root: Path
+    config: Config
+    site: Path
+    target: str
+    paths: tuple[Path, ...]
+    shown: tuple[str, ...]
+    destination: Path
+    default_out: bool
+
+
+@dataclass(frozen=True)
+class LoadedRun:
+    """A run the loader returned: the run object, its ``RunInfo``, and the loader's wall time in
+    milliseconds."""
+
+    run: Any
+    info: RunInfo
+    loader_ms: float
+
+
+def prepare(
+    project: str | os.PathLike[str],
+    paths: Sequence[str | os.PathLike[str]],
+    out: str | os.PathLike[str] | None = None,
+) -> Prepared:
+    """Read what a build of the run at ``paths`` with the project at ``project`` needs.
+
+    Raises ``ConfigError`` when the config is missing or invalid or there is no loader, and
+    ``BlicketError`` when ``BLICKET_VIEWER`` names no viewer, there is none, or a run path does
+    not exist.
+    """
+    root = Path(project).resolve()
+    config = load_config(root)
+    site = viewer.find()
+    target = config.loader
+    if target is None:
+        if not (root / f"{DEFAULT_LOADER_MODULE}.py").is_file():
+            raise ConfigError(
+                f"{root}: no loader; add {DEFAULT_LOADER_MODULE}.py with a load_run(selection) "
+                f'next to {PYPROJECT}, or set loader = "package.module:function" in '
+                "[tool.blicket]"
+            )
+        target = f"{DEFAULT_LOADER_MODULE}:load_run"
+    resolved: list[Path] = []
+    shown: list[str] = []
+    for given in paths:
+        path = Path(given).resolve()
+        if not path.exists():
+            raise BlicketError(f"run path {os.fspath(given)} does not exist")
+        resolved.append(path)
+        shown.append(path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path))
+    destination = Path(out).resolve() if out is not None else root / ".blicket" / "build"
+    return Prepared(
+        root=root,
+        config=config,
+        site=site,
+        target=target,
+        paths=tuple(resolved),
+        shown=tuple(shown),
+        destination=destination,
+        default_out=out is None,
+    )
+
+
+def load(prepared: Prepared) -> LoadedRun:
+    """Load the run with the project's loader; raises ``LoaderError`` when the loader fails."""
+    selection = RunSelection(paths=prepared.paths)
+    run, info, loader_ms = loader.load(prepared.target, selection, prepared.root)
+    return LoadedRun(run, info, loader_ms)
+
+
+def write(prepared: Prepared, registry: Registry, loaded: LoadedRun) -> Build:
+    """Run every Blick of ``registry`` on the loaded run and write the build directory.
+
+    A registry without a buildable Blick gives a build of its failed Blicks and problems. Raises
+    ``BlicketError`` when the build cannot be written, before a build directory exists, or when
+    the viewer of an existing build cannot be replaced.
+    """
+    root, destination = prepared.root, prepared.destination
+    repository, problems = _repository(root)
+    temporary = destination / f".tmp-{os.getpid()}-{secrets.token_hex(4)}"
+    try:
+        if prepared.default_out:  # .blicket/ ignores itself, so builds never make the tree dirty
+            (root / ".blicket").mkdir(exist_ok=True)
+            if not (ignore := root / ".blicket" / ".gitignore").exists():
+                ignore.write_text("*\n")
+        temporary.mkdir(parents=True)  # with the permissions the umask gives
+    except OSError as error:
+        reason = error.strerror or str(error)
+        raise BlicketError(f"cannot write the build to {destination}: {reason}") from error
+    try:
+        entries = [_run_blick(b, loaded.run, temporary, root) for b in registry.blicks.values()]
+        # In the order of their definitions, as blicket list shows them.
+        entries = sorted([*entries, *registry.failed], key=lambda e: e.source or NOWHERE)
+        built = Manifest(
+            blicket=importlib.metadata.version("blicket"),
+            created_at=datetime.now(UTC),
+            build=BuildInfo(
+                id="", incomplete=registry.incomplete, loader_ms=round(loaded.loader_ms, 1)
+            ),
+            config=BuildConfig(tolerance=prepared.config.tolerance),
+            run=Run(**loaded.info.model_dump(), paths=list(prepared.shown)),
+            repository=repository,
+            groups=tuple(registry.groups.values()),
+            blicks=tuple(entries),
+            problems=(*registry.problems, *problems),
+        )
+        build_info = built.build.model_copy(update={"id": built.content_id(root)})
+        built = built.model_copy(update={"build": build_info})
+        text = built.model_dump_json(indent=2, context={"root": root})
+        (temporary / manifest.MANIFEST).write_text(text + "\n")
+        final = destination / built.build.id
+        existed = final.exists()
+        if existed:
+            manifest.read(final)  # raises when the existing build is damaged
+        copied = viewer.copy(prepared.site, final if existed else temporary)
+        if not existed:
+            temporary.rename(final)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary, ignore_errors=True)
+    return Build(final, Manifest.model_validate_json(text), existed, root, copied)
+
+
 def build(
     project: str | os.PathLike[str],
     paths: Sequence[str | os.PathLike[str]],
@@ -72,76 +211,12 @@ def build(
     all before a build directory exists, or when the viewer of an existing build cannot be
     replaced. What the loader and the transformations print goes to stderr.
     """
-    root = Path(project).resolve()
-    config = load_config(root)
-    site = viewer.find()
-    target = config.loader
-    if target is None:
-        if not (root / f"{DEFAULT_LOADER_MODULE}.py").is_file():
-            raise ConfigError(
-                f"{root}: no loader; add {DEFAULT_LOADER_MODULE}.py with a load_run(selection) "
-                f'next to {PYPROJECT}, or set loader = "package.module:function" in '
-                "[tool.blicket]"
-            )
-        target = f"{DEFAULT_LOADER_MODULE}:load_run"
-    registry = discover(root, config)
+    prepared = prepare(project, paths, out)
+    registry = discover(prepared.root, prepared.config)
     if not registry.blicks:
         raise NothingToBuild(registry)
-    resolved: list[Path] = []
-    shown: list[str] = []
-    for given in paths:
-        path = Path(given).resolve()
-        if not path.exists():
-            raise BlicketError(f"run path {os.fspath(given)} does not exist")
-        resolved.append(path)
-        shown.append(path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path))
-
     with contextlib.redirect_stdout(sys.stderr):
-        run, info, loader_ms = load(target, RunSelection(paths=tuple(resolved)), root)
-        repository, problems = _repository(root)
-        destination = Path(out).resolve() if out is not None else root / ".blicket" / "build"
-        temporary = destination / f".tmp-{os.getpid()}-{secrets.token_hex(4)}"
-        try:
-            if out is None:  # .blicket/ ignores itself, so builds never make the tree dirty
-                (root / ".blicket").mkdir(exist_ok=True)
-                if not (ignore := root / ".blicket" / ".gitignore").exists():
-                    ignore.write_text("*\n")
-            temporary.mkdir(parents=True)  # with the permissions the umask gives
-        except OSError as error:
-            reason = error.strerror or str(error)
-            raise BlicketError(f"cannot write the build to {destination}: {reason}") from error
-        try:
-            entries = [_run_blick(b, run, temporary, root) for b in registry.blicks.values()]
-            # In the order of their definitions, as blicket list shows them.
-            entries = sorted([*entries, *registry.failed], key=lambda e: e.source or NOWHERE)
-            built = Manifest(
-                blicket=importlib.metadata.version("blicket"),
-                created_at=datetime.now(UTC),
-                build=BuildInfo(
-                    id="", incomplete=registry.incomplete, loader_ms=round(loader_ms, 1)
-                ),
-                config=BuildConfig(tolerance=config.tolerance),
-                run=Run(**info.model_dump(), paths=shown),
-                repository=repository,
-                groups=tuple(registry.groups.values()),
-                blicks=tuple(entries),
-                problems=(*registry.problems, *problems),
-            )
-            build_info = built.build.model_copy(update={"id": built.content_id(root)})
-            built = built.model_copy(update={"build": build_info})
-            text = built.model_dump_json(indent=2, context={"root": root})
-            (temporary / manifest.MANIFEST).write_text(text + "\n")
-            final = destination / built.build.id
-            existed = final.exists()
-            if existed:
-                manifest.read(final)  # raises when the existing build is damaged
-            copied = viewer.copy(site, final if existed else temporary)
-            if not existed:
-                temporary.rename(final)
-        finally:
-            if temporary.exists():
-                shutil.rmtree(temporary, ignore_errors=True)
-    return Build(final, Manifest.model_validate_json(text), existed, root, copied)
+        return write(prepared, registry, load(prepared))
 
 
 def _git(root: Path, *args: str) -> str:
@@ -171,36 +246,10 @@ def _repository(root: Path) -> tuple[Repository | None, list[Problem]]:
     return None, [Problem(kind=Kind.REPOSITORY, severity="warning", message=message)]
 
 
-def _checked(blick: Blick, run: object, root: Path) -> tables.Checked:
-    """Run the transformation, convert what it returned, and check the table.
-
-    Nothing raised in these steps escapes; it becomes a problem located in the project's code.
-    """
-    action = "transformation"
-    try:
-        value = blick.transform(run)
-        action = f"converting the returned {type(value).__name__}"
-        frame, index_dropped = tables.to_polars(value)
-        action = "checking the table"
-        return tables.check(frame, blick, index_dropped)
-    except tables.TableError as error:
-        return tables.Checked.failed(blick.problem(Kind.TRANSFORMATION, str(error)))
-    except (Exception, SystemExit) as error:
-        prefer = blick.source.file if blick.source else None
-        message = f"{action} raised {type(error).__name__}: {error}"
-        problem = blick.problem(
-            Kind.TRANSFORMATION,
-            message + raised_at(error, root, blick.source),
-            source=locate(error, root, prefer),
-            traceback=project_traceback(error, root),
-        )
-        return tables.Checked.failed(problem)
-
-
 def _run_blick(blick: Blick, run: object, directory: Path, root: Path) -> BlickEntry:
     """Build one Blick into ``directory``: its table as Parquet, and its manifest entry."""
     start = time.perf_counter()
-    checked = _checked(blick, run, root)
+    checked = tables.compute(blick, run, root)
     data: str | None = None
     digest: str | None = None
     rows: int | None = None
@@ -218,4 +267,5 @@ def _run_blick(blick: Blick, run: object, directory: Path, root: Path) -> BlickE
         rows=rows,
         columns=checked.schema,
         timing_ms=round((time.perf_counter() - start) * 1000, 1),
+        skipped=checked.skipped,
     )

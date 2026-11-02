@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 import blicket as bk
-from blicket.errors import SKIPPED, Source
+from blicket.errors import MISSING, Source
 from tests.support import PROJECTS, discover_clean, make_project, one_blick
 
 
@@ -142,7 +142,7 @@ def test_broken_module_is_captured(tmp_path: Path) -> None:
     assert error.message.splitlines() == [
         "ModuleNotFoundError: No module named 'nothere'",
         f"is 'nothere' installed in {sys.prefix}?",
-        SKIPPED,
+        MISSING,
     ]
     assert error.traceback is not None
     assert "importlib" not in error.traceback
@@ -197,7 +197,7 @@ def test_file_level_errors(
     )
     assert (found_kind, found_location) == (kind, location)
     assert phrase in message
-    assert message.endswith(SKIPPED)
+    assert message.endswith(MISSING)
 
 
 def test_error_raised_in_a_helper(tmp_path: Path) -> None:

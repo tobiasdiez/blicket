@@ -1,6 +1,7 @@
 import { parquetReadObjects } from 'hyparquet'
 import { compressors } from 'hyparquet-compressors'
 import * as vega from 'vega'
+import { Unreachable } from './dev'
 import type { Dimension, DimensionType, Value } from './manifest'
 
 /** A cell of a Blick's table as the viewer holds it; dates are `Date` at UTC midnight. */
@@ -28,27 +29,51 @@ export interface TableFile {
   hash: string | null
 }
 
+// The tables fetched; of the builder's, the one used last is at the end.
 const tables = new Map<string, Promise<Row[]>>()
 
+/** A failure to reach the server as `Unreachable`: fetch and the read of a body reject with a
+ * TypeError then; any other failure as it is. */
+function unreachable(cause: unknown): never {
+  throw cause instanceof TypeError ? new Unreachable() : cause
+}
+/** Where the Blick builder's tables are: a dev session makes a new one for every query. */
+const ADHOC = 'dev/tables/'
+/** How many of the Blick builder's tables are kept; a build's tables are all kept. */
+export const KEPT_TABLES = 50
+
+/** Forget the builder's tables used longest ago, so that `KEPT_TABLES` of them stay. */
+function evict() {
+  const adhoc = [...tables.keys()].filter(key => key.startsWith(ADHOC))
+  for (const key of adhoc.slice(0, Math.max(0, adhoc.length - KEPT_TABLES))) tables.delete(key)
+}
+
 /**
- * The rows of `file`, fetched once per content hash. The hash is in the URL and the cache key, so
- * a table of another build at the same path, served on the same port, is another file to the
- * browser. The whole file comes in one request: tables are small, and not every server answers
- * ranges.
+ * The rows of `file`, fetched once per content hash; of the builder's tables, only the last
+ * `KEPT_TABLES` used are kept. The hash is in the URL and the cache key, so a table of another
+ * build at the same path, served on the same port, is another file to the browser. The whole file
+ * comes in one request: tables are small, and not every server answers ranges.
  */
 export function fetchTable(file: TableFile): Promise<Row[]> {
-  const key = file.hash ?? file.path
+  // The builder's tables are kept by path, which names their content; a build's by its hash.
+  const key = file.path.startsWith(ADHOC) ? file.path : file.hash ?? file.path
   let table = tables.get(key)
-  if (!table) {
+  if (table) {
+    tables.delete(key)
+    tables.set(key, table)
+  }
+  else {
     const url = file.hash ? `./${file.path}?${encodeURIComponent(file.hash)}` : `./${file.path}`
     table = fetch(url)
+      .catch(unreachable)
       .then((response) => {
         if (!response.ok) throw new Error(`${file.path}: ${response.status} ${response.statusText}`)
-        return response.arrayBuffer()
+        return response.arrayBuffer().catch(unreachable)
       })
       .then(readTable)
     table.catch(() => tables.delete(key))
     tables.set(key, table)
+    evict()
   }
   return table
 }

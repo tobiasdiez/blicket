@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { h, resolveComponent } from 'vue'
 import type { TableColumn } from '@nuxt/ui'
-import { withUnit, type TableSchema } from '~/lib/manifest'
+import { unitOf, withUnit, type TableSchema } from '~/lib/manifest'
 import { display, formatValue, type Cell, type Row } from '~/lib/table'
 
-const props = defineProps<{ rows: Row[], schema: TableSchema, unit: string | null }>()
+// `mapping` is the plot's, which says what measure the unit belongs to.
+const props = defineProps<{ rows: Row[], schema: TableSchema, unit: string | null, mapping: Record<string, string> }>()
 
 const LIMIT = 2000
 const UButton = resolveComponent('UButton')
@@ -36,7 +37,7 @@ const STICKY = 'max-sm:sticky max-sm:right-0 max-sm:bg-default'
 const columns = computed<TableColumn<Row>[]>(() => [
   ...props.schema.dimensions.map(d => ({ name: d.name, label: d.name, format: (value: Cell) => (value === null ? '' : display(value, d)), numeric: d.dtype === 'integer' })),
   // Six significant digits, chosen per value, so close values stay apart.
-  ...props.schema.measures.map(m => ({ name: m.name, label: withUnit(m.name, props.unit), format: (value: Cell) => (typeof value === 'number' ? formatValue(value, 6) : ''), numeric: true })),
+  ...props.schema.measures.map(m => ({ name: m.name, label: withUnit(m.name, unitOf(m.name, props.unit, props.mapping)), format: (value: Cell) => (typeof value === 'number' ? formatValue(value, 6) : ''), numeric: true })),
 ].map(({ name, label, format, numeric }, index, all) => ({
   id: name,
   accessorFn: (row: Row) => row[name],

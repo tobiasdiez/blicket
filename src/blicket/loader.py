@@ -15,7 +15,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from blicket.errors import LoaderError
+from blicket.errors import LoaderError, issue_field
 from blicket.manifest import RunInfo
 from blicket.tracebacks import project_traceback, raised_at
 
@@ -63,9 +63,15 @@ def fingerprint(*paths: str | os.PathLike[str]) -> str:
     return digest.hexdigest()
 
 
+def split_target(target: str) -> tuple[str, str]:
+    """The module and the attribute path of a loader target, ``package.module:function``."""
+    module, _, attribute = target.partition(":")
+    return module, attribute
+
+
 def _resolve(target: str, root: Path) -> Callable[[RunSelection], Any]:
     """The function ``target`` names: a module path, a colon, attribute names joined by dots."""
-    module_name, _, attribute = target.partition(":")
+    module_name, attribute = split_target(target)
     try:
         found: Any = importlib.import_module(module_name)
     except (Exception, SystemExit) as error:
@@ -95,7 +101,7 @@ def _invalid_run_info(error: ValidationError) -> str:
     """One sentence per field of an invalid ``RunInfo``."""
     sentences = []
     for issue in error.errors():
-        field = ".".join(map(str, issue["loc"]))
+        field = issue_field(issue)
         sentence = {
             "missing": f"{field} is required"
             + ("; bk.fingerprint(path) computes one" if field == "fingerprint" else ""),

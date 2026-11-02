@@ -6,16 +6,27 @@ from pathlib import Path
 from typing import Any
 
 import jsonschema
+import polars as pl
 import pytest
 from pydantic import ValidationError
 
 import blicket as bk
-from blicket import builder, manifest, viewer
-from blicket.builder import NothingToBuild
+from blicket import loader, manifest, viewer
+from blicket.builder import Build, NothingToBuild
 from blicket.errors import BlicketError
 from blicket.manifest import Manifest
+from blicket.model import PlotDefinition
 from blicket.schema import Control, Dimension, Measure, TableSchema
-from tests.support import VALUES, commit_all, git, line_of, make_build_project, make_run, one_blick
+from tests.support import (
+    SKIPPING_VALUES,
+    VALUES,
+    commit_all,
+    git,
+    line_of,
+    make_build_project,
+    make_run,
+    one_blick,
+)
 
 BLICKS = """\
 import pandas as pd
@@ -62,6 +73,10 @@ def broken(run):
 def unbound(run):
     return pl.DataFrame({"year": YEARS, "value": run["values"], "extra": run["values"]})
 
+
+@bk.blick(plot=LINE)
+def skipping(run):
+    raise bk.Skip("the run has no trade module")
 """
 
 
@@ -90,6 +105,7 @@ def test_statuses_and_files(project: Path) -> None:
         ("views/raising", "error"),
         ("views/broken", "error"),
         ("views/unbound", "error"),
+        ("views/skipping", "skipped"),
     ]
     ok = built.manifest.blicks[0]
     assert (ok.data, ok.rows) == ("blicks/views/from_polars.parquet", 3)
@@ -127,6 +143,102 @@ def test_exceptions_are_located(project: Path, name: str, message: str, raised_i
     assert f'views.py", line {line_of(BLICKS, raised_in)}' in problem.traceback
 
 
+def test_a_skipped_blick_has_its_reason_and_neither_a_table_nor_an_error(project: Path) -> None:
+    built = bk.build(project, ["runs/a"])
+    (skipping,) = [e for e in built.manifest.blicks if e.name == "views/skipping"]
+    assert skipping.skipped == "the run has no trade module"
+    assert (skipping.data, skipping.hash, skipping.rows, skipping.columns) == (None,) * 4
+    assert (skipping.controls, skipping.problems) == ((), ())
+    assert not (built.path / "blicks" / "views" / "skipping.parquet").exists()
+    text = (built.path / "manifest.json").read_text()
+    written = {entry["name"]: entry for entry in json.loads(text)["blicks"]}
+    ok, skipped = written["views/from_polars"], written["views/skipping"]
+    assert [(e["status"], e["skipped"]) for e in (ok, skipped)] == [
+        ("ok", None),
+        ("skipped", "the run has no trade module"),
+    ]
+
+
+def test_skipped_blicks_alone_are_no_error(tmp_path: Path) -> None:
+    files = {"blicks/a.py": VALUES, "blicks/b.py": SKIPPING_VALUES}
+    built = bk.build(make_build_project(tmp_path, files), [make_run(tmp_path / "run")]).manifest
+    assert [entry.status for entry in built.blicks] == ["ok", "skipped"]
+    assert not built.has_errors
+
+
+def test_the_id_covers_the_reason_of_a_skip(project: Path) -> None:
+    first = build_id(project)
+    views = project / "blicks" / "views.py"
+    views.write_text(views.read_text().replace("no trade module", "no trade data"))
+    assert build_id(project) != first
+
+
+def test_a_manifest_without_skipped_reads_as_before(project: Path) -> None:
+    data = json.loads((bk.build(project, ["runs/a"]).path / "manifest.json").read_text())
+    for entry in data["blicks"]:
+        del entry["skipped"]
+    assert all(entry.skipped is None for entry in Manifest.model_validate(data).blicks)
+
+
+ERROR = bk.Problem(kind="transformation", message="transformation raised KeyError")
+
+
+def scaled_values(scale: str | None) -> str:
+    """The source of VALUES with the y scale ``scale`` on its plot, none for ``None``."""
+    argument = "" if scale is None else f", y_scale={scale!r}"
+    return (
+        "import polars as pl\n\nimport blicket as bk\n\n\n"
+        f'@bk.blick(plot=bk.plots.line(x="year", y="value"{argument}))\n'
+        "def values(run):\n"
+        '    return pl.DataFrame({"year": [2020, 2021, 2022], "value": run["values"]})\n'
+    )
+
+
+def test_the_manifest_records_the_scales_of_a_plot(tmp_path: Path) -> None:
+    root = make_build_project(tmp_path, {"blicks/a.py": scaled_values("log")})
+    built = bk.build(root, [make_run(tmp_path / "run")])
+    (entry,) = json.loads((built.path / "manifest.json").read_text())["blicks"]
+    assert (entry["status"], entry["definition"]["plot"]) == (
+        "ok",
+        {"type": "line", "mapping": {"x": "year", "y": "value"}, "scales": {"y": "log"}},
+    )
+
+
+def test_the_id_covers_a_log_scale_but_not_a_linear_one(tmp_path: Path) -> None:
+    root = make_build_project(tmp_path, {"blicks/a.py": scaled_values(None)})
+    run = make_run(tmp_path / "run")
+    ids = []
+    for scale in (None, "linear", "log"):
+        (root / "blicks" / "a.py").write_text(scaled_values(scale))
+        ids.append(bk.build(root, [run]).manifest.build.id)
+    assert ids[0] == ids[1] != ids[2]
+
+
+def test_the_status_is_skipped_with_a_reason_else_error_with_an_error_else_ok() -> None:
+    def status(**fields: Any) -> str:
+        return bk.BlickEntry(id="a/x", name="a/x", group="a", **fields).status
+
+    assert status(skipped="no trade") == "skipped"
+    assert status(problems=(ERROR,)) == "error"
+    assert status() == "ok"
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"data": "blicks/a/x.parquet"},
+        {"rows": 0},
+        {"controls": (Control(dimension="year", kind="filter", default=None),)},
+        {"problems": (ERROR,)},
+        {"problems": (ERROR.model_copy(update={"severity": "warning"}),)},
+    ],
+    ids=["data", "rows", "controls", "error", "warning"],
+)
+def test_a_skipped_blick_has_no_table_controls_or_problems(fields: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError, match="a skipped Blick has no table, controls or problems"):
+        bk.BlickEntry(id="a/x", name="a/x", group="a", skipped="no trade", **fields)
+
+
 def test_failed_definitions_are_entries(project: Path) -> None:
     manifest = bk.build(project, ["runs/a"]).manifest
     (invalid,) = [entry for entry in manifest.blicks if entry.name == "views/invalid"]
@@ -154,7 +266,7 @@ def test_nothing_is_written_without_a_viewer(
 ) -> None:
     root = make_build_project(tmp_path, {"blicks/a.py": VALUES})
     monkeypatch.delenv(viewer.VIEWER_ENV)
-    with pytest.raises(BlicketError, match="no viewer found: install a blicket release"):
+    with pytest.raises(BlicketError, match="no viewer found: install blicket with its viewer"):
         bk.build(root, [make_run(tmp_path / "run")])
     assert not (root / ".blicket").exists()
 
@@ -173,8 +285,8 @@ def test_a_rebuild_reports_its_own_run_and_load_time(
 ) -> None:
     first = bk.build(project, ["runs/a"])
     shutil.copytree("runs/a", "runs/b")  # the same content, so the same build id
-    load = builder.load
-    monkeypatch.setattr(builder, "load", lambda *args: (*load(*args)[:2], 1234.5))
+    load = loader.load
+    monkeypatch.setattr(loader, "load", lambda *args: (*load(*args)[:2], 1234.5))
     second = bk.build(project, ["runs/b"])
     assert (second.existed, second.manifest.build.id) == (True, first.manifest.build.id)
     assert (second.manifest.run.id, second.manifest.build.loader_ms) == ("b", 1234.5)
@@ -394,6 +506,44 @@ def derived(run):
 """
 
 
+SANKEY = """\
+import polars as pl
+
+import blicket as bk
+
+
+@bk.blick(
+    title="Flows",
+    unit="t",
+    plot=bk.plots.sankey(source="From", target="To", value="value", color="Stage"),
+    defaults={"Time": 2100},
+)
+def flows(run):
+    return pl.DataFrame({
+        "Time": [2050, 2050, 2100, 2100],
+        "From": ["Production", "Use", "Production", "Use"],
+        "To": ["Use", "Production", "Use", "Production"],
+        "Stage": ["Use", "Recycling", "Use", "Recycling"],
+        "value": run["values"],
+    })
+"""
+
+
+def test_a_sankey_blick_records_its_mapping_and_filters_the_other_dimensions(
+    tmp_path: Path,
+) -> None:
+    root = make_build_project(tmp_path, {"blicks/flows.py": SANKEY})
+    built = bk.build(root, [make_run(tmp_path / "run", "10 2 12 3")])
+    (entry,) = built.manifest.blicks
+    assert (entry.status, entry.rows) == ("ok", 4)
+    assert entry.controls == (Control(dimension="Time", kind="filter", default=2100),)
+    written = json.loads((built.path / "manifest.json").read_text())
+    assert written["blicks"][0]["definition"]["plot"] == {
+        "type": "sankey",
+        "mapping": {"source": "From", "target": "To", "value": "value", "color": "Stage"},
+    }
+
+
 def test_panels_are_the_filters_and_with_independent_y_axes_the_splits() -> None:
     schema = TableSchema(
         dimensions=[
@@ -447,3 +597,125 @@ def test_controls_are_derived_from_the_table_and_the_requests(tmp_path: Path) ->
     # The controls follow from the definition and the columns; the id leaves them out.
     written["blicks"][0]["controls"] = []
     assert Manifest.model_validate(written).content_id(root) == built.manifest.build.id
+
+
+SCATTERS = """\
+import polars as pl
+
+import blicket as bk
+
+GDP = "GDP per capita"
+
+
+def table(run):
+    keys = [
+        (time, region, period, scenario)
+        for time in (2020, 2030)
+        for region in ("EUR", "USA")
+        for period in ("Historical", "Projected")
+        for scenario in ("low", "high")
+    ]
+    columns = dict(zip(["Time", "Region", "Period", "Scenario"], zip(*keys)))
+    # No GDP per capita for USA in 2030.
+    gdp = [None if key[:2] == (2030, "USA") else 1e4 * (i + 1) for i, key in enumerate(keys)]
+    value = [run["values"][0] * i for i in range(len(keys))]
+    return pl.DataFrame({**columns, GDP: gdp, "value": value}, schema_overrides={GDP: pl.Float64})
+
+
+@bk.blick(
+    unit="t per person",
+    plot=bk.plots.scatter(
+        x=GDP, y="value", color="Region", linetype="Period", along="Time", x_scale="log"
+    ),
+)
+def trajectories(run):
+    return table(run)
+
+
+@bk.blick(plot=bk.plots.scatter(x=GDP, y="value", color="Region"))
+def points(run):
+    return table(run)
+
+
+@bk.blick(plot=bk.plots.scatter(x="Time", y="value", color="Region"))
+def integer_x(run):
+    return table(run).drop(GDP)
+"""
+
+
+@pytest.fixture
+def scattered(tmp_path: Path) -> Build:
+    """A build of the Blicks of SCATTERS."""
+    root = make_build_project(tmp_path, {"blicks/stocks.py": SCATTERS})
+    return bk.build(root, [make_run(tmp_path / "run")])
+
+
+def test_a_scatter_builds_a_table_of_two_measures(scattered: Build) -> None:
+    trajectories, points, _ = scattered.manifest.blicks
+    assert [trajectories.status, points.status] == ["ok", "ok"]
+    assert trajectories.columns is not None
+    measures = [measure.name for measure in trajectories.columns.measures]
+    assert (measures, trajectories.rows, trajectories.problems) == (
+        ["GDP per capita", "value"],
+        16,
+        (),
+    )
+
+
+def test_rows_without_x_are_kept_with_a_null(scattered: Build) -> None:
+    trajectories = scattered.manifest.blicks[0]
+    assert trajectories.data is not None
+    table = pl.read_parquet(scattered.path / trajectories.data)
+    assert table["GDP per capita"].null_count() == 4
+
+
+def test_the_dimension_the_points_connect_along_has_no_control(scattered: Build) -> None:
+    trajectories, points, _ = scattered.manifest.blicks
+    assert trajectories.controls == (Control(dimension="Scenario", kind="filter", default="high"),)
+    assert [control.dimension for control in points.controls] == ["Time", "Period", "Scenario"]
+
+
+def test_the_manifest_records_the_scales_only_where_there_are_some(scattered: Build) -> None:
+    written = json.loads((scattered.path / "manifest.json").read_text())
+    assert written["blicks"][0]["definition"]["plot"] == {
+        "type": "scatter",
+        "mapping": {
+            "x": "GDP per capita",
+            "y": "value",
+            "color": "Region",
+            "linetype": "Period",
+            "along": "Time",
+        },
+        "scales": {"x": "log"},
+    }
+    assert "scales" not in written["blicks"][1]["definition"]["plot"]
+
+
+def test_an_integer_column_on_x_counts_as_a_dimension(scattered: Build) -> None:
+    integer_x = scattered.manifest.blicks[2]
+    assert integer_x.status == "error"
+    assert [problem.message for problem in integer_x.problems] == [
+        "'Time' on x= is an integer column and so counts as a dimension; add measures=[\"Time\"]"
+    ]
+
+
+def test_a_manifest_with_scales_validates_against_its_schema(scattered: Build) -> None:
+    text = (scattered.path / "manifest.json").read_text()
+    jsonschema.validate(json.loads(text), Manifest.model_json_schema(mode="serialization"))
+    assert json.loads(Manifest.model_validate_json(text).model_dump_json()) == json.loads(text)
+
+
+def test_a_plot_without_scales_is_recorded_without_a_scales_key(project: Path) -> None:
+    plot = PlotDefinition(type="line", mapping={"x": "year", "y": "value"})
+    assert plot.model_dump(mode="json") == {"type": "line", "mapping": {"x": "year", "y": "value"}}
+    assert PlotDefinition.model_validate(plot.model_dump()).scales == {}
+    assert '"scales"' not in (bk.build(project, ["runs/a"]).path / "manifest.json").read_text()
+
+
+def test_the_scales_are_part_of_the_build_id(tmp_path: Path) -> None:
+    root = make_build_project(tmp_path, {"blicks/stocks.py": SCATTERS})
+    run = make_run(tmp_path / "run")
+    first = bk.build(root, [run]).manifest.build.id
+    stocks = root / "blicks" / "stocks.py"
+    stocks.write_text(stocks.read_text().replace(', x_scale="log"', ""))
+    assert bk.build(root, [run]).manifest.build.id != first

@@ -1,8 +1,8 @@
 import type { TopLevelSpec } from 'vega-lite'
 import { definePlot } from './embed'
-import { colorEncodings, field, focus, ghost, highlighted, hoverRule, linetypeEncoding, overX } from './encodings'
-import { channels, frame, from, type Spec } from './layout'
-import { CATEGORICAL, INK } from './theme'
+import { colorEncodings, focus, ghost, highlighted, hoverDot, hoverRule, linetypeDetail, linetypeEncoding, overBaseline, overX } from './encodings'
+import { channels, frame, type Spec } from './layout'
+import { CATEGORICAL } from './theme'
 import type { ChangeBuilder, PlotArgs, Quantity } from './types'
 
 const GHOST_WIDTH = 6 // px
@@ -21,7 +21,7 @@ export function lineSpec(args: PlotArgs, width: number, quantity: Quantity = 'me
     : { y, color: { value: CATEGORICAL[args.theme][0] } }
   if (ch.linetype) encoding.strokeDash = linetypeEncoding(ch.linetype, width)
   const dots = {
-    mark: { type: 'point', filled: true, size: 64, opacity: 1, stroke: INK[args.theme].surface, strokeWidth: 2 },
+    mark: hoverDot(args.theme),
     transform: [{ filter: { param: 'hover', empty: false } }],
     encoding: { y, color: encoding.color },
   }
@@ -29,15 +29,10 @@ export function lineSpec(args: PlotArgs, width: number, quantity: Quantity = 'me
   const lines = highlighted({ mark: { type: 'line' }, encoding }, series)
   let layer: Spec[] = [{ ...lines, params: focus(series) }, dots]
   if (args.baseline) {
-    // The legend highlight's param goes with the legend's channel: the ghost draws the colour, the
-    // current lines alone the line type.
-    const detail = ch.linetype ? { detail: { field: field(ch.linetype.name), type: 'nominal' } } : {}
     // Clipped to the plot, so the wide caps do not widen the panels: they line up with the change
     // charts' below.
-    const wide = ghost({ mark: { type: 'line', strokeWidth: GHOST_WIDTH, clip: true }, encoding: { y, color: encoding.color, ...detail } }, series, 'strokeOpacity', args.theme)
-    layer = ch.color
-      ? [{ ...wide, params: focus(series) }, from('current', lines), from('current', dots)]
-      : [wide, from('current', { ...lines, params: focus(series) }), from('current', dots)]
+    const wide = ghost({ mark: { type: 'line', strokeWidth: GHOST_WIDTH, clip: true }, encoding: { y, color: encoding.color, ...linetypeDetail(ch) } }, series, 'strokeOpacity', args.theme)
+    layer = overBaseline(wide, lines, [dots], ch)
   }
   return frame(args, ch, { encoding: { x }, layer: [...layer, hoverRule(args, x, ch, quantity)] }, width, false, quantity)
 }

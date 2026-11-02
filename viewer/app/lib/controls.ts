@@ -1,8 +1,13 @@
-import type { Control, Dimension, TableSchema, Value } from './manifest'
+import type { BlickDefinition, Control, Dimension, TableSchema, Value } from './manifest'
 import { valueKey } from './table'
 
 /** Whether split panels share their y axis or each has its own. */
 export type YAxis = 'shared' | 'independent'
+
+/** The y axes of a Blick's panels when the URL does not say: each its own, or one shared. */
+export function yAxisOf(definition: Pick<BlickDefinition, 'independent_y'> | null): YAxis {
+  return definition?.independent_y ? 'independent' : 'shared'
+}
 
 /** What the controls of a Blick are set to. */
 export interface ControlState {
@@ -18,10 +23,15 @@ export type Query = Record<string, string | null | (string | null)[] | undefined
 
 // The query keys that are not dimensions start with an underscore, so that a dimension called
 // `split` or `y` has its own key.
-const SPLIT = '_split'
-const Y = '_y'
+/** The query key of the dimensions split into panels. */
+export const SPLIT = '_split'
+/** The query key of the y axes. */
+export const Y = '_y'
+/** The query key of the tab, chart or data. */
+export const TAB = '_tab'
 
-function strings(entry: Query[string]): string[] {
+/** The texts of a query entry. */
+export function strings(entry: Query[string]): string[] {
   const list = Array.isArray(entry) ? entry : [entry]
   return list.filter((item): item is string => typeof item === 'string')
 }

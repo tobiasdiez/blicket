@@ -4,6 +4,7 @@
 import type { TopLevelSpec } from 'vega-lite'
 import type { Dimension } from '../lib/manifest'
 import { display, isTime, largest, valueKey, type Cell, type Row } from '../lib/table'
+import { masked } from './scales'
 import { config, Y_LABEL_EXTENT } from './theme'
 import type { PlotArgs, Quantity } from './types'
 
@@ -30,17 +31,35 @@ const PLOT_FLOOR = 160 // px, the least plot width without panels
 const AXIS_WIDTH = Y_LABEL_EXTENT + 20
 /** Vega's padding, left and right, and some slack, in px. */
 export const PADDING = 20
-const SPACING = 16
+/** The room between panels, in px. */
+export const SPACING = 16
+// The height of the plot area without panels and of a panel, in px: of the measure, of a change
+// under it, and of a compact chart.
+const HEIGHTS: Record<Quantity | 'compact', [single: number, panel: number]> = {
+  measure: [320, 180],
+  change: [200, 140],
+  relative: [200, 140],
+  compact: [160, 160],
+}
 
-/** The plot's dimensions and measure by channel. */
-export interface Channels {
-  x: Dimension
+/**
+ * What `frame` needs of a chart's channels: the measure on y, the dimensions that tell the series
+ * apart, and the dimension on x of a chart over one.
+ */
+export interface FrameChannels {
   y: string
   color: Dimension | null
   linetype: Dimension | null
+  x?: Dimension
 }
 
-function dimension(args: Pick<PlotArgs, 'schema'>, name: string): Dimension {
+/** The plot's dimensions and measure by channel, of a chart over a dimension on x. */
+export interface Channels extends FrameChannels {
+  x: Dimension
+}
+
+/** The dimension of the table called `name`; an error when it has none. */
+export function dimension(args: Pick<PlotArgs, 'schema'>, name: string): Dimension {
   const found = args.schema.dimensions.find(d => d.name === name)
   if (!found) throw new Error(`the table has no dimension ${name}`)
   return found
@@ -58,7 +77,7 @@ export function channels(args: Pick<PlotArgs, 'mapping' | 'schema'>): Channels {
 }
 
 /** The dimensions that tell the series apart: colour and line type. */
-export function seriesDimensions(ch: Channels): Dimension[] {
+export function seriesDimensions(ch: FrameChannels): Dimension[] {
   return [ch.color, ch.linetype].filter((d): d is Dimension => d !== null)
 }
 
@@ -74,7 +93,8 @@ export function combinations(dims: Dimension[]): string[] {
   return labels
 }
 
-const splitDimensions = (args: PlotArgs) => args.state.splits.map(name => dimension(args, name))
+/** The dimensions split into panels. */
+export const splitDimensions = (args: Pick<PlotArgs, 'schema' | 'state'>) => args.state.splits.map(name => dimension(args, name))
 
 /** The key of a row's value of `d`, which compares equal across the tables. */
 export function cellKey(row: Row, d: Dimension): string {
@@ -108,16 +128,17 @@ export function plain(value: Cell, d: Dimension): Cell {
 
 /**
  * The rows as Vega reads them: time as keys except on a time x axis (not on a `band`), plus the
- * panel label and the series label. With a baseline, its rows follow the current ones, every row
- * names its source, and a current row holds the baseline's value of the row with its dimension
- * values.
+ * panel label and the series label; a value at or below zero on a logarithmic axis as null. With
+ * a baseline, its rows follow the current ones, every row names its source, and a current row
+ * holds the baseline's value of the row with its dimension values, as it is, for the tooltips.
  */
-function prepare(args: PlotArgs, ch: Channels, band: boolean): Row[] {
+function prepare(args: PlotArgs, ch: FrameChannels, band: boolean): Row[] {
   const times = args.schema.dimensions.filter(d => isTime(d) && (band || d !== ch.x))
   const splits = splitDimensions(args)
   const series = seriesDimensions(ch)
+  const table = masked(args, args.table)
   const baseline = args.baseline
-  if (!times.length && !splits.length && !series.length && !baseline) return args.table
+  if (!times.length && !splits.length && !series.length && !baseline) return table
   const withLabels = (row: Row): Row => {
     const copy: Row = { ...row }
     for (const d of times) copy[d.name] = plain(row[d.name] ?? null, d)
@@ -125,12 +146,12 @@ function prepare(args: PlotArgs, ch: Channels, band: boolean): Row[] {
     if (series.length) copy[SERIES] = labelOf(row, series)
     return copy
   }
-  if (!baseline) return args.table.map(withLabels)
+  if (!baseline) return table.map(withLabels)
   const dims = args.schema.dimensions
   const before = baselineValues(baseline, dims, ch.y)
   return [
-    ...args.table.map(row => ({ ...withLabels(row), [SOURCE]: 'current', [BASELINE_VALUE]: before.get(rowKey(row, dims)) ?? null })),
-    ...baseline.map(row => ({ ...withLabels(row), [SOURCE]: 'baseline' })),
+    ...table.map(row => ({ ...withLabels(row), [SOURCE]: 'current', [BASELINE_VALUE]: before.get(rowKey(row, dims)) ?? null })),
+    ...masked(args, baseline).map(row => ({ ...withLabels(row), [SOURCE]: 'baseline' })),
   ]
 }
 
@@ -148,6 +169,12 @@ function layout(args: PlotArgs, width: number): { columns: number, panelWidth: n
 /** The width of the plot area of a chart `width` wide, of one panel when there are panels. */
 export function plotWidth(args: PlotArgs, width: number): number {
   return args.state.splits.length ? layout(args, width).panelWidth : Math.max(PLOT_FLOOR, width - PADDING - AXIS_WIDTH)
+}
+
+/** The height of the plot area of a chart of `quantity`, of one panel when there are panels. */
+export function plotHeight(args: PlotArgs, quantity: Quantity = 'measure'): number {
+  const [single, panel] = HEIGHTS[args.compact ? 'compact' : quantity]
+  return args.state.splits.length ? panel : single
 }
 
 /**
@@ -173,18 +200,36 @@ function largestIn(rows: Row[], measure: string, stackedBy: string[] | null): nu
 }
 
 /**
+ * `unit` with the legend of each encoding off, in its layers too: an encoding's own `legend` wins
+ * over the config's `legend.disable`, so each turns itself off. The params bound to a legend stay,
+ * inert.
+ */
+function withoutLegends(unit: Spec): Spec {
+  const encoding = unit.encoding as Record<string, unknown> | undefined
+  const off = (definition: unknown) => {
+    if (!definition || typeof definition !== 'object' || !('legend' in definition) || !definition.legend) return definition
+    return { ...definition, legend: { ...(definition.legend as Spec), disable: true } }
+  }
+  return {
+    ...unit,
+    ...(encoding && { encoding: Object.fromEntries(Object.entries(encoding).map(([channel, definition]) => [channel, off(definition)])) }),
+    ...(Array.isArray(unit.layer) && { layer: (unit.layer as Spec[]).map(withoutLegends) }),
+  }
+}
+
+/**
  * The whole specification around a unit chart (`encoding` and `layer`, or `mark`): the data, the
  * panels of the split dimensions as a top-level facet with wrapped columns and a shared or
  * independent y axis, the sizes and the theme. `band` says that x is a band (bars). A chart of a
- * change, under the chart of the measure, is lower.
+ * change, under the chart of the measure, is lower; a compact chart is 160 px high, without legend.
  */
-export function frame(args: PlotArgs, ch: Channels, unit: Spec, width: number, band = false, quantity: Quantity = 'measure'): TopLevelSpec {
+export function frame(args: PlotArgs, ch: FrameChannels, drawn: Spec, width: number, band = false, quantity: Quantity = 'measure'): TopLevelSpec {
+  const unit = args.compact ? withoutLegends(drawn) : drawn
   const data = { values: prepare(args, ch, band) }
-  const base = { $schema: 'https://vega.github.io/schema/vega-lite/v6.json', data, config: config(args.theme) }
-  // The height of the plot area without panels, and of a panel.
-  const [single, panel] = quantity === 'measure' ? [320, 180] : [200, 140]
+  const themed = config(args.theme)
+  const base = { $schema: 'https://vega.github.io/schema/vega-lite/v6.json', data, config: args.compact ? { ...themed, legend: { ...themed.legend, disable: true } } : themed }
   if (!args.state.splits.length) {
-    return { ...base, width: plotWidth(args, width), height: single, ...unit } as unknown as TopLevelSpec
+    return { ...base, width: plotWidth(args, width), height: plotHeight(args, quantity), ...unit } as unknown as TopLevelSpec
   }
   const { columns, panelWidth } = layout(args, width)
   return {
@@ -193,7 +238,7 @@ export function frame(args: PlotArgs, ch: Channels, unit: Spec, width: number, b
     facet: { field: PANEL, type: 'nominal', sort: combinations(splitDimensions(args)), header: { title: null, labelLimit: panelWidth } },
     columns,
     spacing: { row: SPACING + 8, column: SPACING },
-    spec: { width: panelWidth, height: panel, ...unit },
+    spec: { width: panelWidth, height: plotHeight(args, quantity), ...unit },
     resolve: { scale: { y: args.state.y } },
   } as unknown as TopLevelSpec
 }

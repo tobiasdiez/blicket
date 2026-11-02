@@ -1,6 +1,6 @@
 import type { TopLevelSpec } from 'vega-lite'
 import type { YAxis } from '../lib/controls'
-import type { TableSchema } from '../lib/manifest'
+import type { Scale, TableSchema } from '../lib/manifest'
 import type { Row } from '../lib/table'
 
 export type Theme = 'light' | 'dark'
@@ -24,7 +24,9 @@ export interface PlotArgs {
   schema: TableSchema
   /** The plot's channels, such as `x`, mapped to column names. */
   mapping: Record<string, string>
-  /** The unit of the measure, if the Blick names one. */
+  /** The scales of the channels whose axis is not linear, such as `{ x: 'log' }`; without it, every axis is linear. */
+  scales?: Record<string, Scale>
+  /** The unit of the measure on y, if the Blick names one. */
   unit: string | null
   state: { splits: string[], y: YAxis }
   /** The baseline's rows after the same filters, when the chart is compared with a baseline. */
@@ -32,6 +34,10 @@ export interface PlotArgs {
   theme: Theme
   /** The name exported images get, without extension. */
   name: string
+  /** A small chart, as the overview's cards draw: lower, without legend and export menu. */
+  compact?: boolean
+  /** Of a change chart, the arguments of the chart of the measure above it, whose axes it lines up with. */
+  above?: PlotArgs
 }
 
 /** The browser half of a plot type: draws into `el` and resolves to what removes the chart. */

@@ -12,7 +12,7 @@ from typer.testing import CliRunner, Result
 import blicket as bk
 from blicket import cli, manifest
 from blicket.baseline import FETCH_HINT
-from tests.support import VALUES, commit_all, git, make_build_project, make_run
+from tests.support import SKIPPING_VALUES, VALUES, commit_all, git, make_build_project, make_run
 
 runner = CliRunner()
 
@@ -181,6 +181,25 @@ def test_a_failing_blick_exits_2_and_its_error_is_listed_once(commit: str) -> No
         "flagged: 1 of 2 Blicks\n"
         f"comparison → .blicket/build/{current}/compare/{a}\n"
     )
+
+
+def test_a_blick_skipped_since_the_baseline_is_flagged_removed(commit: str) -> None:
+    a = built(check("runs/a", "--push"))
+    Path("blicks/a.py").write_text(SKIPPING_VALUES)
+    result = check("runs/a")
+    assert result.exit_code == 1
+    lines = result.stdout.splitlines()
+    assert "vs baseline: 1 skipped · 1 removed" in lines
+    assert lines[-3:] == ["", "removed", "  a/values  skipped: the run has no trade module"]
+    assert f"baseline {a} · run a · blicks at {commit} · built {made(a)}" in lines
+
+
+def test_a_blick_skipped_in_both_builds_is_skipped_not_unchanged(commit: str) -> None:
+    Path("blicks/a.py").write_text(SKIPPING_VALUES)
+    check("runs/a", "--push")
+    result = check("runs/rerun")
+    assert result.exit_code == 0, result.output
+    assert "\nvs baseline: 1 skipped\nnothing flagged\n" in result.stdout
 
 
 def test_an_incomplete_build_with_nothing_flagged_says_so(commit: str) -> None:

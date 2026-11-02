@@ -4,7 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import ClassVar, Literal
+from typing import ClassVar, Literal, get_args
 
 import polars as pl
 
@@ -13,16 +13,52 @@ from blicket.plots._diff import compare
 from blicket.schema import Change, Control, TableSchema
 
 ChannelKind = Literal["dimension", "measure"]
+# How an axis maps values to positions; ``linear`` is every axis's default.
+Scale = Literal["linear", "log"]
+
+
+def _close(word: object, options: Sequence[str]) -> str:
+    """A " did you mean …?" for a misspelled ``word``, or nothing."""
+    close = did_you_mean(word.lower(), options) if isinstance(word, str) else None
+    return f" did you mean {close!r}?" if close else ""
 
 
 @dataclass(frozen=True)
 class Channel:
-    """A visual channel of a plot type, such as ``x`` or ``color``."""
+    """A visual channel of a plot type, such as ``x`` or ``color``.
+
+    ``scales`` are the axis scales a Blick can give the channel besides ``linear``, which every
+    axis has and a channel with scales takes too: ``("log",)`` for a continuous axis, empty for a
+    channel that is no continuous axis, such as a colour, a line type or a bar's band. They are
+    stored without ``linear`` and without repeats, as a tuple even when given as a list. A plot
+    type's factory takes the scale of a channel ``x`` as the argument ``x_scale``, as
+    ``bk.plots.line`` does, and messages name it so.
+    """
 
     name: str
     kind: ChannelKind
     required: bool = False
     doc: str = ""
+    scales: tuple[Scale, ...] = ()
+
+    def __post_init__(self) -> None:
+        scales: object = self.scales
+        if isinstance(scales, str) or not isinstance(scales, tuple | list):
+            example = f"({scales!r},)" if isinstance(scales, str) else "('log',)"
+            raise DefinitionError(
+                f"channel {self.name!r}: scales= takes a tuple of scale names, such as "
+                f"scales={example}, not {scales!r}"
+            )
+        known = get_args(Scale)
+        others = tuple(s for s in known if s != "linear")
+        for scale in scales:
+            if scale not in known:
+                raise DefinitionError(
+                    f"channel {self.name!r}: scales= names {scale!r}, which is no scale;"
+                    f"{_close(scale, others)} write scales={others!r}; 'linear' is implied"
+                )
+        declared = tuple(s for s in dict.fromkeys(scales) if s != "linear")
+        object.__setattr__(self, "scales", declared)
 
 
 class PlotType(ABC):
@@ -77,8 +113,9 @@ class PlotType(ABC):
 class BuiltinPlotType(PlotType):
     """The built-ins declare their channels and share ``controls`` and ``diff``.
 
-    ``stacked`` says that the layers of the ``color`` channel are stacked, so ``diff`` measures
-    against the height of the stacks and compares their sums as well.
+    ``stacked`` says that the layers of the ``color`` channel are stacked, positive values up and
+    negative ones down, so ``diff`` measures against the height of the stacks and compares their
+    positive and negative sums as well (see ``compare``).
     """
 
     stacked: ClassVar[bool] = False
@@ -101,32 +138,70 @@ class BuiltinPlotType(PlotType):
         panels: Sequence[str],
     ) -> Change:
         """Compare the measure on ``y``, as stacks of the ``color`` layers for a stacked type; the
-        other channels play no part."""
+        other channels play no part, and the measures on them, such as a scatter's ``x``, are
+        not compared."""
         if "y" not in mapping:
             raise ValueError(f"the mapping binds no column to y, which {self.name} needs")
         stacked_by = mapping.get("color") if self.stacked else None
-        return compare(baseline, current, mapping["y"], panels, stacked_by)
+        measures = [
+            mapping[c.name]
+            for c in self.channels
+            if c.kind == "measure" and c.name != "y" and c.name in mapping
+        ]
+        return compare(baseline, current, mapping["y"], panels, stacked_by, measures=measures)
 
 
 def _unknown_channel(plot_type: str, channel: str, known: Sequence[str]) -> str:
-    close = did_you_mean(channel, known)
-    hint = f" did you mean {close!r}?" if close else ""
     return (
-        f"plot type {plot_type} has no channel {channel!r};{hint} channels of {plot_type}: "
-        f"{', '.join(known)}"
+        f"plot type {plot_type} has no channel {channel!r};{_close(channel, known)} channels of "
+        f"{plot_type}: {', '.join(known)}"
     )
+
+
+def _checked_scales(
+    plot_type: PlotType, mapping: Mapping[str, str], scales: Mapping[str, Scale]
+) -> dict[str, Scale]:
+    """``scales`` without ``linear``, once each names a scale the channel takes, and a channel the
+    mapping binds unless the scale is ``linear``."""
+    name = plot_type.name
+    by_name = {channel.name: channel for channel in plot_type.channels}
+    for channel, scale in scales.items():
+        if channel not in by_name:
+            raise DefinitionError(_unknown_channel(name, channel, list(by_name)))
+        given = f"{channel}_scale={scale!r}"
+        declared = by_name[channel].scales
+        if not declared:
+            raise DefinitionError(
+                f"{given}: channel {channel!r} of plot type {name} takes no scale; drop the scale"
+            )
+        takes = ("linear", *declared)
+        if scale not in takes:
+            raise DefinitionError(
+                f"{given} is no scale of {channel} in plot type {name};{_close(scale, takes)} it "
+                f"takes {' or '.join(map(repr, takes))}"
+            )
+        if channel not in mapping and scale != "linear":
+            raise DefinitionError(
+                f"{given} needs a column on {channel}; map {channel} to a column or drop the scale"
+            )
+    return {channel: scale for channel, scale in scales.items() if scale != "linear"}
 
 
 @dataclass(frozen=True)
 class PlotSpec:
-    """A plot type with a mapping from its channels to table columns.
+    """A plot type with a mapping from its channels to table columns, and the axis scales of the
+    channels.
 
-    The mapping is checked against the channels on construction; the columns themselves are not
-    checked here.
+    The mapping and the scales are checked against the channels on construction; the columns
+    themselves are not checked here. A scale names a scale the channel takes: ``linear``, or one
+    of its ``scales``, which only a channel the mapping binds can have. ``linear``, every axis's
+    default, is left out of ``scales``, so a spec that names it equals one that does not. Messages
+    name the scale of a channel ``x`` by the factory argument ``x_scale``.
     """
 
     plot_type: PlotType
     mapping: Mapping[str, str] = field(default_factory=dict)
+    scales: Mapping[str, Scale] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         if not isinstance(self.plot_type, PlotType):
@@ -154,9 +229,18 @@ class PlotSpec:
                     f"type {name}; bind each column to one channel"
                 )
             seen[column] = channel
+        scales = _checked_scales(self.plot_type, mapping, self.scales)
         object.__setattr__(self, "mapping", MappingProxyType(mapping))
+        object.__setattr__(self, "scales", MappingProxyType(scales))
 
 
-def make_spec(plot_type: PlotType, **mapping: str | None) -> PlotSpec:
-    """Build a spec from factory arguments, leaving out the channels passed as ``None``."""
-    return PlotSpec(plot_type, {k: v for k, v in mapping.items() if v is not None})
+def make_spec(
+    plot_type: PlotType, *, scales: Mapping[str, Scale | None] | None = None, **mapping: str | None
+) -> PlotSpec:
+    """Build a spec from factory arguments, leaving out the channels and scales passed as
+    ``None``."""
+    return PlotSpec(
+        plot_type,
+        {k: v for k, v in mapping.items() if v is not None},
+        {k: v for k, v in (scales or {}).items() if v is not None},
+    )

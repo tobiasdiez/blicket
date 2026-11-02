@@ -4,15 +4,19 @@ record them in: definitions and entries."""
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, Self
 
-from pydantic import AfterValidator, BaseModel, ConfigDict, computed_field
+from pydantic import AfterValidator, BaseModel, ConfigDict, Field, computed_field, model_validator
 
 from blicket.errors import Problem, Source
-from blicket.plots import PlotSpec
+from blicket.plots import PlotSpec, Scale
 from blicket.schema import Control, ControlKind, TableSchema
 
 type Transform = Callable[[Any], Any]
+
+# What became of a Blick in a build: it built a table, its transformation skipped the run, or it
+# failed.
+type Status = Literal["ok", "skipped", "error"]
 
 
 def _inside_the_build(path: str) -> str:
@@ -38,12 +42,18 @@ class Group(BaseModel):
 
 
 class PlotDefinition(BaseModel):
-    """A Blick's plot as recorded: the plot type's name and the mapping of channels to columns."""
+    """A Blick's plot as recorded: the plot type's name, the mapping of channels to columns, and
+    the scales of the channels whose axis is not linear, such as ``{"y": "log"}``.
+
+    ``scales`` is left out of the dump when empty, so a plot with linear axes is recorded as one
+    of a plot type without scales.
+    """
 
     model_config = ConfigDict(frozen=True)
 
     type: str
     mapping: dict[str, str]
+    scales: dict[str, Scale] = Field(default={}, exclude_if=lambda scales: not scales)
 
 
 class BlickDefinition(BaseModel):
@@ -75,8 +85,10 @@ class BlickEntry(BaseModel):
     Blick's arguments were invalid. ``data``, ``hash``, ``rows`` and ``columns`` describe the
     table a build wrote, ``data`` as a relative path that stays inside the build directory, and
     ``controls`` are what the viewer offers for it: the plot type's controls with the requests of
-    ``definition.controls`` and ``definition.defaults`` applied. ``status`` is ``error`` when a
-    problem is an error.
+    ``definition.controls`` and ``definition.defaults`` applied. ``skipped`` is the reason a
+    transformation gave when it skipped the run with ``bk.Skip``; an entry with a reason has no
+    table, no controls and no problems. ``status`` is ``skipped`` when ``skipped`` is set, else
+    ``error`` when a problem is an error, else ``ok``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -94,12 +106,24 @@ class BlickEntry(BaseModel):
     columns: TableSchema | None = None
     controls: tuple[Control, ...] = ()
     timing_ms: float | None = None
+    skipped: str | None = None
     problems: tuple[Problem, ...] = ()
 
     @computed_field
     @property
-    def status(self) -> Literal["ok", "error"]:
+    def status(self) -> Status:
+        if self.skipped is not None:
+            return "skipped"
         return "error" if any(p.severity == "error" for p in self.problems) else "ok"
+
+    @model_validator(mode="after")
+    def _skipped_has_nothing(self) -> Self:
+        table = (self.data, self.hash, self.rows, self.columns)
+        if self.skipped is not None and (
+            any(part is not None for part in table) or self.controls or self.problems
+        ):
+            raise ValueError("a skipped Blick has no table, controls or problems")
+        return self
 
     @property
     def panels(self) -> tuple[str, ...]:
@@ -144,7 +168,11 @@ class Blick:
             description=self.description,
             unit=self.unit,
             tags=self.tags,
-            plot=PlotDefinition(type=self.plot.plot_type.name, mapping=dict(self.plot.mapping)),
+            plot=PlotDefinition(
+                type=self.plot.plot_type.name,
+                mapping=dict(self.plot.mapping),
+                scales=dict(self.plot.scales),
+            ),
             independent_y=self.independent_y,
             controls=dict(self.controls),
             defaults=dict(self.defaults),
@@ -184,9 +212,11 @@ class Blick:
         rows: int | None = None,
         columns: TableSchema | None = None,
         timing_ms: float | None = None,
+        skipped: str | None = None,
     ) -> BlickEntry:
         """The Blick as a report records it, with what a build made of it, if anything: its
-        table's schema ``columns`` and the controls derived for it."""
+        table's schema ``columns`` and the controls derived for it, or the reason it ``skipped``
+        the run."""
         return BlickEntry(
             id=self.id,
             name=self.id,
@@ -201,6 +231,7 @@ class Blick:
             columns=columns,
             controls=self._controls_for(columns) if columns is not None else (),
             timing_ms=timing_ms,
+            skipped=skipped,
             problems=problems,
         )
 

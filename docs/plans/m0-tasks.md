@@ -1,10 +1,11 @@
 # M0 in tasks
 
-Status: proposed on 2026-10-23, before any code, revised the same day after an independent review.
-Splits milestone M0 of [architecture.md](../architecture.md) ("Headless build and compare on
-remind-mfa") into tasks sized for one plan → review → implement → review loop each. The order
-follows the dependencies, and every task leaves something runnable. Each task gets its own plan
-file in this directory when it starts; the first one is
+Status: proposed on 2026-10-23, before any code, revised the same day after an independent review;
+M0 closed on 2026-10-26 (see "M0 closed" after the tasks). Splits milestone M0 of
+[architecture.md](../architecture.md) ("Headless build and compare on remind-mfa") into tasks
+sized for one plan → review → implement → review loop each. The order follows the dependencies,
+and every task leaves something runnable. Each task gets its own plan file in this directory when
+it starts; the first one is
 [m0-1-skeleton-and-registry.md](m0-1-skeleton-and-registry.md).
 
 ## Facts gathered on 2026-10-23 that shape the split
@@ -29,7 +30,8 @@ file in this directory when it starts; the first one is
 - The pickled model exposes `future_mfa` and `historical_mfa`, flodym `MFASystem`s with 52 flows,
   5 stocks and 8 dimensions (Time, Historical Time, Region, Element, Polymer, Polymer Type, End
   Use, Driver Scenario). `FlodymArray.to_df()` yields a long table with a named MultiIndex, and
-  blicket accepts the array itself. A pickle loads only with the remind-mfa version that wrote it.
+  blicket accepts the array itself. A pickle loads only with the remind-mfa version that wrote it;
+  the runs of `a7c389a` also load at `710302d`, whose classes still match.
 - Toolchain on this machine: uv 0.13.5, meson and ninja installed, CPython 3.14.8 as system
   Python.
 
@@ -174,9 +176,9 @@ architecture) and the baseline tables of the Blicks flagged `value` or `schema` 
 The Markdown summary (the `report.md` of the architecture) goes to `$GITHUB_STEP_SUMMARY` only;
 `--push` pushes the build, `compare/` included on its first push; `--json` puts the comparison on
 stdout and the report on stderr; exit codes 0, 1 on flags, 2 on errors or a baseline that cannot
-be resolved. `serve` sends the comparison JSON with `no-cache`. The README's `check` walkthrough,
-listed under M0.8, came with this task. Deferred: the per-Blick fallback to older candidates (to
-the accept design); adding comparisons to a build already in the store; and the status of a Blick
+be resolved. `serve` sends the comparison JSON with `no-cache`. The README's `check` walkthrough
+came with this task. Deferred: the per-Blick fallback to older candidates (to the accept design);
+adding comparisons to a build already in the store; and the status of a Blick
 that does not apply to a run (a plastics Blick on a steel run), which waits for the multi-model
 example, with the constraint that such a Blick stays in the manifest with a status of its own,
 neither `error` nor `removed`, and that a Blick that built in the baseline but is skipped now, in
@@ -202,15 +204,82 @@ percent of the chart's scale, as the viewer does. Left to M4's first plot type t
 facet: a colour dimension with many values offered as a split by the plot type's `controls`, and
 a plot type's veto of a `split` the author asked for.
 
-### M0.8 Measurements, defaults and M0 verification
+### M0.8 Measurements, defaults and M0 verification (built on 2026-10-26)
 
-A fresh remind-mfa run from the current checkout on this machine, checked against a build of an
-older run, confirming or correcting the `tolerance` default; measurements recorded in `docs/`. Walk
-the M0 verification list of the architecture, with the cross-machine item waived. A README with
-installation (the `check` walkthrough came with M0.7).
+The plan is `m0-8-measurements-and-verification.md`; its Measurements and Verification walk hold
+the numbers. Three outcomes: the `tolerance` default stays 1e-5, since two fresh reruns of
+remind-mfa at `710302d` on input data 2.9.1 give identical tables and a `check` of one against
+the other reports `10 unchanged`; no loader cache, since a run loads in 0.6 to 1 s; and every M0
+item of the verification list holds on this machine, the cross-machine items waived. The README
+gained an Installation section, checked by installing the wheel, and on 2026-10-27 the git source
+of the public repository, into scratch projects, and the
+example's README gained the run command per remind-mfa commit and the second generation of
+runs. No change to `src/`.
 
-Done when the fresh rerun produces zero `value` flags at the defaults, and every other M0 item in
-the verification list holds.
+## M0 closed (2026-10-26)
+
+All M0 tasks are built except M0.4, which was dropped; M1 was built along the way. The M0 items
+of the verification list hold on this machine, the cross-machine items waived. Open from M0 and
+M1, each where its entry put it:
+
+- The per-Blick fallback to older baseline candidates, and comparisons added to a build already
+  in the store: with the accept design (M3).
+- The status of a Blick that does not apply to a run: built on 2026-11-02 as `bk.Skip`, raised by
+  the transformation; the Blick is recorded as `skipped` with the reason, the build report groups
+  the skipped Blicks by reason, and the comparison counts them as `skipped`, `removed` when the
+  baseline had a table, `new` when the baseline skipped. Written against the remind-mfa Blicks
+  of three models, without a plan file.
+- Hiding dimensions that others determine: when a project needs it.
+- The trade Blick, which waits for a sign convention, a plot-type question (M4).
+- Plot factories derived from the channel declarations, a colour dimension with many values
+  offered as a split by the plot type's `controls`, and a plot type's veto of a split (M4).
+- M1's out-of-scope list in `m1-viewer.md`: thumbnails on the overview, a `file://` folder
+  picker, end-to-end browser tests (Playwright), the switch to turn off the copying of the viewer
+  into build directories, and consistent colours per dimension value across Blicks.
+- The backlog below.
+
+What M2 starts from:
+
+- The "M2 start" note under M1 below, for the dev server and the viewer's reload.
+- The discovery primitives listed under "Not in M0" at the end, for reloading a module.
+- For the Blick builder: the dataset protocol sketched in `m0-3-remind-mfa-adapter.md`. The run
+  picker has nothing to build on yet: the adapter has no `discover(root)` and no labels, and the
+  example's loader takes one path.
+- Scatter and table plug into the shared diff routine and `controls_for`, as the built-ins do.
+- The measurements: a remind-mfa run loads in 0.6 to 1 s and its ten Blicks build in about 0.1 s
+  together, so the dev server can hold the run in memory and rebuild a Blick per edit.
+- The hot-reload item of the verification list, M2's own check; and two backlog items that need
+  the dev server: "Viewer test data", served when no project is running, and the IDE link from
+  "defined at", which needs the project root the dev server knows.
+
+## M2 in tasks (2026-10-27)
+
+Tobias put the Blick builder first; M2 is three tasks.
+
+### M2.1 The Blick builder, on the dev server (built on 2026-10-27)
+
+The plan is `m2-1-blick-builder.md`. The dataset protocol (`bk.Quantity`, `bk.Dataset`,
+`bk.Dimension` and `dataset(run)` in the loader's module, `dataset.py`; `bk.Frames`, the stock
+dataset over tables, added 2026-10-28), remind-mfa's dataset in `blicketconf.py` (112 quantities
+on the example runs at remind-mfa `710302d`, a `Frames` over the arrays), the builder's
+query (`query.py`), `build()` split into `prepare`, `load` and `write`, the comparison of `check`
+in `check.py`, and `blicket dev`: a check without the push, then the stdlib server with a
+session (`dev.py`) that keeps the run, answers `manifest.json` from memory with the header
+`Blicket-Dev: 1`, and serves `dev/info`, `dev/dataset`, `dev/query` and the query tables through
+a route table. The viewer's builder page composes the chart area from the Blick page's
+components, which it shares with the Blick page (the tabs, the CSV download). Two review rounds
+changed the split of panels and filters, the required channel, the dimming of a stale chart, the
+no-Blicks start, the server's handling of request bodies and more; the plan's Deviations list
+them. The hand tests on the example in headless Chrome are in the plan.
+
+### M2.2 The dev loop (planned)
+
+The plan is `m2-2-dev-loop.md`: code reload, the run poller with a restart, the viewer's refresh
+and dev indicator, the fixture project, the editor link.
+
+### M2.3 Scatter and table
+
+Both halves of the `scatter` and `table` plot types; not planned yet.
 
 ## Decisions taken on 2026-10-23
 
@@ -249,7 +318,9 @@ Notes from the M1 architecture review for the tasks that follow:
   (`serve` becomes `dev` without the watcher); `build_directory`, `newest_build`, the lookup rule
   (installed viewer first) and the no-cache set survive. `useManifest` gains `reload()` for the
   SSE refetch that keeps control state, and `useComparison` beside it, which keeps the chosen
-  baseline when the reload still lists it.
+  baseline when the reload still lists it. Superseded in part by M2.1 (2026-10-27): the stdlib
+  server stays, with a session object for `dev`, and M2.2 polls `dev/info` instead of streaming
+  events; the reloads are M2.2's.
 - **M4 start.** The plot module contract passes `theme` as a tokens object (mode, categorical
   palette, ink, Vega config) and the registry becomes `resolvePlotType(name): Promise`, so a module
   loaded from the build directory needs no bundled import. Whether the helpers in `layout.ts` and
@@ -269,11 +340,18 @@ Not scheduled; each is a task of its own or joins the milestone named.
   does not hold today (M2's dev server knows it).
 - **The plot type chips are not helpful.** `line`, `stacked_area` and the role chips on the
   overview and the Blick page say nothing a researcher needs; drop them or replace them with
-  something that does (the unit, the last change).
+  something that does (the unit, the last change). Done for the overview on 2026-10-28, which
+  dropped them ([overview-sidebar-and-previews.md](overview-sidebar-and-previews.md)); the Blick
+  page keeps its text line with the plot type and the unit.
 - **The overview needs a revamp for REMIND's scale.** Hundreds of Blicks will not work as one
   grouped list. Likely shape: the user, not the project, pins a few favourites, which the overview
   shows in detail (chart included); the rest stays searchable. User-level state, so stored in the
-  browser or a user config, not in the project.
+  browser or a user config, not in the project. Done on 2026-10-28
+  ([overview-sidebar-and-previews.md](overview-sidebar-and-previews.md)): the Blicks are in a
+  sidebar on every page, by group and searchable, and the overview shows the changed Blicks and the
+  pinned ones as small charts. Pins are the user's, kept in the browser per origin as a list of
+  Blick ids and shared by every catalog served from one origin; a project-side default waits for a
+  project that needs it, since it would change the manifest's spec.
 - **The header's "Blick code e7a2a23".** It is the git commit of the project that defines the
   Blicks (the manifest's `repository`), not blicket's version; the example lives inside the blicket
   repository, so the two coincide there. The label does not say that; rename it (for example
@@ -282,6 +360,12 @@ Not scheduled; each is a task of its own or joins the milestone named.
   regions (the sum, named "World"). Best supported by blicket itself with a helper, the name and
   the aggregation (sum) given per Blick or once in the project config, so every regional Blick
   gets it without repeating the code.
+- **Narrow screens below 390 px** (from the M2.1 review): at 320 px the builder's chart
+  overflows by 14 px when a Time range is set, and the overview by 50 px.
+- **Unit tests of the dev composables** (from the M2.1 review): `devResource.ts` and
+  `useQuery.ts` cannot be loaded under plain vitest because of Nuxt's auto-imports, so their
+  logic is checked by hand; moving the pure parts into `app/lib/`, as `lib/latest.ts` and
+  `lib/dev.ts` already are, would let vitest cover them.
 
 ## Not in M0
 

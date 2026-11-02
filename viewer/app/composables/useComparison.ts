@@ -42,8 +42,9 @@ async function load(): Promise<void> {
  * The comparisons that `blicket check` wrote into the build directory, fetched once; `baselines`
  * are those offered, with a build of another run, in the order of `compare/index.json`. `chosen`
  * is the baseline shown, at first the one of them checked last, `null` for none; `comparison` is
- * its comparison and `blicks` its current Blicks by name. A build that was never compared has
- * none, and no error.
+ * its comparison and `blicks` every Blick of it by name. The build's own Blicks find themselves
+ * there, a skipped one that the comparison removes too; a Blick of the baseline only has a name
+ * that no Blick of the build has. A build that was never compared has none, and no error.
  */
 export function useComparison() {
   if (!requested) {
@@ -51,8 +52,6 @@ export function useComparison() {
     void load()
   }
   const comparison = computed(() => baselines.value.find(c => c.baseline.id === chosen.value) ?? null)
-  const blicks = computed(() => new Map<string, BlickComparison>((comparison.value?.blicks ?? [])
-    .filter(b => !b.change.flags.includes('removed'))
-    .map(b => [b.name, b])))
+  const blicks = computed(() => new Map<string, BlickComparison>((comparison.value?.blicks ?? []).map(b => [b.name, b])))
   return { baselines, chosen, comparison, blicks, loading, error }
 }

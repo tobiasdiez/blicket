@@ -106,9 +106,41 @@ def values(run):
 """
 
 
+# VALUES with a transformation that skips every run.
+SKIPPING_VALUES = VALUES.replace(
+    "    return", '    raise bk.Skip("the run has no trade module")\n    return'
+)
+
+
 def make_viewer(directory: Path, text: str = "viewer") -> Path:
     """A generated viewer: ``index.html`` and an asset, both naming ``text``."""
     (directory / "_nuxt").mkdir(parents=True)
     (directory / "index.html").write_text(f"<html>{text}</html>")
     (directory / "_nuxt" / f"{text}.js").write_text(f"// {text}")
     return directory
+
+
+# A dataset for runs of LOADER, appended to its module: one quantity over the years of VALUES.
+DATASET = """
+
+import polars as pl
+
+
+class Values:
+    def __init__(self, run):
+        self.frame = pl.DataFrame({"year": [2020, 2021, 2022], "value": run["values"]})
+
+    def quantities(self):
+        return [bk.Quantity(name="values", unit="t", dimensions=("year",))]
+
+    def dimensions(self):
+        return [bk.Dimension(name="year", dtype="integer", values=[2020, 2021, 2022])]
+
+    def select(self, quantity, keep, values):
+        frame = self.frame.filter(pl.col("year").is_in(values.get("year", [2020, 2021, 2022])))
+        return frame.select(*keep, "value")
+
+
+def dataset(run):
+    return Values(run)
+"""

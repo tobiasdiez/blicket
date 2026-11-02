@@ -1,0 +1,35 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "release-type": "python",
+  "pull-request-title-pattern": "chore: release${component} ${version}",
+  "include-component-in-tag": false,
+  "bump-minor-pre-major": true,
+  "changelog-sections": [
+    { "type": "feat", "section": "🔖 Features", "hidden": false },
+    { "type": "fix", "section": "🐛 Bug Fixes", "hidden": false },
+    { "type": "docs", "section": "📚 Documentation", "hidden": false },
+    { "type": "chore", "section": "🧹 Miscellaneous", "hidden": false }
+  ],
+  "extra-files": [
+    {
+      "type": "toml",
+      "path": "uv.lock",
+      "jsonpath": "$.package[?(@.name.value=='blicket')].version"
+    },
+    {
+      "type": "toml",
+      "path": "examples/remind/uv.lock",
+      "jsonpath": "$.package[?(@.name.value=='blicket')].version"
+    },
+    {
+      "type": "toml",
+      "path": "examples/remind-mfa/uv.lock",
+      "jsonpath": "$.package[?(@.name.value=='blicket')].version"
+    }
+  ],
+  "packages": {
+    ".": {
+      "initial-version": "0.1.0"
+    }
+  }
+}

@@ -286,8 +286,10 @@ viewer: http://127.0.0.1:8765/#/   (Ctrl-C stops)
 ```
 
 Without an argument, `blicket serve` serves the build of the project made last; `--port`, `--host`
-and `--open` (open the browser) do what they say. It serves nothing outside the build directory and
-the viewer. A sidebar on every page lists the Blicks by group, with a search box, a badge on each
+and `--open` (open the browser) do what they say. Without `--port`, it listens on 8765, or, when
+that port is taken, on the next free one and says so on stderr; a port that `--port` names and that
+is taken is an error. It serves nothing outside the build directory and the viewer. A sidebar on
+every page lists the Blicks by group, with a search box, a badge on each
 Blick the comparison flags (see [Comparing two builds](#comparing-two-builds)) and a filter that
 keeps those; it collapses, and on a window narrower than 1280 px it is a drawer. The overview shows
 small charts: of the Blicks that changed since the baseline, the largest change first, each at the
@@ -500,11 +502,11 @@ viewer: http://127.0.0.1:8765/#/   (Ctrl-C stops)
 
 The line `builder:` says whether the Blick builder is on, with the size of the project's dataset,
 or why it is off. `dev` takes `--against`, `--out` and `--project` as `check` does and `--port`,
-`--host` and `--open` as `serve` does; it takes the port before it loads the run, so a port in use
+`--host` and `--open` as `serve` does; it binds the port before loading the run, so a taken `--port`
 fails at once. It exits 0 when stopped with Ctrl-C, whatever the build holds: flagged Blicks and
 Blicks that fail are in the report and the viewer, and a baseline that `--against` names but cannot
 be found is in the report. Only a session that cannot start exits 2, as `check` would: an invalid
-`[tool.blicket]`, a loader that raises, no viewer, a port in use. `-v` shows tracebacks, of the
+`[tool.blicket]`, a loader that raises, no viewer, a taken `--port`. `-v` shows tracebacks, of the
 Blicks at the start and of the builder's queries while the session runs. A project with a loader and
 no Blick yet is no error in `dev`: the report says `no Blicks yet`, the build holds no Blick and is
 complete, and the overview offers the builder, as the foot of the Blick list always does. The viewer

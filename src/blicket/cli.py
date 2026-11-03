@@ -10,7 +10,8 @@ and its text report on stderr. What blicket cannot work around (a missing projec
 an invalid ``[tool.blicket]``, a failing loader, a build that cannot be written) is one
 ``error: ...`` line on stderr instead, with the project's traceback under ``-v``; an unexpected
 exception is an ``error:`` line, the traceback under ``-v``, and a line asking for a bug report.
-What project code prints goes to stderr too.
+What project code prints goes to stderr too, as does the line of ``serve`` and ``dev`` that
+the default port is taken and which one they listen on instead.
 """
 
 import importlib.metadata
@@ -121,7 +122,16 @@ AgainstOption = Annotated[
     ),
 ]
 PortOption = Annotated[
-    int, typer.Option(help="The port to listen on (0: any free port).", min=0, max=65535)
+    int | None,
+    typer.Option(
+        help=(
+            f"The port to listen on (default: {serve.DEFAULT_PORT}, or the next free one; "
+            "0: any free port)."
+        ),
+        min=0,
+        max=65535,
+        show_default=False,
+    ),
 ]
 HostOption = Annotated[str, typer.Option(help="The address to listen on.")]
 OpenOption = Annotated[bool, typer.Option("--open", help="Open the viewer in your browser.")]
@@ -201,7 +211,7 @@ def serve_command(
             show_default=False,
         ),
     ] = None,
-    port: PortOption = serve.DEFAULT_PORT,
+    port: PortOption = None,
     host: HostOption = serve.DEFAULT_HOST,
     open_browser: OpenOption = False,
     project: ProjectOption = None,
@@ -213,7 +223,7 @@ def serve_command(
         if directory is None
         else serve.build_directory(directory)
     )
-    server = serve.make_server(path, host, port)
+    server = _make_server(path, host, port)
     if directory is None:
         typer.echo(f"build {path.name} → {display_path(path, Path.cwd())}")
     typer.echo(f"viewer: {server.url}#/   (Ctrl-C stops)")
@@ -335,7 +345,7 @@ def check_command(
 def dev_command(
     runs: RunsArgument,
     against: AgainstOption = None,
-    port: PortOption = serve.DEFAULT_PORT,
+    port: PortOption = None,
     host: HostOption = serve.DEFAULT_HOST,
     open_browser: OpenOption = False,
     project: ProjectOption = None,
@@ -354,7 +364,7 @@ def dev_command(
     """
     root = _root(project)
     # Bound first, so that a port in use fails before the run is loaded.
-    server = serve.make_server(host=host, port=port)
+    server = _make_server(None, host, port)
     try:
         session, report = dev.start(root, runs, out=out, against=against, verbose=verbose)
     except BaseException:
@@ -366,6 +376,16 @@ def dev_command(
     if open_browser:
         webbrowser.open(server.url)
     serve.run(server)
+
+
+def _make_server(directory: Path | None, host: str, port: int | None) -> serve.Server:
+    """The server of ``serve`` or ``dev``; without ``port``, a line on stderr says when the
+    default port is taken and which one the server listens on instead."""
+    server = serve.make_server(directory, host, port)
+    bound = server.server_address[1]
+    if port is None and bound != serve.DEFAULT_PORT:
+        typer.echo(f"port {serve.DEFAULT_PORT} is in use; listening on {bound} instead", err=True)
+    return server
 
 
 def _build_or_exit(

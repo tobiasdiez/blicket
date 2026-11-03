@@ -6,14 +6,24 @@ lists them with every problem it finds in their definitions, builds their tables
 shows them in a web viewer, compares two builds, and checks a run against its baseline; while you
 develop, it keeps a run in memory and charts any quantity of it in a Blick builder. The idea
 behind it is in
-[docs/concept.md](docs/concept.md), the design in [docs/architecture.md](docs/architecture.md).
+[docs/concept.md](https://github.com/tobiasdiez/blicket/blob/main/docs/concept.md), the design in
+[docs/architecture.md](https://github.com/tobiasdiez/blicket/blob/main/docs/architecture.md).
 
 ## Installation
 
-blicket is not yet on PyPI; [uv](https://docs.astral.sh/uv/) builds it from its repository and
-fetches Python 3.14 when the machine lacks it. The project's `pyproject.toml` needs
-`requires-python = ">=3.14"`, a `[tool.blicket]` table, which may be empty, and a build setting
-for the viewer:
+blicket is on [PyPI](https://pypi.org/project/blicket/) and can be installed via
+
+```console
+$ uv add blicket
+$ uv run blicket --version
+```
+
+`pip install blicket` works as well, in any environment with Python 3.14 or newer.
+
+### From the repository
+
+Changes that are not released yet come from the repository, with a build setting for the viewer
+in the project's `pyproject.toml`:
 
 ```toml
 [tool.uv.config-settings-package]
@@ -22,38 +32,10 @@ blicket = { setup-args = "-Dviewer=enabled" }
 
 ```console
 $ uv add git+https://github.com/tobiasdiez/blicket
-$ uv run blicket --version
 ```
 
-uv records the commit in `uv.lock`; `uv lock --upgrade-package blicket` moves to the newest one.
-The build generates the viewer and bundles it, which takes Node 24 or newer,
-[pnpm](https://pnpm.io/installation) and network access on every machine that syncs the project,
-since each builds blicket. Without the setting the build needs neither, but `blicket build`,
-`serve` and `dev` stop with an error, as they need a viewer. [Defining Blicks](#defining-blicks)
-leads to the first `blicket list`.
-
-### From a wheel
-
-For machines without Node, such as a cluster, one person builds a wheel and hands the file
-around. In a clone of the repository, with uv, Node 24 or newer, pnpm and network access:
-
-```console
-$ uv sync
-$ uv build --wheel -Csetup-args=-Dviewer=enabled
-```
-
-Without the `uv sync` before it, the build fails with `No module named 'mesonpy'`;
-[Development](#development) says why. The wheel is `dist/blicket-<version>-py3-none-any.whl`, one
-wheel for every platform, with the viewer inside. In the project, with the wheel copied to
-`wheels/`:
-
-```console
-$ uv add wheels/blicket-<version>-py3-none-any.whl
-```
-
-`uv add` records the wheel's path under `[tool.uv.sources]` and in `uv.lock`, so a wheel kept
-inside the project is one that colleagues can `uv sync` as well; an absolute path works on one
-machine only.
+The build generates the viewer and bundles it, which takes Node 24 or newer, and
+[pnpm](https://pnpm.io/installation).
 
 ## Defining Blicks
 
@@ -595,20 +577,20 @@ than such an object, is a warning at start, and the builder is off for the sessi
 
 ## Examples
 
-[examples/remind-mfa](examples/remind-mfa) is a project on runs of remind-mfa's plastics model: a
-loader that unpickles a run, and ten Blicks, mostly ported from remind-mfa's own figures, which
-return flodym arrays and pandas frames. It has its own uv environment with remind-mfa from a
-checkout next to this repository. The runs are not in the repository, and producing one needs
-remind-mfa's input data, which is not public; the example's README says how to set it up and build
-a run.
+[examples/remind-mfa](https://github.com/tobiasdiez/blicket/tree/main/examples/remind-mfa) is a
+project on runs of remind-mfa's plastics model: a loader that unpickles a run, and ten Blicks,
+mostly ported from remind-mfa's own figures, which return flodym arrays and pandas frames. It has
+its own uv environment with remind-mfa from a checkout next to this repository. The runs are not in
+the repository, and producing one needs remind-mfa's input data, which is not public; the example's
+README says how to set it up and build a run.
 
-[examples/remind](examples/remind) is a project on runs of the integrated assessment model REMIND:
-a loader that reads the reporting (mif files) of several REMIND output folders into one run, the
-scenario as a dimension, and 20 Blicks that carry the "Summary" chapter of REMIND's
-`compareScenarios` report, so that a week of model development shows as flagged Blicks. Its
-environment needs only blicket and pyyaml. The runs are REMIND's weekly test runs on the PIK
-cluster, not in the repository; the example's README says how to fetch them, build, check and
-look at them.
+[examples/remind](https://github.com/tobiasdiez/blicket/tree/main/examples/remind) is a project on
+runs of the integrated assessment model REMIND: a loader that reads the reporting (mif files) of
+several REMIND output folders into one run, the scenario as a dimension, and 20 Blicks that carry
+the "Summary" chapter of REMIND's `compareScenarios` report, so that a week of model development
+shows as flagged Blicks. Its environment needs only blicket and pyyaml. The runs are REMIND's weekly
+test runs on the PIK cluster, not in the repository; the example's README says how to fetch them,
+build, check and look at them.
 
 ## Development
 
@@ -621,10 +603,10 @@ uv run ruff check . && uv run ruff format --check .
 uv run ty check
 ```
 
-The viewer is a Nuxt app in [viewer/](viewer); its README says how to work on it, with Node and
-pnpm. A development installation has no viewer of its own: generate one and point
-`BLICKET_VIEWER` at it, as an absolute path or relative to where blicket runs, for instance from
-`examples/remind-mfa`:
+The viewer is a Nuxt app in [viewer/](https://github.com/tobiasdiez/blicket/tree/main/viewer); its
+README says how to work on it, with Node and pnpm. A development installation has no viewer of its
+own: generate one and point `BLICKET_VIEWER` at it, as an absolute path or relative to where blicket
+runs, for instance from `examples/remind-mfa`:
 
 ```console
 $ (cd ../../viewer && pnpm install && pnpm generate)
@@ -634,11 +616,11 @@ $ export BLICKET_VIEWER=../../viewer/.output/public
 `blicket build` then copies it into build directories and `blicket serve` and `blicket dev` serve
 it; the three need a viewer and stop with an error without one. `BLICKET_VIEWER` wins over a
 bundled viewer, so a new viewer can be tried with an installed wheel. The meson option `viewer`
-(in `meson.options`) bundles the viewer: with it, as in [Installation](#installation), the build
-runs `pnpm install --frozen-lockfile` and `pnpm generate` and installs the site as
-`blicket/_viewer`, and it fails when pnpm is missing or cannot fetch. The option is off by
-default, so `uv sync` and the editable install need no Node, and a wheel built without it, as
-from the sdist, has no viewer.
+(in `meson.options`) bundles the viewer: with it, as in
+[From the repository](#from-the-repository), the build runs `pnpm install --frozen-lockfile` and
+`pnpm generate` and installs the site as `blicket/_viewer`, and it fails when pnpm is missing or
+cannot fetch. The option is off by default, so `uv sync` and the editable install need no Node,
+and a wheel built without it, as from the sdist on PyPI, has no viewer.
 
 blicket is built with meson-python without build isolation, so that the editable install made by
 `uv sync` can rebuild on import. The build tools therefore live in the `build` dependency group,
@@ -648,6 +630,10 @@ Every module under `src/blicket` must be listed in `meson.build` (a test checks 
 the editable package after a source edit, which takes about half a second. `uv build` packs only
 committed files; use `uv build --wheel` to try uncommitted work.
 
-## License
+Releases are made by [release-please](https://github.com/googleapis/release-please) from the
+[Conventional Commits](https://www.conventionalcommits.org/) on `main`: it keeps a release pull
+request open that sets the next version in `pyproject.toml` and the three `uv.lock` files and adds
+the commits to `CHANGELOG.md` under their type (`feat`, `fix`, `docs`, `chore`). Merging that pull
+request tags the release, and the release workflow builds the sdist, and the wheel with the
+viewer, checks that the installed wheel finds the viewer, and publishes both to PyPI.
 
-MIT

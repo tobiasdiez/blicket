@@ -33,11 +33,10 @@ $ uv run blicket build ../../data_out/remind/*2026-10-2[34]*
 $ uv run blicket serve
 ```
 
-The rest of this README says what each step does, how to compare two weeks, and what the port of
-the chapter leaves out. On a cluster without Node, blicket is installed from a wheel, as the root
-README's [From a wheel](../../README.md#from-a-wheel) says; `store = "<directory>"` in
-`[tool.blicket]` puts the store of baselines into a directory a team shares, such as one on the
-cluster's file system.
+The rest of this README says what each step does, how to compare two weeks, and what the port of the
+chapter leaves out. On a cluster without Node, blicket comes from PyPI with its viewer, as
+[Building](#building) says; `store = "<directory>"` in `[tool.blicket]` puts the store of baselines
+into a directory a team shares, such as one on the cluster's file system.
 
 ## The runs
 
@@ -152,10 +151,13 @@ blicket and pyyaml, which reads `cfg.txt`. `uv.lock` is committed.
 
 ## Building
 
-`build` copies the viewer into every build directory, and blicket installed from a checkout has
-none of its own, so `build` and `serve` stop with an error until you generate one and set
+`build` copies the viewer into every build directory, and blicket installed from a checkout has none
+of its own, so `build` and `serve` stop with an error until you generate one and set
 `BLICKET_VIEWER`, as the quick start and the [root README](../../README.md#development) show.
-Then, with the set of 2026-10-23/24:
+Without Node, the release from PyPI brings its viewer: with `UV_NO_SOURCES_PACKAGE=blicket`
+exported, `uv sync` and `uv run` install it in place of the checkout and rewrite `uv.lock` (do not
+commit that), and `BLICKET_VIEWER` is not needed; the Blicks then run on the released blicket, not
+on the checkout's. Then, with the set of 2026-10-23/24:
 
 ```console
 $ uv run blicket build ../../data_out/remind/*2026-10-2[34]*

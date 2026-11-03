@@ -84,7 +84,8 @@ Everything else uses plain English: catalog, snapshot, overview, comparison.
 
 Availability on 2026-10-22: the package name is free on PyPI, npm and crates.io; blicket.dev,
 blicket.org, blicket.app and blicket.science are free; the GitHub organization `blicket` and
-blicket.com are taken. Reserve the free ones before the first release.
+blicket.com are taken. Reserve the free ones before the first release. The PyPI name is
+blicket's since its first release, 0.1.0, on 2026-11-02.
 
 ## Jobs, in priority order
 

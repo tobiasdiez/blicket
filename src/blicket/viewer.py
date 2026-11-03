@@ -43,7 +43,7 @@ def find() -> Path:
     installed = _bundled()
     if installed is None:
         raise BlicketError(
-            "no viewer found: install blicket with its viewer (the README says how), or from a "
+            "no viewer found: install blicket from PyPI, whose wheel bundles it, or from a "
             f"checkout run `pnpm generate` in viewer/ and set {VIEWER_ENV}=viewer/.output/public"
         )
     return installed

@@ -46,6 +46,7 @@ from blicket.query import TABLES, Options, Query
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
+_DEFAULT_PORTS = 10  # how many ports from DEFAULT_PORT on a server tries when given none
 DEV_HEADER = "Blicket-Dev"
 _NO_CACHE = frozenset({"/", "/index.html", f"/{MANIFEST}"})
 _TABLE = re.compile(rf"/{TABLES}/([0-9a-f]{{64}})\.parquet")
@@ -463,21 +464,35 @@ def _own_host(given: str | None, address: Any) -> bool:
 
 
 def make_server(
-    directory: Path | None = None, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT
+    directory: Path | None = None, host: str = DEFAULT_HOST, port: int | None = None
 ) -> Server:
     """A server for the build directory ``directory`` and the viewer, bound but not serving yet.
 
-    Without ``directory``, a dev session is attached to the server before it serves. Raises
-    ``BlicketError`` when there is no viewer or the port is taken.
+    Without ``port``, it listens on ``DEFAULT_PORT``, or on the first free port of the ones after
+    it, or, when those are taken too, on any free port. Without ``directory``, a dev session is
+    attached to the server before it serves. Raises ``BlicketError`` when there is no viewer or
+    the port ``port`` is taken.
     """
     site = viewer.find()
+    if port is None:
+        for candidate in range(DEFAULT_PORT, DEFAULT_PORT + _DEFAULT_PORTS):
+            try:
+                return Server((host, candidate), site, directory)
+            except OSError as error:
+                if error.errno != errno.EADDRINUSE:
+                    raise _cannot_serve(host, candidate, error) from error
+        port = 0
     try:
         return Server((host, port), site, directory)
     except OSError as error:
-        reason = error.strerror or str(error)
-        if error.errno == errno.EADDRINUSE:
-            reason = "the port is in use; pass another with --port"
-        raise BlicketError(f"cannot serve on {host}:{port}: {reason}") from error
+        raise _cannot_serve(host, port, error) from error
+
+
+def _cannot_serve(host: str, port: int, error: OSError) -> BlicketError:
+    reason = error.strerror or str(error)
+    if error.errno == errno.EADDRINUSE:
+        reason = "the port is in use; pass another with --port"
+    return BlicketError(f"cannot serve on {host}:{port}: {reason}")
 
 
 def run(server: Server) -> None:

@@ -233,6 +233,28 @@ def test_serve_errors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     )
 
 
+def test_a_taken_default_port_moves_the_server_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    served: list[serve.Server] = []
+    monkeypatch.setattr(serve, "run", served.append)
+    build = make_build(tmp_path / "build")
+    with socket.socket() as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        monkeypatch.setattr(serve, "DEFAULT_PORT", port)
+        result = invoke(build)
+        bound = address(served[0])[1]
+        served[0].server_close()
+        assert port < bound < port + serve._DEFAULT_PORTS  # the next free one
+        assert result.stdout == f"viewer: http://127.0.0.1:{bound}/#/   (Ctrl-C stops)\n"
+        assert result.stderr == f"port {port} is in use; listening on {bound} instead\n"
+        monkeypatch.setattr(serve, "_DEFAULT_PORTS", 1)
+        with serve.make_server(build) as anywhere:
+            assert address(anywhere)[1] != port
+
+
 # ---------------------------------------------------------------------------------------------
 # blicket dev's routes
 

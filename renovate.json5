@@ -1,0 +1,83 @@
+{
+  extends: [
+    'config:best-practices',
+    ':semanticCommitTypeAll(chore)',
+    // Update lock files: https://docs.renovatebot.com/presets-default/#maintainlockfilesmonthly
+    ':maintainLockFilesMonthly',
+    // Automerge all updates once they pass tests: https://docs.renovatebot.com/presets-default/#automergeall
+    ':automergeAll',
+    // Pin Github Actions versions: https://docs.renovatebot.com/presets-helpers/#helperspingithubactiondigeststosemver
+    'helpers:pinGitHubActionDigestsToSemver',
+  ],
+  schedule: [
+    // Monthly, but give a 3-day window (due to throttling not all PRs may be created on the same day): https://docs.renovatebot.com/configuration-options/#schedule
+    'on the 2nd through 5th day of the month',
+  ],
+  // Always squash PRs: https://docs.renovatebot.com/configuration-options/#automergestrategy
+  automergeStrategy: 'squash',
+  packageRules: [
+    {
+      // Keep the lower bounds in pyproject.toml as they are, and only bump the versions in uv.lock: https://docs.renovatebot.com/configuration-options/#rangestrategy
+      matchManagers: ['pep621'],
+      rangeStrategy: 'update-lockfile',
+    },
+    {
+      // CI runs on the Python of .python-version only, so a newer one there would leave the floor
+      // in requires-python untested: such a PR waits for a review.
+      matchManagers: ['pyenv'],
+      automerge: false,
+    },
+    {
+      // d3-sankey-diagram draws with d3-selection 1, and the viewer hands it its selection.
+      matchPackageNames: ['d3-selection'],
+      allowedVersions: '<2',
+    },
+    {
+      matchManagers: ['github-actions'],
+      groupName: 'github-actions',
+    },
+    {
+      matchPackageNames: ['numpy', 'pandas', 'polars', 'pyarrow', 'xarray'],
+      groupName: 'scientific stack',
+    },
+    {
+      matchPackageNames: ['meson', 'meson-python', 'ninja'],
+      groupName: 'build',
+    },
+    {
+      matchPackageNames: ['pytest', 'pytest-**', 'ruff', 'ty'],
+      groupName: 'dev',
+    },
+    {
+      matchPackageNames: ['nuxt', '@nuxt/**', 'vue', 'vue-router', 'tailwindcss'],
+      groupName: 'nuxt',
+    },
+    {
+      matchPackageNames: ['vega', 'vega-**'],
+      groupName: 'vega',
+    },
+    {
+      matchPackageNames: ['d3-**'],
+      groupName: 'd3',
+    },
+    {
+      matchPackageNames: ['hyparquet', 'hyparquet-**'],
+      groupName: 'hyparquet',
+    },
+    {
+      matchPackageNames: ['oxlint', 'typescript', 'vitest', 'vue-tsc'],
+      groupName: 'viewer dev',
+    },
+    {
+      // The Node version of the workflows and the viewer's engines, together with its types; by
+      // depName, since the packageName of node-version in actions/setup-node is actions/node-versions.
+      matchDepNames: ['node', '@types/node'],
+      groupName: 'node',
+    },
+    {
+      // The pnpm version in viewer/package.json, together with the action that installs it
+      matchPackageNames: ['pnpm', 'pnpm/action-setup'],
+      groupName: 'pnpm',
+    },
+  ],
+}

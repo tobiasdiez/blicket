@@ -4,11 +4,15 @@ and stops."""
 import hashlib
 import http.client
 import json
+import os
+import re
+import shutil
 import socket
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,7 +20,7 @@ import polars as pl
 import pytest
 from typer.testing import CliRunner, Result
 
-from blicket import cli, dev, serve, viewer
+from blicket import builder, cli, dev, serve, viewer
 from blicket.errors import BlicketError
 from blicket.query import Query
 from tests.support import DATASET, LOADER, VALUES, make_build_project, make_run, make_viewer
@@ -270,8 +274,15 @@ def session(tmp_path: Path, loader: str = LOADER + DATASET) -> dev.Session:
 @contextmanager
 def dev_serving(tmp_path: Path, loader: str = LOADER + DATASET) -> Generator[serve.Server]:
     """Serve a session on a free port in a thread."""
+    with serving_session(session(tmp_path, loader)) as server:
+        yield server
+
+
+@contextmanager
+def serving_session(started: dev.Session) -> Generator[serve.Server]:
+    """Serve the session ``started`` on a free port in a thread."""
     server = serve.make_server(port=0)
-    server.session = session(tmp_path, loader)
+    server.session = started
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
     thread.start()
     try:
@@ -356,9 +367,10 @@ def test_each_request_reads_the_build_served_when_it_comes(tmp_path: Path) -> No
             connection.request("GET", "/only-here.txt")
             first = connection.getresponse()
             first.read()
-            current.served = dev.Current(
-                replace(current.served.build, path=other), current.served.compared
-            )
+            was = current.serving
+            assert was is not None
+            moved = dev.Current(replace(was.served.build, path=other), was.served.compared)
+            current.serving = replace(was, served=moved)
             connection.request("GET", "/only-here.txt")  # the same connection, kept alive
             second = connection.getresponse()
             assert (first.status, second.status, second.read()) == (404, 200, b"here")
@@ -600,6 +612,195 @@ def test_a_body_shorter_than_announced_times_out(
         )
         assert raw(server, start + b"\r\n{}") == b""  # closed without an answer
         assert post(server, QUERY)[0] == 200  # and the server goes on
+
+
+# ---------------------------------------------------------------------------------------------
+# blicket dev started without a run: the run picker's routes
+
+NOW = 1_700_000_000
+NO_RUN = {"message": "no run served yet"}
+
+
+@contextmanager
+def picking(tmp_path: Path, loader: str = LOADER + DATASET) -> Generator[serve.Server]:
+    """Serve a session started without a run, of a project with one Blick whose runs = ["runs/*"]
+    matches the runs a, b and bad (values that do not parse), changed last in this order."""
+    files = {"blicks/a.py": VALUES, "model_loader.py": loader}
+    root = make_build_project(tmp_path, files, 'runs = ["runs/*"]\n')
+    for age, name, values in ((300, "a", "1 2 3"), (200, "b", "1 2 3.3"), (100, "bad", "one")):
+        os.utime(make_run(root / "runs" / name, values), (NOW - age, NOW - age))
+    with serving_session(dev.start(root, [])[0]) as server:
+        yield server
+
+
+def run_path(server: serve.Server, name: str) -> str:
+    """The path of the run ``name`` as ``dev/runs`` lists it."""
+    return str(the_session(server).root / "runs" / name)
+
+
+def post_run(server: serve.Server, body: object, changed: dict[str, str] | None = None) -> Any:
+    """POST ``body`` to ``dev/run`` as the viewer's page does, with the headers ``changed``
+    (``""`` drops one); return the status and the JSON."""
+    data = json.dumps(body).encode()
+    sent = {**viewer_headers(server, data), **(changed or {})}
+    return request(server, "/dev/run", data, {k: v for k, v in sent.items() if v})
+
+
+def pick(server: serve.Server, *names: str) -> Any:
+    """Load the runs ``names`` as the picker does; the status and the JSON."""
+    return post_run(server, {"paths": [run_path(server, name) for name in names]})
+
+
+def test_without_a_run_dev_serves_the_viewer_alone(tmp_path: Path) -> None:
+    with picking(tmp_path) as server:
+        assert fetch(server, "/")[1] == b"<html>viewer</html>"
+        assert fetch(server, "/runs/a/values.txt")[0].status == 404  # nothing of the project
+        response, body = fetch(server, "/manifest.json")
+        assert (response.status, response.headers["Blicket-Dev"]) == (404, "1")
+        assert response.headers["Cache-Control"] == "no-cache"
+        assert json.loads(body) == NO_RUN
+        assert json.loads(fetch(server, "/dev/info")[1]) == {
+            "root": str(tmp_path / "project"),
+            "dataset": False,
+            "message": "no run served yet",
+            "failed": False,
+        }
+        response, body = fetch(server, "/dev/dataset")
+        assert (response.status, json.loads(body)) == (404, NO_RUN)
+        assert post(server, QUERY) == (404, NO_RUN)
+        assert fetch(server, f"/dev/tables/{'0' * 64}.parquet")[0].status == 404
+        response, _ = fetch(server, "/dev/run")
+        assert (response.status, response.headers["Allow"]) == (405, "POST")
+
+
+def test_dev_runs_lists_the_folders_runs_matches_newest_first(tmp_path: Path) -> None:
+    with picking(tmp_path) as server:
+        response, body = fetch(server, "/dev/runs")
+        assert (response.status, response.headers["Cache-Control"]) == (200, "no-store")
+        when = {
+            name: datetime.fromtimestamp(NOW - age, UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+            for name, age in (("a", 300), ("b", 200), ("bad", 100))
+        }
+        assert json.loads(body) == {
+            "patterns": ["runs/*"],
+            "runs": [
+                {"path": run_path(server, name), "name": name, "modified": when[name]}
+                for name in ("bad", "b", "a")
+            ],
+        }
+        make_run(the_session(server).root / "runs" / "c")  # a run that lands while dev waits
+        names = [run["name"] for run in json.loads(fetch(server, "/dev/runs")[1])["runs"]]
+        assert names == ["c", "bad", "b", "a"]
+
+
+def test_dev_run_loads_the_run_picked_and_serves_its_build(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with picking(tmp_path) as server:
+        assert fetch(server, "/manifest.json")[0].status == 404
+        assert pick(server, "b") == (200, {"id": "b"})
+        lines = capsys.readouterr().out.splitlines()
+        assert re.fullmatch(r"\d\d:\d\d:\d\d loading runs/b, picked in the viewer", lines[0])
+        assert any(line.startswith("run b · profile test · ") for line in lines)
+        assert lines[-1] == "builder: 1 quantity, 1 dimension"
+        response, body = fetch(server, "/manifest.json")
+        assert (response.status, response.headers["Blicket-Dev"]) == (200, "1")
+        run = json.loads(body)["run"]
+        assert (run["id"], run["paths"]) == ("b", ["runs/b"])
+        loaded = the_session(server).serving
+        assert loaded is not None
+        assert loaded.prepared.shown == ("runs/b",)  # the session keeps what the run needed
+        assert fetch(server, "/dev/dataset")[0].status == 200
+        assert post(server, QUERY)[0] == 200
+        assert pick(server, "a") == (
+            409,
+            {
+                "message": "a run is served already; reload the viewer, or restart blicket dev to "
+                "pick another"
+            },
+        )
+
+
+def test_a_run_that_cannot_be_loaded_leaves_the_picker_open(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with picking(tmp_path) as server:
+        capsys.readouterr()
+        status, body = pick(server, "bad")
+        assert status == 422
+        assert body["message"].startswith(
+            "loader model_loader:load_run raised ValueError: could not convert string to float: "
+            "'one' (raised at model_loader.py:"
+        )
+        printed = capsys.readouterr()
+        assert re.fullmatch(r"\d\d:\d\d:\d\d loading runs/bad, picked in the viewer\n", printed.out)
+        assert printed.err == f"error: cannot load runs/bad: {body['message']}\n"  # no log line
+        assert fetch(server, "/manifest.json")[0].status == 404
+        the_session(server).verbose = True
+        assert pick(server, "bad")[0] == 422
+        assert 'model_loader.py", line' in capsys.readouterr().err
+        assert pick(server, "a") == (200, {"id": "a"})
+
+
+def test_several_runs_picked_are_one_run_for_the_loader(tmp_path: Path) -> None:
+    with picking(tmp_path, LOADER.replace("selection.paths[0]", "selection.path")) as server:
+        status, body = pick(server, "a", "b")
+        assert status == 422
+        assert body["message"].startswith(
+            "loader model_loader:load_run raised ValueError: this loader takes one run path, got 2"
+        )
+        assert pick(server, "a") == (200, {"id": "a"})
+
+
+@pytest.mark.parametrize(
+    ("body", "headers", "status", "message"),
+    [
+        ({"paths": []}, {}, 400, "no run path given; pick a run"),
+        ({"paths": ["/"]}, {}, 400, "/ is not a folder that runs in [tool.blicket] matches"),
+        ({"paths": "runs/a"}, {}, 400, "not a run to load: paths: Input should be a valid array"),
+        ({"paths": [1]}, {}, 400, "not a run to load: paths.0: Input should be a valid string"),
+        ({}, {}, 400, "not a run to load: paths: Field required"),
+        ([], {}, 400, "not a run to load: Input should be"),
+        ({"paths": []}, {"Sec-Fetch-Site": "cross-site"}, 403, "a request comes from the viewer"),
+    ],
+)
+def test_dev_run_refuses(
+    tmp_path: Path, body: object, headers: dict[str, str], status: int, message: str
+) -> None:
+    with picking(tmp_path) as server:
+        answered, said = post_run(server, body, headers)
+        assert (answered, said["message"][: len(message)]) == (status, message)
+        assert fetch(server, "/manifest.json")[0].status == 404
+
+
+def test_a_folder_gone_since_the_list_is_named(tmp_path: Path) -> None:
+    with picking(tmp_path) as server:
+        shutil.rmtree(the_session(server).root / "runs" / "a")
+        assert pick(server, "a") == (400, {"message": "a no longer exists; refresh the list"})
+        assert pick(server, "b") == (200, {"id": "b"})
+
+
+def test_dev_run_loads_one_run_at_a_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    entered, release = threading.Event(), threading.Event()
+    load = builder.load
+
+    def slow(prepared: builder.Prepared) -> builder.LoadedRun:
+        entered.set()
+        release.wait(5)
+        return load(prepared)
+
+    monkeypatch.setattr(builder, "load", slow)
+    with picking(tmp_path) as server:
+        answers: list[Any] = []
+        first = threading.Thread(target=lambda: answers.append(pick(server, "a")))
+        first.start()
+        try:
+            assert entered.wait(5)
+            assert pick(server, "b") == (409, {"message": "another run is loading; wait for it"})
+        finally:
+            release.set()
+            first.join()
+        assert answers == [(200, {"id": "a"})]
 
 
 def test_run_needs_a_directory_or_a_session() -> None:

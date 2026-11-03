@@ -11,11 +11,14 @@ content hash and its assets are named by their content.
 With a ``DevSession``, as ``blicket dev`` attaches one, each request is answered from the build
 the session serves when the request comes: ``manifest.json`` from the session, with the header
 ``Blicket-Dev: 1`` that tells the viewer it is in dev mode, and the routes under ``dev/``:
-``info`` (the project root, and whether there is a dataset), ``dataset`` (what the Blick builder
-offers), ``query`` (``POST``, a builder query, answered with its entry) and
-``tables/<hex>.parquet`` (the tables of the last queries). A route that changes anything, or runs
-the project's code, answers only the viewer's own page. A route that fails answers 500 and the
-traceback goes to stderr.
+``info`` (the project root, whether a run is served and whether there is a dataset), ``dataset``
+(what the Blick builder offers), ``query`` (``POST``, a builder query, answered with its entry),
+``tables/<hex>.parquet`` (the tables of the last queries), ``runs`` (the run folders the project
+offers to pick) and ``run`` (``POST``, load one of them). While the session serves no run yet, the
+viewer's files are served alone, and ``manifest.json``, ``dataset``, ``query`` and the tables
+answer 404, ``manifest.json`` with the header all the same. A route that changes anything, or
+runs the project's code, answers only the viewer's own page. A route that fails answers 500 and
+the traceback goes to stderr.
 """
 
 import errno
@@ -40,7 +43,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from blicket import viewer
 from blicket.comparison import COMPARE
-from blicket.errors import BlicketError, DatasetError, issue_field
+from blicket.errors import BlicketError, DatasetError, LoadRefused, issue_field
 from blicket.manifest import MANIFEST
 from blicket.query import TABLES, Options, Query
 
@@ -48,12 +51,17 @@ DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8765
 _DEFAULT_PORTS = 10  # how many ports from DEFAULT_PORT on a server tries when given none
 DEV_HEADER = "Blicket-Dev"
+NO_RUN = "no run served yet"
 _NO_CACHE = frozenset({"/", "/index.html", f"/{MANIFEST}"})
 _TABLE = re.compile(rf"/{TABLES}/([0-9a-f]{{64}})\.parquet")
 _MAX_BODY = 1 << 20  # bytes of a request's body
 _BODY_TIMEOUT = 30  # seconds a client may stay silent while it sends a body it announced
 # Whence a request that changes something may come: the viewer's own page, or the address bar.
 _SITES = frozenset({"same-origin", "none"})
+# The failures of a dev session that the access log leaves out, by path and status.
+_SAID = frozenset(
+    {(f"/{MANIFEST}", HTTPStatus.NOT_FOUND), ("/dev/run", HTTPStatus.UNPROCESSABLE_ENTITY)}
+)
 
 
 class Info(BaseModel):
@@ -66,6 +74,35 @@ class Info(BaseModel):
     dataset: bool
     message: str | None = None
     failed: bool = False
+
+
+class RunFolder(BaseModel):
+    """A run folder to pick: its path, resolved, its name, and when it last changed."""
+
+    model_config = ConfigDict(frozen=True)
+
+    path: Path
+    name: str
+    modified: datetime
+
+
+class RunList(BaseModel):
+    """What ``dev/runs`` says: the globs of ``runs`` in ``[tool.blicket]`` and the folders they
+    match, newest first."""
+
+    model_config = ConfigDict(frozen=True)
+
+    patterns: list[str]
+    runs: list[RunFolder]
+
+
+class RunRequest(BaseModel):
+    """What ``dev/run`` is asked: the paths of the folders to load as one run, as ``dev/runs``
+    lists them."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    paths: list[str]
 
 
 class Served(Protocol):
@@ -85,8 +122,8 @@ class Served(Protocol):
 class DevSession(Protocol):
     """What ``blicket dev`` serves besides the files of a build directory."""
 
-    def current(self) -> Served:
-        """The build served now."""
+    def current(self) -> Served | None:
+        """The build served now; ``None`` while no run is served yet."""
         ...
 
     def info(self) -> Info:
@@ -103,6 +140,17 @@ class DevSession(Protocol):
 
     def table(self, digest: str) -> bytes | None:
         """The Parquet bytes of a query's table by their sha256, if still kept."""
+        ...
+
+    def runs(self) -> RunList:
+        """The run folders to pick, as ``dev/runs`` lists them."""
+        ...
+
+    def load(self, paths: list[str]) -> str:
+        """Load the run at ``paths``, build and check it, and serve it; the run's id. The caller
+        checks that ``runs`` lists the paths. Raises ``LoadRefused`` while another load runs and
+        once a run is served, and another ``BlicketError`` when the loader, the build or the
+        baseline fails, which the session reports in the terminal itself."""
         ...
 
 
@@ -129,9 +177,10 @@ class Server(ThreadingHTTPServer):
 
     @property
     def directory(self) -> Path:
-        """The build directory served now."""
+        """The build directory served now; the viewer's while a session serves no run yet."""
         if self.session is not None:
-            return self.session.current().directory
+            served = self.session.current()
+            return served.directory if served is not None else self.site
         if self._directory is None:
             raise BlicketError("the server has no build directory and no session")
         return self._directory
@@ -168,8 +217,22 @@ class _Refusal(Exception):
         self.status = status
 
 
+def _parsed[M: BaseModel](model: type[M], body: bytes, what: str) -> M:
+    """``body`` as ``model``; refused with 400 and the first problem, by its field, otherwise."""
+    try:
+        return model.model_validate_json(body)
+    except ValidationError as error:
+        issue = error.errors()[0]
+        where = issue_field(issue)
+        message = f"not {what}: {where + ': ' if where else ''}{issue['msg']}"
+        raise _Refusal(HTTPStatus.BAD_REQUEST, message) from error
+
+
 def _manifest(handler: _Handler, session: DevSession) -> _Response:
-    return _Response(HTTPStatus.OK, handler.served_manifest(), headers={DEV_HEADER: "1"})
+    if handler.served is None:  # still in dev mode, which the viewer reads from the header
+        body = json.dumps({"message": NO_RUN}).encode()
+        return _Response(HTTPStatus.NOT_FOUND, body, headers={DEV_HEADER: "1"})
+    return _Response(HTTPStatus.OK, handler.served.manifest(), headers={DEV_HEADER: "1"})
 
 
 def _info(handler: _Handler, session: DevSession) -> _Response:
@@ -182,15 +245,34 @@ def _dataset(handler: _Handler, session: DevSession) -> _Response:
 
 def _query(handler: _Handler, session: DevSession) -> _Response:
     handler.same_origin()
-    body = handler.json_body()
-    try:
-        query = Query.model_validate_json(body)
-    except ValidationError as error:
-        issue = error.errors()[0]
-        where = issue_field(issue)
-        message = f"not a builder query: {where + ': ' if where else ''}{issue['msg']}"
-        raise _Refusal(HTTPStatus.BAD_REQUEST, message) from error
+    query = _parsed(Query, handler.json_body(), "a builder query")
     return _json(HTTPStatus.OK, session.query(query))
+
+
+def _runs(handler: _Handler, session: DevSession) -> _Response:
+    return _json(HTTPStatus.OK, session.runs())
+
+
+def _run(handler: _Handler, session: DevSession) -> _Response:
+    handler.same_origin()
+    paths = _parsed(RunRequest, handler.json_body(), "a run to load").paths
+    if not paths:
+        raise _Refusal(HTTPStatus.BAD_REQUEST, "no run path given; pick a run")
+    listed = {str(folder.path) for folder in session.runs().runs}
+    for path in paths:
+        if path not in listed:
+            if Path(path).exists():
+                message = f"{path} is not a folder that runs in [tool.blicket] matches"
+            else:
+                message = f"{Path(path).name} no longer exists; refresh the list"
+            raise _Refusal(HTTPStatus.BAD_REQUEST, message)
+    try:
+        run = session.load(paths)
+    except LoadRefused as error:
+        raise _Refusal(HTTPStatus.CONFLICT, str(error)) from error
+    except BlicketError as error:
+        raise _Refusal(HTTPStatus.UNPROCESSABLE_ENTITY, str(error)) from error
+    return _json(HTTPStatus.OK, {"id": run})
 
 
 type _Route = Callable[[_Handler, DevSession], _Response]
@@ -200,6 +282,8 @@ _ROUTES: dict[tuple[str, str], _Route] = {
     ("GET", "/dev/info"): _info,
     ("GET", "/dev/dataset"): _dataset,
     ("POST", "/dev/query"): _query,
+    ("GET", "/dev/runs"): _runs,
+    ("POST", "/dev/run"): _run,
 }
 # The methods of each path with a route, for the Allow header of a 405.
 _METHODS: dict[str, list[str]] = {
@@ -255,10 +339,6 @@ class _Handler(SimpleHTTPRequestHandler):
         self.root = self.served.directory if self.served is not None else self.owner.directory
         self.directory = str(self.root)
         return True
-
-    def served_manifest(self) -> bytes:
-        assert self.served is not None, "a dev session serves the manifest"
-        return self.served.manifest()
 
     def _locate(self, path: str) -> tuple[str, Path]:
         """The file for the URL path ``path`` and the directory it was found in."""
@@ -395,8 +475,11 @@ class _Handler(SimpleHTTPRequestHandler):
         super().end_headers()
 
     def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
-        """Log failed requests only."""
-        if isinstance(code, int) and code >= HTTPStatus.BAD_REQUEST:
+        """Log failed requests only, but those of a dev session that say nothing new: the 404 of
+        ``manifest.json`` while no run is served, which the viewer asks for on every page load
+        then, and the 422 of a run that cannot be loaded, which the session reports itself."""
+        expected = self.session is not None and (self.path, code) in _SAID
+        if isinstance(code, int) and code >= HTTPStatus.BAD_REQUEST and not expected:
             super().log_request(code, size)
 
 

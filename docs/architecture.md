@@ -144,6 +144,14 @@ ships with blicket for now; a standard IAMC adapter is a later option.
 - **Run discovery and labels.** The adapter may implement `discover(root) -> list[RunInfo]` and
   default labels, which the dev-mode run picker uses. Defaults come from the project config; a
   selection changed in the dev session is not written back.
+  Amendment of 2026-11-03, as built: the runs come from globs in the config, `runs = ["output/*"]`
+  in `[tool.blicket]`, relative to the project root, not from an adapter function, since a
+  `RunInfo` needs a fingerprint, which reads every file of every run before the list shows. The
+  picker lists the directories the globs match, newest change first, labelled with their folder
+  names; there are no labels to edit. It is a page of the viewer that `blicket dev` started
+  without a run shows, and it serves the start only: the run picked, one folder or several that
+  the loader combines into one run, is loaded, built and checked as `blicket dev <run>` does, and
+  another run takes a restart. See [plans/run-picker.md](plans/run-picker.md).
 - **Dataset protocol, optional.** Code Blicks only need the run object. The Blick builder needs
   a run object that also implements a small protocol: the quantities (flows, stocks, parameters,
   variables) with their units, per quantity the dimensions and their values, an
@@ -332,7 +340,7 @@ numbers, and the risk left unmeasured (remind-mfa's fits), are in
 
 ```
 my-model/
-  pyproject.toml            [tool.blicket]: blick globs, loader, store path, tolerance
+  pyproject.toml            [tool.blicket]: blick globs, loader, store path, tolerance, run globs
   blicks/**.py              Blick code
   blicks/plot_types/        project plot types (.py + .js)
   .blicket/                 gitignored
@@ -458,7 +466,9 @@ same controls and plot types.
   no scratch group on the overview; an ad hoc Blick lives in the builder page and its URL.)
 - Amendment of 2026-10-27 (M2.1), the builder as built: **one run per session**, the one
   `blicket dev` loaded; the run picker waits for the adapter's `discover` and a loader that
-  combines runs. Each dimension of the quantities picked has a **role**: a dimension channel of
+  combines runs. (Amended on 2026-11-03: the run of the session may be picked in the viewer, at
+  the start, from the folders `runs` in `[tool.blicket]` matches; see "Run discovery and
+  labels".) Each dimension of the quantities picked has a **role**: a dimension channel of
   the plot type (x, colour, line type), panels, a filter, or summed (never for a quantity that is
   not `additive`); choosing a channel another dimension holds swaps the two, and a required
   channel is never left empty. Every kept dimension, a filter too, has item selection; a summed
@@ -698,6 +708,13 @@ Amendment of 2026-10-27 (M2.1): as built, there is no run picker (one run per se
 `blicket dev` loaded), the quantities are a flat list grouped by the adapter, without a tree or
 sub-variables, and "facet" is the role `panels`; the walk as built is flow 1 of
 [plans/m2-1-blick-builder.md](plans/m2-1-blick-builder.md).
+
+Amendment of 2026-11-03: `blicket dev` started without a run, or `blicket` alone, opens the viewer
+on a run picker, which lists the folders that `runs` in `[tool.blicket]` matches, newest first,
+under their folder names, without labels to edit. Picking one, or several that the loader
+combines, loads the run for the session, before the builder is open; adding a run fetched from the
+cluster within the session is not there: it takes a restart on that run, or a folder the globs
+match and a restart. See [plans/run-picker.md](plans/run-picker.md).
 
 ## Decisions taken on 2026-10-23
 

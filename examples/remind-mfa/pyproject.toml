@@ -17,4 +17,6 @@ blicket = { path = "../.." }
 remind-mfa = { path = "../../../remind-mfa", editable = true }
 
 [tool.blicket]
-# Empty: the loader is load_run in blicketconf.py next to this file, the Blicks are under blicks/.
+# The loader is load_run in blicketconf.py next to this file, the Blicks are under blicks/. runs
+# are the folders blicket dev offers to pick when started without one, where the README puts them.
+runs = ["../../data_out/*_plastics_*"]

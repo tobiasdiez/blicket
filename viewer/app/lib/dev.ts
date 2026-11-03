@@ -21,11 +21,52 @@ export interface DevInfo {
   failed: boolean
 }
 
+/** A run folder to pick, `RunFolder` in src/blicket/serve.py: its path, name and last change, in ISO 8601. */
+export interface RunFolder {
+  path: string
+  name: string
+  modified: string
+}
+
+/**
+ * What `dev/runs` says, `RunList` in src/blicket/serve.py: the globs of `runs` in `[tool.blicket]`
+ * and the folders they match, newest first.
+ */
+export interface RunList {
+  patterns: string[]
+  runs: RunFolder[]
+}
+
 const isObject = (body: unknown): body is Record<string, unknown> => typeof body === 'object' && body !== null
 
 /** Whether a body is what `dev/info` answers. */
 export function isInfo(body: unknown): body is DevInfo {
   return isObject(body) && typeof body.root === 'string' && typeof body.dataset === 'boolean'
+}
+
+/** Whether an answer comes from `blicket dev`, which marks `manifest.json` with a header. */
+export function isDevAnswer(response: Response): boolean {
+  return response.headers.get('Blicket-Dev') === '1'
+}
+
+/**
+ * Whether the answer to `manifest.json` says that `blicket dev` serves no run yet: a 404 with the
+ * header of `blicket dev`, where a static host's 404 has none.
+ */
+export function isNoRun(response: Response): boolean {
+  return response.status === 404 && isDevAnswer(response)
+}
+
+const isRunFolder = (run: unknown): run is RunFolder => isObject(run) && typeof run.path === 'string' && typeof run.name === 'string' && typeof run.modified === 'string'
+
+/** Whether a body is what `dev/runs` answers. */
+export function isRunList(body: unknown): body is RunList {
+  return isObject(body) && Array.isArray(body.patterns) && Array.isArray(body.runs) && body.runs.every(isRunFolder)
+}
+
+/** Whether a body is what `dev/run` answers to a load: the id of the run loaded. */
+export function isLoaded(body: unknown): body is { id: string } {
+  return isObject(body) && typeof body.id === 'string'
 }
 
 /** The message of an error answer, `{"message": ...}`, if the body is one. */
@@ -77,6 +118,19 @@ export async function postQuery(request: BuilderRequest, signal?: AbortSignal): 
     signal,
   })
   return bodyOf(response, isEntry, 'dev/query')
+}
+
+/**
+ * Load the run of the folders `paths`, which `dev/runs` lists, as one run; its id once
+ * `blicket dev` serves it. The answer comes when the loader, the build and the check are done.
+ */
+export async function postRun(paths: string[]): Promise<string> {
+  const response = await devFetch('./dev/run', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths }),
+  })
+  return (await bodyOf(response, isLoaded, 'dev/run')).id
 }
 
 /** Why a request failed, as the page says it, and whether because the server did not answer. */

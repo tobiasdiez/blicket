@@ -1,8 +1,16 @@
 <script setup lang="ts">
 import { INK } from '~/plots/theme'
 
-const { manifest, error } = useManifest()
+const { manifest, error, noRun } = useManifest()
 const { open, toggle } = useSidebar()
+const route = useRoute()
+const router = useRouter()
+
+// While blicket dev serves no run, the run picker is the page, whatever the route.
+watchEffect(() => {
+  if (noRun.value && route.path !== '/runs') void router.replace('/runs')
+})
+const picking = computed(() => noRun.value && route.path === '/runs')
 
 // The page is the chart surface, so charts sit on it without a frame.
 useHead({ style: [{ textContent: `:root{--ui-bg:${INK.light.surface}}.dark{--ui-bg:${INK.dark.surface}}` }] })
@@ -79,8 +87,8 @@ function skip() {
         </header>
         <main id="main" tabindex="-1" class="mx-auto w-full max-w-7xl flex-1 px-4 py-6 focus:outline-none sm:px-6">
           <UAlert v-if="error" color="error" variant="subtle" icon="i-lucide-circle-alert" title="The build cannot be shown" :description="error" />
-          <NuxtPage v-else-if="manifest" />
-          <p v-else class="text-sm text-muted">
+          <NuxtPage v-else-if="manifest || picking" />
+          <p v-else-if="!noRun" class="text-sm text-muted">
             Loading the build…
           </p>
         </main>

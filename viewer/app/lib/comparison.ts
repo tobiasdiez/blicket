@@ -4,6 +4,7 @@
 import { parseValue, type ControlState } from './controls'
 import type { BlickEntry, Repository, TableSchema, Value } from './manifest'
 import { formatter, valueKey, type TableFile } from './table'
+import { utcTime } from './time'
 
 export type Flag = 'new' | 'removed' | 'schema' | 'value' | 'error'
 
@@ -187,7 +188,7 @@ export function buildParts(build: BuildRef, built = true): string[] {
     `run ${build.run}`,
     ...(repository ? [`Blick code ${repository.commit.slice(0, 7)}`] : []),
     ...(repository?.dirty ? ['uncommitted changes'] : []),
-    ...(built ? [`built ${new Date(build.created_at).toISOString().slice(0, 16).replace('T', ' ')} UTC`] : []),
+    ...(built ? [`built ${utcTime(build.created_at)}`] : []),
     ...(build.incomplete ? ['incomplete'] : []),
   ]
 }

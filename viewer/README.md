@@ -21,9 +21,10 @@ The dev server forwards `/manifest.json`, `/blicks/`, `/compare/` and `/dev/` to
 at `http://127.0.0.1:8765`, or the address in `BLICKET_SERVE`, so the app reads `./manifest.json`
 as it does in a build directory, and nothing else on the machine can read the data. To work on
 the comparison, serve a build directory that `blicket check` wrote comparisons into. To work on
-the Blick builder, run `uv run blicket dev <run>` in terminal 1 instead of `serve`: the paths
-under `/dev/` are its own, and the proxy rewrites the `Host` header of a request to them, since
-`blicket dev` answers a query only when the header names it.
+the Blick builder, run `uv run blicket dev <run>` in terminal 1 instead of `serve`, and on the run
+picker `uv run blicket dev` without a run: the paths under `/dev/` are its own, and the proxy
+rewrites the `Host` header of a request to them, since `blicket dev` answers a query or a load
+only when the header names it.
 
 ```console
 $ pnpm test         # vitest on app/lib and app/plots, without Nuxt
@@ -54,6 +55,19 @@ keys of the builder start with an underscore (`_q`, `_plot`, `_c.<channel>`, `_k
 split toggle turns it into a filter without a new query. A query's table is fetched as a Blick's
 is, by its content hash; of the builder's tables, `dev/tables/<hex>.parquet`, the viewer keeps
 the last 50 it used, and of a build's all.
+
+The run picker (`app/pages/runs.vue`, `#/runs`) is the page while `blicket dev` serves no run
+yet. `blicket dev` then answers `manifest.json` with a 404 that carries the header
+`Blicket-Dev: 1` (`isNoRun` in `app/lib/dev.ts`), which `useManifest` records as `noRun`, and the
+shell (`app/app.vue`) sends every route to `#/runs`, under the header without the sidebar and the
+run. The page lists the folders of `dev/runs` (`useRuns`), posts the ones ticked to `dev/run`
+(`postRun`), which answers once the run is loaded, built and checked, and then reloads the viewer
+on the overview, since the manifest is fetched once; a load that fails leaves the ticks and shows
+why under the list, the keyboard staying on Load. `app/lib/runs.ts` holds the page's words and
+ticks: how long ago a run changed, the load button's label, the `runs` setting, and the ticks a
+new list keeps (`keepListed`); `app/lib/time.ts` writes a time in UTC, for the picker and the
+comparison. Served by `blicket serve`, or once a run
+is loaded, the page says so and links the overview.
 
 The shell (`app/app.vue`) is a row: the sidebar (`BlickSidebar`, on Nuxt UI's `USidebar`), and
 a column of the header, the page and the footer. From 1280 px (Tailwind's `xl`) the sidebar stands

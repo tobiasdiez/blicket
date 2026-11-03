@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Unreachable, bodyOf, failure, isEntry, isInfo, isOptions, postQuery } from '../app/lib/dev'
+import { Unreachable, bodyOf, failure, isEntry, isInfo, isNoRun, isOptions, isRunList, postQuery, postRun } from '../app/lib/dev'
 
 const answer = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
 const request = { quantities: ['flows/a'], plot: 'line', mapping: { x: 'Time' }, keep: [], values: {} }
@@ -40,5 +40,37 @@ describe('requests to blicket dev', () => {
     expect(isInfo({ root: '/p', dataset: false, message: 'no dataset(run)', failed: false })).toBe(true)
     expect(isInfo({ message: 'no route' })).toBe(false)
     expect(failure(new Error('')).message).toBe('the request failed')
+  })
+
+  it('loads the runs picked with a POST to dev/run, and says why one cannot be loaded', async () => {
+    const sent: { path: string, init: RequestInit | undefined }[] = []
+    const answers = [answer({ id: 'b' }), answer({ message: 'loader blicketconf:load_run raised RuntimeError: old pickle' }, 422)]
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      sent.push({ path, init })
+      return answers.shift()!
+    }))
+    expect(await postRun(['/data/b'])).toBe('b')
+    expect(sent[0]!.path).toBe('./dev/run')
+    expect(sent[0]!.init?.method).toBe('POST')
+    expect(new Headers(sent[0]!.init?.headers).get('Content-Type')).toBe('application/json')
+    expect(JSON.parse(String(sent[0]!.init?.body))).toEqual({ paths: ['/data/b'] })
+    await expect(postRun(['/data/a', '/data/b'])).rejects.toThrow('loader blicketconf:load_run raised RuntimeError: old pickle')
+    expect(JSON.parse(String(sent[1]!.init?.body))).toEqual({ paths: ['/data/a', '/data/b'] })
+  })
+
+  it('checks the shape of dev/runs', () => {
+    const run = { path: '/data/b', name: 'b', modified: '2026-10-26T10:25:13Z' }
+    expect(isRunList({ patterns: ['../data/*'], runs: [run] })).toBe(true)
+    expect(isRunList({ patterns: [], runs: [] })).toBe(true)
+    expect(isRunList({ patterns: [], runs: [{ ...run, modified: 1 }] })).toBe(false)
+    expect(isRunList({ runs: [] })).toBe(false)
+  })
+
+  it('takes a 404 of manifest.json for no run only when blicket dev answers it', () => {
+    const dev = { 'Blicket-Dev': '1' }
+    expect(isNoRun(new Response('{}', { status: 404, headers: dev }))).toBe(true)
+    expect(isNoRun(new Response('{}', { status: 404 }))).toBe(false) // a static host
+    expect(isNoRun(new Response('{}', { status: 200, headers: dev }))).toBe(false)
+    expect(isNoRun(new Response('{}', { status: 500, headers: dev }))).toBe(false)
   })
 })

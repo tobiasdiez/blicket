@@ -506,12 +506,57 @@ or why it is off. `dev` takes `--against`, `--out` and `--project` as `check` do
 fails at once. It exits 0 when stopped with Ctrl-C, whatever the build holds: flagged Blicks and
 Blicks that fail are in the report and the viewer, and a baseline that `--against` names but cannot
 be found is in the report. Only a session that cannot start exits 2, as `check` would: an invalid
-`[tool.blicket]`, a loader that raises, no viewer, a taken `--port`. `-v` shows tracebacks, of the
-Blicks at the start and of the builder's queries while the session runs. A project with a loader and
-no Blick yet is no error in `dev`: the report says `no Blicks yet`, the build holds no Blick and is
-complete, and the overview offers the builder, as the foot of the Blick list always does. The viewer
-knows it is served by `dev` from the header `Blicket-Dev: 1` on `manifest.json`, which `dev` answers
-from memory.
+`[tool.blicket]`, a loader that raises, no viewer, a taken `--port`, no run given and no `runs`
+to pick one from. `-v` shows tracebacks, of the Blicks at the start, of a run picked in the viewer
+that cannot be loaded, and of the builder's queries while the session runs. A project with a loader
+and no Blick yet is no error in `dev`: the report says `no Blicks yet`, the build holds no Blick and
+is complete, and the overview offers the builder, as the foot of the Blick list always does. The
+viewer knows it is served by `dev` from the header `Blicket-Dev: 1` on `manifest.json`, which `dev`
+answers from memory, and with a 404 while it serves no run yet.
+
+`blicket` without a command is `blicket dev`, and so is `blicket` followed by an option of `dev` or
+a run path: `blicket runs/2026-10-23` is `blicket dev runs/2026-10-23`, `blicket --port 8800` is
+`blicket dev --port 8800`. A first argument that is neither a command nor an existing path, and
+has no `/`, stays an unknown command (`blicket lst` says `No such command 'lst'. Did you mean
+'list'?`), so a run folder named like a command takes `blicket ./list`. Options before a command
+stay options blicket does not have: `blicket --port 8000 serve` says `No such option: --port
+(options go after the command: blicket serve --port 8000)`, while the value of an option of `dev`
+is no command (`blicket --out build runs/x` is `blicket dev --out build runs/x`).
+`blicket --help` (or `-h`) and `blicket --version` are blicket's own; `blicket` alone outside a
+project says that `blicket --help` lists the commands.
+
+### Picking the run in the viewer
+
+Started without a run, `dev` offers the project's run folders in the viewer, those that the globs
+of `runs` in `[tool.blicket]` match:
+
+```toml
+[tool.blicket]
+runs = ["runs/*"]  # folders the run picker offers; default: none
+```
+
+```console
+$ blicket
+runs: 2 in runs/*
+viewer: http://127.0.0.1:8765/#/   (Ctrl-C stops)
+pick a run in the viewer, or pass one: blicket RUN_PATH
+```
+
+The globs are relative to the project root (`..` and `**` allowed) and match directories only,
+hidden ones left out; a link to a folder is listed under its own name, and a folder matched twice
+once. The viewer opens on the picker, which lists the folders newest change first, each with its
+name and how long ago it changed, its path as the tooltip. You tick one, or several for a
+loader that combines them into one run (`Load 2 runs as one`), and press Load: `dev` loads, builds
+and checks the run as it does one given on the command line, prints the report under the time and
+the paths picked, and the viewer starts afresh on the overview of the build. A run that cannot be
+loaded leaves the picker as it was, with the error under the list, which the terminal prints as
+well (`error: cannot load <paths>: ...`); you pick another, and a folder gone since the list
+came asks for a Refresh. The run is picked once per session; another one takes a restart. `runs`
+is read when `dev` starts, and the folders are looked for afresh whenever the picker lists them,
+so a model run that lands while `dev` waits shows on Refresh. Without `runs`, `blicket` without a
+run exits 2 with `error: no run to serve; pass one (blicket RUN_PATH), or set runs =
+["output/*"] in [tool.blicket] to pick one in the viewer`. A `runs` that matches no folder yet
+serves the picker all the same, empty, with Refresh.
 
 ## The Blick builder
 

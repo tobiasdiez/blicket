@@ -14,6 +14,7 @@ PYPROJECT = "pyproject.toml"
 _WRONG_TYPE = {
     "blicks": "blicks must be a list of glob strings, got {value!r}",
     "loader": 'loader must be a string "package.module:function", got {value!r}',
+    "runs": "runs must be a list of glob strings, got {value!r}",
     "store": "store must be a directory path, got {value!r}",
     "tolerance": "tolerance must be a number, got {value!r}",
 }
@@ -35,6 +36,13 @@ class Config(BaseModel):
         description=(
             'Import path of the function that loads a run, as "package.module:function". '
             "Default: load_run in blicketconf.py next to pyproject.toml."
+        ),
+    )
+    runs: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Globs relative to the project root that select the run folders blicket dev offers "
+            "to pick when it is started without a run. Default: none."
         ),
     )
     store: str = Field(
@@ -86,6 +94,10 @@ def _describe(error: ValidationError, section: dict[str, Any]) -> list[str]:
     return problems
 
 
+class ProjectNotFound(ConfigError):
+    """No ``pyproject.toml`` with a ``[tool.blicket]`` section in a directory or its parents."""
+
+
 def find_project_root(start: str | Path | None = None) -> Path:
     """Return the directory of the nearest ``pyproject.toml`` with a ``[tool.blicket]`` section.
 
@@ -99,7 +111,7 @@ def find_project_root(start: str | Path | None = None) -> Path:
         candidate = directory / PYPROJECT
         if candidate.is_file() and _blicket_section(_read_pyproject(candidate)) is not None:
             return directory
-    raise ConfigError(
+    raise ProjectNotFound(
         f"no {PYPROJECT} with a [tool.blicket] section in {origin} or any parent directory; "
         "run blicket inside a project or pass --project"
     )

@@ -533,7 +533,9 @@ ship none, are hand-written for now.
 
 - Licence MIT. The repository is public at https://github.com/tobiasdiez/blicket, later under
   pik-piam. The GitHub organisation `blicket` is taken; the PyPI name was free on 2026-10-22 and
-  is to be reserved.
+  is to be reserved. Amendment of 2026-11-02: blicket is on PyPI since 0.1.0; release-please makes
+  the releases from the Conventional Commits on `main` and publishes the sdist and the wheel, the
+  viewer bundled.
 - Python floor: the latest stable release at the time, 3.15. Tooling: uv, ruff, pytest,
   meson-python.
 - Dogfooding: the remind-mfa adapter reads `model.pickle` from run folders named

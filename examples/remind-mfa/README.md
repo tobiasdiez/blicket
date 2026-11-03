@@ -9,7 +9,8 @@ data, which is not public (it lives on the PIK cluster).
 
 - [uv](https://docs.astral.sh/uv/); it fetches Python 3.14 if the machine lacks it.
 - Node 24 or newer and [pnpm](https://pnpm.io/installation), to generate the viewer that `build`
-  copies into every build directory (see [Building](#building)); `blicket list` needs neither.
+  copies into every build directory, or else blicket's release from PyPI, which brings one (see
+  [Building](#building)); `blicket list` needs neither.
 - remind-mfa checked out next to the blicket checkout, which the example depends on by path.
   Clone it from the blicket checkout, so that the two sit side by side:
 
@@ -136,9 +137,12 @@ The layers `default` and `blicket` are the ones `RUNS.md` names.
 
 ## Building
 
-`build` copies the viewer into every build directory, and blicket installed from a checkout has
-none of its own, so `build` and `serve` stop with an error until you generate one and set
-`BLICKET_VIEWER` as the [root README](../../README.md#development) shows. Then:
+`build` copies the viewer into every build directory, and blicket installed from a checkout has none
+of its own, so `build` and `serve` stop with an error until you generate one and set
+`BLICKET_VIEWER` as the [root README](../../README.md#development) shows. Without Node, the release
+from PyPI brings its viewer: with `UV_NO_SOURCES_PACKAGE=blicket` exported, `uv sync` and `uv run`
+install it in place of the checkout and rewrite `uv.lock` (do not commit that), and `BLICKET_VIEWER`
+is not needed; the Blicks then run on the released blicket, not on the checkout's. Then:
 
 ```console
 $ uv run blicket build ../../data_out/2026-10-24--01-25-28_plastics_SSP2_h12

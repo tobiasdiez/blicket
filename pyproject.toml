@@ -22,6 +22,11 @@ classifiers = [
 ]
 dependencies = ["polars>=2.0", "pydantic>=2.13", "typer>=0.27.2"]
 
+[project.urls]
+Repository = "https://github.com/tobiasdiez/blicket"
+Changelog = "https://github.com/tobiasdiez/blicket/blob/main/CHANGELOG.md"
+Issues = "https://github.com/tobiasdiez/blicket/issues"
+
 [project.scripts]
 blicket = "blicket.cli:app"
 

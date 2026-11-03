@@ -1,5 +1,25 @@
 # Changelog
 
+## [0.2.0](https://github.com/tobiasdiez/blicket/compare/v0.1.0...v0.2.0) (2026-11-03)
+
+
+### 🔖 Features
+
+* add run picker, and `blicket` as alias for `blicket dev` ([#9](https://github.com/tobiasdiez/blicket/issues/9)) ([6c7e867](https://github.com/tobiasdiez/blicket/commit/6c7e867f32cd57be4efcb8db6ec8f5bccda20198))
+* serve on the next free port when the default one is taken ([#7](https://github.com/tobiasdiez/blicket/issues/7)) ([6e261ad](https://github.com/tobiasdiez/blicket/commit/6e261ade496636a733e296794a40799d072c428c))
+
+
+### 📚 Documentation
+
+* install blicket from PyPI ([#5](https://github.com/tobiasdiez/blicket/issues/5)) ([4257ebf](https://github.com/tobiasdiez/blicket/commit/4257ebf200626cfdbcdd9e4c7501dad69667d819))
+
+
+### 🧹 Miscellaneous
+
+* add Renovate config ([#8](https://github.com/tobiasdiez/blicket/issues/8)) ([f39ecea](https://github.com/tobiasdiez/blicket/commit/f39ecea78373561748a541c3cfc9b4c1f7e98688))
+* **deps:** pin dependency @types/node to 24.19.2 ([#10](https://github.com/tobiasdiez/blicket/issues/10)) ([3342240](https://github.com/tobiasdiez/blicket/commit/3342240ad6e1453ecff3667527411923198562a8))
+* **deps:** update dependency @iconify-json/lucide to v1.2.149 ([#11](https://github.com/tobiasdiez/blicket/issues/11)) ([8d25a29](https://github.com/tobiasdiez/blicket/commit/8d25a29374c95ddb0fa2aa5241e83c7536e16c51))
+
 ## 0.1.0 (2026-11-02)
 
 

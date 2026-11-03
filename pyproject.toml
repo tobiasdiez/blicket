@@ -5,7 +5,7 @@ requires = ["meson-python>=0.18"]
 [project]
 name = "blicket"
 # Static on purpose: a dynamic version breaks a fresh `uv sync` without build isolation.
-version = "0.1.0"
+version = "0.2.0"
 description = "Storybook for scientific model outputs: named views on model runs."
 readme = "README.md"
 requires-python = ">=3.14"

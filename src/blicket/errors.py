@@ -73,6 +73,10 @@ class LoaderError(BlicketError):
     """The project's loader cannot be imported, raised, or returned no ``(run, RunInfo)``."""
 
 
+class LoadRefused(BlicketError):
+    """A ``blicket dev`` session cannot load a run now: another load runs, or a run is served."""
+
+
 class DatasetError(BlicketError):
     """``dataset(run)`` raised, or what it returned does not follow the dataset protocol."""
 

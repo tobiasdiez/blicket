@@ -230,6 +230,69 @@ def test_help_and_version() -> None:
     assert "Show the project's Blicks and any definition problems." in result.stdout
     assert "Exit codes" not in result.stdout  # the README has them
     assert invoke("--version").stdout == f"blicket {importlib.metadata.version('blicket')}\n"
+    for flag in ("--help", "-h"):
+        group = runner.invoke(cli.app, [flag], terminal_width=200)
+        assert group.exit_code == 0
+        assert "Without a command, blicket is blicket dev: blicket runs/x is blicket dev" in (
+            group.stdout
+        )
+    dev = runner.invoke(cli.app, ["dev", "-h"], terminal_width=200)
+    assert "Without RUN_PATH, serve a run picker:" in dev.stdout
+
+
+def usage_error(*args: str) -> str:
+    """What ``blicket`` says on a usage error, wide enough that click's box keeps it on one
+    line: typer sizes the box from ``COLUMNS``, which ``terminal_width`` does not set. Without
+    colours, which typer forces on GitHub Actions and puts around the options a message names."""
+    result = runner.invoke(cli.app, list(args), terminal_width=200, env={"COLUMNS": "200"})
+    assert result.exit_code == 2
+    return re.sub(r"\x1b\[[0-9;]*m", "", result.output)
+
+
+@pytest.mark.parametrize(
+    ("name", "message"),
+    [
+        ("lst", "No such command 'lst'. Did you mean 'list'?"),
+        ("", "No such command ''."),  # not the working directory as a run
+    ],
+)
+def test_an_unknown_command_is_no_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name: str, message: str
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    assert message in usage_error(name)
+
+
+@pytest.mark.parametrize(
+    ("args", "after"),
+    [
+        (["-v", "list"], "blicket list -v"),
+        (["-v", "build", "x"], "blicket build -v"),
+        (["--project", ".", "list"], "blicket list --project ."),
+        (["--port", "8000", "serve"], "blicket serve --port 8000"),
+        (["--open", "--port=1", "dev"], "blicket dev --open --port=1"),
+    ],
+)
+def test_an_option_before_a_command_belongs_after_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, args: list[str], after: str
+) -> None:
+    monkeypatch.chdir(tmp_path)  # where no folder is named like a command
+    message = f"No such option: {args[0]} (options go after the command: {after})"
+    assert message in usage_error(*args)
+
+
+def test_blicket_alone_outside_a_project_names_the_help(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    bare = invoke()
+    assert (bare.exit_code, bare.stdout) == (2, "")
+    assert bare.stderr == (
+        f"error: no pyproject.toml with a [tool.blicket] section in {tmp_path.resolve()} or any "
+        "parent directory; run blicket inside a project or pass --project; blicket --help lists "
+        "the commands\n"
+    )
+    assert "--help" not in invoke("dev").stderr  # only without any argument
 
 
 # ---------------------------------------------------------------------------------------------

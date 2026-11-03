@@ -30,7 +30,7 @@ from typing import Any
 from blicket import loader, manifest, tables, viewer
 from blicket.config import PYPROJECT, Config, load_config
 from blicket.discovery import discover
-from blicket.errors import NOWHERE, BlicketError, ConfigError, Kind, Problem
+from blicket.errors import NOWHERE, BlicketError, ConfigError, Kind, Problem, display_path
 from blicket.loader import DEFAULT_LOADER_MODULE, RunSelection
 from blicket.manifest import BuildConfig, BuildInfo, Manifest, Repository, Run, RunInfo
 from blicket.model import Blick, BlickEntry, Registry
@@ -115,6 +115,25 @@ def prepare(
                 "[tool.blicket]"
             )
         target = f"{DEFAULT_LOADER_MODULE}:load_run"
+    resolved, shown = run_paths(root, paths)
+    destination = Path(out).resolve() if out is not None else root / ".blicket" / "build"
+    return Prepared(
+        root=root,
+        config=config,
+        site=site,
+        target=target,
+        paths=resolved,
+        shown=shown,
+        destination=destination,
+        default_out=out is None,
+    )
+
+
+def run_paths(
+    root: Path, paths: Sequence[str | os.PathLike[str]]
+) -> tuple[tuple[Path, ...], tuple[str, ...]]:
+    """The run paths ``paths`` resolved, and as the manifest records them: relative to the
+    project root ``root`` inside it. Raises ``BlicketError`` when one does not exist."""
     resolved: list[Path] = []
     shown: list[str] = []
     for given in paths:
@@ -122,18 +141,8 @@ def prepare(
         if not path.exists():
             raise BlicketError(f"run path {os.fspath(given)} does not exist")
         resolved.append(path)
-        shown.append(path.relative_to(root).as_posix() if path.is_relative_to(root) else str(path))
-    destination = Path(out).resolve() if out is not None else root / ".blicket" / "build"
-    return Prepared(
-        root=root,
-        config=config,
-        site=site,
-        target=target,
-        paths=tuple(resolved),
-        shown=tuple(shown),
-        destination=destination,
-        default_out=out is None,
-    )
+        shown.append(display_path(path, root))
+    return tuple(resolved), tuple(shown)
 
 
 def load(prepared: Prepared) -> LoadedRun:

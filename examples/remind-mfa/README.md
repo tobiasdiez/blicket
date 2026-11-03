@@ -24,6 +24,13 @@ data, which is not public (it lives on the PIK cluster).
   since `blicket build` takes the run folder as an argument. [Producing a run](#producing-a-run)
   says how to make one.
 
+`runs = ["../../data_out/*_plastics_*"]` in `pyproject.toml` names that place for the run picker:
+`uv run blicket` alone, or `uv run blicket dev` without a run, opens the viewer on the plastics runs
+in `data_out/`, newest first, instead of loading one (see [The Blick builder](#the-blick-builder)).
+Tick one and press `Load`; the terminal prints the report of the check, and the viewer shows the
+build. A run that does not unpickle with the remind-mfa checked out is refused with the loader's
+error under the list, and another can be picked. Runs kept elsewhere need `runs` changed to match.
+
 The example runs are of two generations: three of 2026-10-24, made at remind-mfa `a7c389a` on
 input data 2.8.0, and two of 2026-10-26, made at `710302d`, eight commits later, on input data
 2.9.1. Below, a run goes by the seconds of its timestamp: run 28 is
@@ -42,7 +49,8 @@ runs code from the checkout, so build only runs you trust.
 ## The project
 
 ```
-pyproject.toml          [tool.blicket], empty: the defaults apply
+pyproject.toml          [tool.blicket]: runs, the folders the run picker offers; the defaults
+                        apply otherwise
 blicketconf.py          load_run, the loader, found by convention like pytest's conftest.py, and
                         dataset, the quantities the Blick builder charts
 blicks/                 the Blicks

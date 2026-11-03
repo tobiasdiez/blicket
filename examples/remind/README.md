@@ -47,6 +47,14 @@ folders go into `data_out/remind/` at the root of the blicket checkout, which gi
 other place works too, since `blicket build` takes the folders as arguments. The `rsync` of the
 quick start fetches those four files, 38 to 40 MB per folder.
 
+`runs = ["../../data_out/remind/*"]` in `pyproject.toml` names that place for the run picker:
+`uv run blicket` alone, or `uv run blicket dev` without folders, opens the viewer on the eight
+folders of `data_out/remind/` instead of loading a set ([The Blick builder](#the-blick-builder)).
+Tick the four of one week and press `Load 4 runs as one`; the terminal prints the report of the
+check, and the viewer shows the build. Two folders of one scenario, such as the NPi runs of both
+weeks, are refused by the loader, and the picker says so under the list. Runs kept elsewhere need
+`runs` changed to match.
+
 The example runs are two weekly sets of REMIND's automated model tests (AMT), which run every
 week on the cluster and write their folders to `/p/projects/remind/modeltests/remind/output/`.
 Each set has the four scenarios of the report the chapter was ported from: `SSP2-NPi2025-AMT`,
@@ -62,7 +70,8 @@ runs themselves, with the same facts.
 ## The project
 
 ```
-pyproject.toml          [tool.blicket], empty: the defaults apply
+pyproject.toml          [tool.blicket]: runs, the folders the run picker offers; the defaults
+                        apply otherwise
 blicketconf.py          load_run, the loader, and dataset, the quantities the Blick builder charts
 remind.py               the REMIND output folder: cfg.txt, log.txt, the mifs; the run object
 blicks/                 the Blicks, one group per file, and _iamc.py, the helpers they share

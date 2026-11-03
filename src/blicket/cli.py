@@ -23,11 +23,11 @@ from pathlib import Path
 from typing import Annotated, Any
 
 import typer
-from typer.core import TyperGroup
+from typer.core import TyperGroup, TyperOption
 
 from blicket import check, comparison, dev, serve
 from blicket.builder import Build, NothingToBuild, build
-from blicket.config import find_project_root
+from blicket.config import ProjectNotFound, find_project_root
 from blicket.discovery import discover
 from blicket.errors import BlicketError, ConfigError, display_path
 from blicket.model import Registry
@@ -47,12 +47,37 @@ FLAGGED_EXIT_CODE = 1
 ERROR_EXIT_CODE = 2
 STEP_SUMMARY_ENV = "GITHUB_STEP_SUMMARY"
 _VERBOSE = "blicket.verbose"
+_BARE = "blicket.bare"
+_HELP_OPTIONS = ["--help", "-h"]
+_OWN_OPTIONS = {*_HELP_OPTIONS, "--version"}
 
 
 class _App(TyperGroup):
-    """Runs a command; whatever fails exits with code 2, the traceback shown under ``-v``."""
+    """Runs a command; whatever fails exits with code 2, the traceback shown under ``-v``.
+
+    Without a command, the command is ``dev``: with no arguments, before an argument that is no
+    command but names an existing path or contains a ``/``, and before an option the group does not
+    have, unless the first argument after the options and their values is a command, which the
+    options belong after. Anything else stays an unknown command, so that a typo is not taken
+    for a run.
+    """
 
     # Any: the base class takes typer's vendored click Context, which typer does not export.
+    def parse_args(self, ctx: Any, args: list[str]) -> list[str]:
+        ctx.meta[_BARE] = not args
+        first = args[0] if args else ""
+        if first.startswith("-"):
+            dev = first.partition("=")[0] not in _OWN_OPTIONS
+            at = _first_positional(args, self.commands["dev"])
+            command = args[at] if at < len(args) else ""
+            if dev and command in self.commands and not Path(command).exists():
+                after = " ".join([command, *args[:at]])
+                ctx.fail(f"No such option: {first} (options go after the command: blicket {after})")
+        else:
+            named = first != "" and ("/" in first or Path(first).exists())
+            dev = not args or (first not in self.commands and named)
+        return super().parse_args(ctx, ["dev", *args] if dev else args)
+
     def invoke(self, ctx: Any) -> Any:
         try:
             return super().invoke(ctx)
@@ -61,7 +86,10 @@ class _App(TyperGroup):
         except typer.Abort:
             typer.echo("error: aborted", err=True)
         except BlicketError as error:
-            typer.echo(f"error: {error}", err=True)
+            # Bare blicket outside a project may have been meant as the help.
+            bare = ctx.meta.get(_BARE) and isinstance(error, ProjectNotFound)
+            hint = "; blicket --help lists the commands" if bare else ""
+            typer.echo(f"error: {error}{hint}", err=True)
             if error.traceback and ctx.meta.get(_VERBOSE):
                 typer.echo(error.traceback.rstrip(), err=True)
         except Exception as error:
@@ -73,6 +101,21 @@ class _App(TyperGroup):
             else:
                 typer.echo("this is a bug in blicket; rerun with -v and report it", err=True)
         raise typer.Exit(ERROR_EXIT_CODE)
+
+
+def _first_positional(args: list[str], command: Any) -> int:
+    """Where the first positional argument of ``command`` is in ``args``: past its options, and the
+    values of those that take one (``--out DIR``; ``--out=DIR`` is one argument), up to ``--``."""
+    valued = {
+        name
+        for param in command.params
+        if isinstance(param, TyperOption) and not param.is_flag
+        for name in param.opts
+    }
+    at = 0
+    while at < len(args) and args[at].startswith("-") and args[at] != "--":
+        at += 2 if args[at] in valued else 1
+    return at
 
 
 def _remember_verbose(ctx: typer.Context, verbose: bool) -> bool:
@@ -93,13 +136,16 @@ VerboseOption = Annotated[
     bool, typer.Option("-v", "--verbose", help="Show tracebacks.", callback=_remember_verbose)
 ]
 
+_RUN_PATH_HELP = (
+    "A model run's output directory (several only if the project's loader combines them)."
+)
 RunsArgument = Annotated[
     list[Path],
-    typer.Argument(
-        help="A model run's output directory (several only if the project's loader combines them).",
-        metavar="RUN_PATH...",
-        show_default=False,
-    ),
+    typer.Argument(help=_RUN_PATH_HELP, metavar="RUN_PATH...", show_default=False),
+]
+OptionalRunsArgument = Annotated[
+    list[Path] | None,
+    typer.Argument(help=_RUN_PATH_HELP, metavar="[RUN_PATH]...", show_default=False),
 ]
 OutOption = Annotated[
     Path | None,
@@ -139,7 +185,7 @@ OpenOption = Annotated[bool, typer.Option("--open", help="Open the viewer in you
 app = typer.Typer(
     name="blicket",
     cls=_App,
-    no_args_is_help=True,
+    context_settings={"help_option_names": _HELP_OPTIONS},
     add_completion=False,
     pretty_exceptions_enable=False,
 )
@@ -160,7 +206,10 @@ def main(
         ),
     ] = False,
 ) -> None:
-    """A catalog of charts (Blicks) built from model runs."""
+    """A catalog of charts (Blicks) built from model runs.
+
+    Without a command, blicket is blicket dev: blicket runs/x is blicket dev runs/x.
+    """
 
 
 def _root(project: Path | None) -> Path:
@@ -343,7 +392,7 @@ def check_command(
 
 @app.command("dev")
 def dev_command(
-    runs: RunsArgument,
+    runs: OptionalRunsArgument = None,
     against: AgainstOption = None,
     port: PortOption = None,
     host: HostOption = serve.DEFAULT_HOST,
@@ -352,27 +401,34 @@ def dev_command(
     out: OutOption = None,
     verbose: VerboseOption = False,
 ) -> None:
-    """Check a run without pushing it, then serve it with the Blick builder; Ctrl-C stops.
+    """Check a run given or picked in the viewer and serve it with the Blick builder; Ctrl-C stops.
 
     Builds the run and compares it with its baseline as blicket check
-    does, then keeps the run in memory: "Build a Blick" in the viewer
-    charts any quantity of the dataset that dataset(run) in the loader's
-    module returns.
+    does, without pushing, then keeps the run in memory: "Build a Blick"
+    in the viewer charts any quantity of the dataset that dataset(run) in
+    the loader's module returns.
 
-    Exit codes: 0 when stopped with Ctrl-C, whatever the build holds; 2
-    when the session cannot start.
+    Without RUN_PATH, serve a run picker: the viewer lists the folders the
+    globs in runs in \\[tool.blicket] match, newest first; without runs,
+    exit 2.
+
+    Exit codes: 0 when stopped with Ctrl-C, whatever the build holds or a
+    run picked in the viewer did; 2 when the session cannot start, without
+    RUN_PATH also when runs is not set.
     """
     root = _root(project)
     # Bound first, so that a port in use fails before the run is loaded.
     server = _make_server(None, host, port)
     try:
-        session, report = dev.start(root, runs, out=out, against=against, verbose=verbose)
+        session, report = dev.start(root, runs or [], out=out, against=against, verbose=verbose)
     except BaseException:
         server.server_close()
         raise
     server.session = session
     _echo(report)
     typer.echo(f"viewer: {server.url}#/   (Ctrl-C stops)")
+    if session.current() is None:
+        typer.echo("pick a run in the viewer, or pass one: blicket RUN_PATH")
     if open_browser:
         webbrowser.open(server.url)
     serve.run(server)

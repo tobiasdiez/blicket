@@ -8,10 +8,11 @@ from tests.support import make_project
 
 def test_defaults_and_values(tmp_path: Path) -> None:
     assert bk.load_config(make_project(tmp_path, {}, name="empty")) == bk.Config()
-    assert bk.Config().blicks == ["blicks/**/*.py"]
-    lines = 'blicks = ["views/*.py"]\ntolerance = 1e-9\nloader = "m.n:C.f"\n'
+    assert (bk.Config().blicks, bk.Config().runs) == (["blicks/**/*.py"], [])
+    lines = 'blicks = ["views/*.py"]\ntolerance = 1e-9\nloader = "m.n:C.f"\nruns = ["../out/*"]\n'
     config = bk.load_config(make_project(tmp_path, {}, lines))
     assert (config.blicks, config.tolerance, config.loader) == (["views/*.py"], 1e-9, "m.n:C.f")
+    assert config.runs == ["../out/*"]
 
 
 @pytest.mark.parametrize(
@@ -20,6 +21,9 @@ def test_defaults_and_values(tmp_path: Path) -> None:
         ("blick = []", "unknown key 'blick' in [tool.blicket]; did you mean 'blicks'?"),
         ("zzz = 1", "unknown key 'zzz' in [tool.blicket]; valid keys: blicks"),
         ('blicks = "blicks/*.py"', "blicks must be a list of glob strings"),
+        ('runs = "output/*"', "runs must be a list of glob strings, got 'output/*'"),
+        ("runs = [1]", "runs must be a list of glob strings, got [1]"),
+        ("run = []", "unknown key 'run' in [tool.blicket]; did you mean 'runs'?"),
         ('tolerance = "x"', "tolerance must be a number"),
         ("tolerance = -1e-5", "tolerance must be a positive number below 1, got -1e-05"),
         ("tolerance = nan", "tolerance must be a positive number below 1"),

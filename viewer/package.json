@@ -17,7 +17,7 @@
     "d3-selection": "1.4.2",
     "hyparquet": "1.31.5",
     "hyparquet-compressors": "1.1.2",
-    "nuxt": "4.6.2",
+    "nuxt": "4.6.3",
     "tailwindcss": "4.3.3",
     "vega": "6.4.0",
     "vega-embed": "7.3.0",

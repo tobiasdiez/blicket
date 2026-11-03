@@ -242,10 +242,11 @@ def test_help_and_version() -> None:
 
 def usage_error(*args: str) -> str:
     """What ``blicket`` says on a usage error, wide enough that click's box keeps it on one
-    line: typer sizes the box from ``COLUMNS``, which ``terminal_width`` does not set."""
+    line: typer sizes the box from ``COLUMNS``, which ``terminal_width`` does not set. Without
+    colours, which typer forces on GitHub Actions and puts around the options a message names."""
     result = runner.invoke(cli.app, list(args), terminal_width=200, env={"COLUMNS": "200"})
     assert result.exit_code == 2
-    return result.output
+    return re.sub(r"\x1b\[[0-9;]*m", "", result.output)
 
 
 @pytest.mark.parametrize(

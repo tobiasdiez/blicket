@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.2.1](https://github.com/tobiasdiez/blicket/compare/v0.2.0...v0.2.1) (2026-11-04)
+
+
+### 🧹 Miscellaneous
+
+* **deps:** update dependency @iconify-json/lucide to v1.2.150 ([#16](https://github.com/tobiasdiez/blicket/issues/16)) ([b6d82df](https://github.com/tobiasdiez/blicket/commit/b6d82df86819a105d1eb648145bcd67beef9c86b))
+* **deps:** update dependency hyparquet to v1.32.0 ([#18](https://github.com/tobiasdiez/blicket/issues/18)) ([0ac973f](https://github.com/tobiasdiez/blicket/commit/0ac973f91dda61103433d0e655b0c06a51943b2a))
+* **deps:** update dependency nuxt to v4.6.3 ([#13](https://github.com/tobiasdiez/blicket/issues/13)) ([3d55626](https://github.com/tobiasdiez/blicket/commit/3d55626b801fc8363356a41892e3b1f85114eeb7))
+* **deps:** update dependency pydantic to v2.14.2 ([#14](https://github.com/tobiasdiez/blicket/issues/14)) ([0503988](https://github.com/tobiasdiez/blicket/commit/050398825d98c0f88762536e216e98dbe4f3746e))
+* **deps:** update dev ([#19](https://github.com/tobiasdiez/blicket/issues/19)) ([dcfd796](https://github.com/tobiasdiez/blicket/commit/dcfd7968c4d21ec84609a4761d983178161e2ead))
+* **deps:** update github-actions ([#17](https://github.com/tobiasdiez/blicket/issues/17)) ([0dd83d6](https://github.com/tobiasdiez/blicket/commit/0dd83d62b4ce0d7d11d41dbdfcec35a8a1893a4f))
+
 ## [0.2.0](https://github.com/tobiasdiez/blicket/compare/v0.1.0...v0.2.0) (2026-11-03)
 
 

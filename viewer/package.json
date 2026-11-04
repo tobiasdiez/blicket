@@ -11,7 +11,7 @@
     "lint": "oxlint"
   },
   "dependencies": {
-    "@iconify-json/lucide": "1.2.149",
+    "@iconify-json/lucide": "1.2.150",
     "@nuxt/ui": "4.12.0",
     "d3-sankey-diagram": "0.9.4",
     "d3-selection": "1.4.2",

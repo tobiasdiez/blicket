@@ -28,10 +28,10 @@
   },
   "devDependencies": {
     "@types/node": "24.19.2",
-    "oxlint": "1.89.0",
-    "typescript": "^6.0.3",
-    "vitest": "5.0.5",
-    "vue-tsc": "3.3.13"
+    "oxlint": "1.93.0",
+    "typescript": "6.0.3",
+    "vitest": "5.1.0",
+    "vue-tsc": "3.3.14"
   },
   "engines": {
     "node": ">=24"

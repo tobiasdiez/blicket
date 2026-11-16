@@ -33,20 +33,27 @@ class DefinitionError(ValueError):
     raise it while a Blick module executes. Outside discovery, an invalid ``@bk.blick``,
     ``bk.register`` or ``bk.group`` raises it too; during discovery those are recorded instead,
     so that one bad Blick does not hide the others. ``kind`` is the kind discovery reports.
+    ``checks`` says that the API of checks raised it, ``@bk.check`` or ``bk.expect``, so that the
+    module it stopped may have defined checks.
     """
 
-    def __init__(self, message: str, *, kind: str = Kind.INVALID_DEFINITION) -> None:
+    def __init__(
+        self, message: str, *, kind: str = Kind.INVALID_DEFINITION, checks: bool = False
+    ) -> None:
         super().__init__(message)
         self.kind = kind
+        self.checks = checks
 
 
 class Skip(Exception):
-    """Raised by a transformation whose Blick does not apply to the run, such as one that reads a
-    module the run was made without: ``raise bk.Skip("the run has no trade module")``.
+    """Raised by the transformation of a Blick or a check that does not apply to the run, such as
+    one that reads a module the run was made without: ``raise bk.Skip("the run has no trade
+    module")``.
 
-    Not a failure: the build records the Blick as skipped, with ``reason``, without a table and
-    without an error. ``str(skip)`` is the reason; constructing one with an empty or blank reason
-    raises ``ValueError``.
+    Not a failure: the build records the Blick or check as skipped, with ``reason``, without a
+    table and without an error. ``str(skip)`` is the reason; constructing one with an empty or
+    blank reason raises ``ValueError``. Raised by the ``rows`` function of ``bk.expect.no_rows``,
+    it skips nothing: the expectation cannot be evaluated, an outcome ``error``.
     """
 
     def __init__(self, reason: str) -> None:
@@ -82,6 +89,8 @@ class DatasetError(BlicketError):
 
 
 MISSING = "the Blicks in this file are missing"
+# MISSING in a project that defines checks.
+MISSING_UNITS = "the Blicks and checks in this file are missing"
 
 
 def issue_field(issue: Mapping[str, Any]) -> str:

@@ -1,15 +1,17 @@
 <script setup lang="ts">
 import { blickBadge, type BlickComparison } from '~/lib/comparison'
 import { yAxisOf } from '~/lib/controls'
+import { expectationBadge } from '~/lib/expectations'
 import { firstLine, type BlickEntry } from '~/lib/manifest'
 import { firstProblem, previewCaption, previewLink, previewState } from '~/lib/preview'
 import { drawsBaseline, PLOT_TYPES } from '~/plots'
 
-// A Blick as a card of the overview: its title, which leads to its page, its badge, a small chart
-// and a caption. `change` is the Blick in the comparison shown, if any. With `pinnable` the card
-// has the button that pins or unpins the Blick, and says when it was clicked (`toggle`); without
-// it a pin marks a pinned Blick. `loading` says whether the card waits for the rows it asked for,
-// which the overview announces once for all its cards.
+// A Blick as a card of the overview: its title, which leads to its page, its badges, of its flags
+// and of its expectation when that is not met, a small chart and a caption. `change` is the Blick
+// in the comparison shown, if any. With `pinnable` the card has the button that pins or unpins
+// the Blick, and says when it was clicked (`toggle`); without it a pin marks a pinned Blick.
+// `loading` says whether the card waits for the rows it asked for, which the overview announces
+// once for all its cards.
 const props = defineProps<{ entry: BlickEntry, change: BlickComparison | null, pinnable?: boolean }>()
 const emit = defineEmits<{ toggle: [], loading: [loading: boolean] }>()
 
@@ -22,6 +24,7 @@ const preview = computed(() => previewState(props.entry, props.change, defaultY.
 const link = computed(() => previewLink(props.entry, preview.value, defaultY.value))
 const caption = computed(() => previewCaption(props.entry, preview.value, props.change, drawsBaseline(definition.value?.plot.type ?? '')))
 const badge = computed(() => blickBadge(props.entry, props.change))
+const expectation = computed(() => expectationBadge(props.entry.outcome))
 const pinned = computed(() => !!props.entry.id && isPinned(props.entry.id))
 const problem = computed(() => firstProblem(props.entry))
 // The first line of why the Blick was skipped, with an ellipsis when there is more on its page.
@@ -77,6 +80,7 @@ const SILENT = { 'aria-hidden': 'true', 'role': undefined, 'aria-label': undefin
         </template>
       </h3>
       <FlagBadge v-if="badge" :badge="badge" />
+      <OutcomeBadge v-if="expectation" :badge="expectation" />
       <div v-if="pinnable && entry.id" data-pin class="-my-1 -me-1.5 shrink-0">
         <PinButton :id="entry.id" :label="title" icon @toggle="emit('toggle')" />
       </div>

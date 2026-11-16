@@ -45,6 +45,7 @@ export default defineNuxtConfig({
     devProxy: {
       '/manifest.json': { target: `${serve}/manifest.json` },
       '/blicks': { target: `${serve}/blicks` },
+      '/checks': { target: `${serve}/checks` },
       '/compare': { target: `${serve}/compare` },
       // blicket dev checks that a query names it in its Host header.
       '/dev': { target: `${serve}/dev`, changeOrigin: true },

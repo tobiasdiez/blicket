@@ -76,6 +76,8 @@ def test_every_option_is_checked_stored_and_named() -> None:
         "dims": ["year"],
         "measures": ["value"],
         "order": {"region": ["EUR"]},
+        "expect": bk.expect.between(0, 1),
+        "level": "warn",
     }
     assert samples.keys() == BlickOptions.__optional_keys__
     bk.register(transform=identity, **samples)

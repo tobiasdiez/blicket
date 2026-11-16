@@ -39,7 +39,7 @@ function unreachable(cause: unknown): never {
 }
 /** Where the Blick builder's tables are: a dev session makes a new one for every query. */
 const ADHOC = 'dev/tables/'
-/** How many of the Blick builder's tables are kept; a build's tables are all kept. */
+/** How many of the Blick builder's tables are kept; a build's tables are kept once read, each once. */
 export const KEPT_TABLES = 50
 
 /** Forget the builder's tables used longest ago, so that `KEPT_TABLES` of them stay. */
@@ -52,7 +52,8 @@ function evict() {
  * The rows of `file`, fetched once per content hash; of the builder's tables, only the last
  * `KEPT_TABLES` used are kept. The hash is in the URL and the cache key, so a table of another
  * build at the same path, served on the same port, is another file to the browser. The whole file
- * comes in one request: tables are small, and not every server answers ranges.
+ * comes in one request, since not every server answers ranges; a check's table of 100,000 rows is
+ * one request too.
  */
 export function fetchTable(file: TableFile): Promise<Row[]> {
   // The builder's tables are kept by path, which names their content; a build's by its hash.

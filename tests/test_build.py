@@ -120,7 +120,7 @@ def test_statuses_and_files(project: Path) -> None:
         "manifest.json",
     ]
     written = json.loads((built.path / "manifest.json").read_text())
-    assert written["config"] == {"tolerance": 1e-5}
+    assert written["config"] == {"tolerance": 1e-5, "level": "error"}
     assert built.manifest.build.incomplete is False
 
 
@@ -235,7 +235,9 @@ def test_the_status_is_skipped_with_a_reason_else_error_with_an_error_else_ok() 
     ids=["data", "rows", "controls", "error", "warning"],
 )
 def test_a_skipped_blick_has_no_table_controls_or_problems(fields: dict[str, Any]) -> None:
-    with pytest.raises(ValidationError, match="a skipped Blick has no table, controls or problems"):
+    with pytest.raises(
+        ValidationError, match="a skipped Blick has no table, controls, outcome or problems"
+    ):
         bk.BlickEntry(id="a/x", name="a/x", group="a", skipped="no trade", **fields)
 
 
@@ -444,7 +446,7 @@ def test_a_manifest_of_another_spec_says_so(project: Path) -> None:
     (built.path / "manifest.json").write_text(json.dumps({**data, "spec": "0.1"}))
     with pytest.raises(
         BlicketError,
-        match=r"manifest\.json is spec 0\.1; this blicket reads 0\.2: rebuild the run$",
+        match=r"manifest\.json is spec 0\.1; this blicket reads 0\.2 and 0\.3: rebuild the run$",
     ):
         manifest.read(built.path)
 

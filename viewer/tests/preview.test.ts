@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { BlickComparison, Flag } from '../app/lib/comparison'
-import type { BlickEntry, Control, Dimension, Value } from '../app/lib/manifest'
+import type { BlickEntry, CheckEntry, Control, Dimension, Value } from '../app/lib/manifest'
 import { resolvePins } from '../app/lib/pins'
 import { pinnedHint, previewCaption, previewLink, previewSections, previewState, skippedLine, troubles } from '../app/lib/preview'
 
@@ -11,7 +11,7 @@ function entry(name: string, extra: Partial<BlickEntry> = {}, mapping: Record<st
 
 function compared(name: string, flags: Flag[], magnitude: number | null = null, where: Record<string, Value> | null = null, baseline: string | null = null): BlickComparison {
   const change = { flags, magnitude, columns_added: {}, columns_removed: {}, values_added: {}, values_removed: {}, where }
-  return { id: name, name, matched: null, change, skipped: false, message: null, baseline_data: baseline, baseline_hash: null }
+  return { id: name, name, matched: null, change, skipped: false, message: null, baseline_data: baseline, baseline_hash: null, expectation: null }
 }
 
 /** The sections of `entries`, with the comparison's Blicks and the pinned ids as the page has them. */
@@ -78,9 +78,19 @@ describe('the overview\'s sections', () => {
   it('sum up the trouble of a build in a line, which skipped Blicks are not', () => {
     const problem = broken('e').problems[0]!
     const warning = { ...problem, severity: 'warning' as const }
-    expect(troubles({ blicks: [broken('e'), skipped('t'), entries[0]!], build: { id: 'b', incomplete: true, loader_ms: 0 }, problems: [problem, problem, warning] }))
+    expect(troubles({ blicks: [broken('e'), skipped('t'), entries[0]!], checks: [], build: { id: 'b', incomplete: true, loader_ms: 0 }, problems: [problem, problem, warning] }))
       .toBe('1 Blick failed to build · build incomplete · 2 errors in files or the project')
-    expect(troubles({ blicks: [...entries, skipped('t')], build: { id: 'b', incomplete: false, loader_ms: 0 }, problems: [warning] })).toBe('')
+    expect(troubles({ blicks: [...entries, skipped('t')], checks: [], build: { id: 'b', incomplete: false, loader_ms: 0 }, problems: [warning] })).toBe('')
+    const check = { ...broken('c'), kind: 'check' } as unknown as CheckEntry
+    expect(troubles({ blicks: entries, checks: [check, check], build: { id: 'b', incomplete: false, loader_ms: 0 }, problems: [] })).toBe('2 checks failed to run')
+    // An expectation that cannot be evaluated is an error of the build, of either kind of unit.
+    const cannot = { result: 'error' as const, expectation: 'share at most 1', evaluated: null, offending: 0, within: 0, worst: null, distance: null, where: null, message: 'on= names \'share\', which is no column of the table' }
+    const unevaluable = { ...entries[0]!, outcome: cannot }
+    const ran = { ...entries[0]!, kind: 'check', outcome: cannot } as unknown as CheckEntry
+    expect(troubles({ blicks: [unevaluable], checks: [check, ran], build: { id: 'b', incomplete: false, loader_ms: 0 }, problems: [] }))
+      .toBe('1 check failed to run · 2 expectations cannot be evaluated')
+    expect(troubles({ blicks: [unevaluable], checks: [], build: { id: 'b', incomplete: false, loader_ms: 0 }, problems: [] }))
+      .toBe('1 expectation cannot be evaluated')
   })
 
   it('say how many Blicks the run skipped, and when nothing is left to show', () => {

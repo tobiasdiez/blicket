@@ -227,7 +227,7 @@ def test_usage_error_exits_2() -> None:
 
 def test_help_and_version() -> None:
     result = runner.invoke(cli.app, ["list", "--help"], terminal_width=200)
-    assert "Show the project's Blicks and any definition problems." in result.stdout
+    assert "Show the project's Blicks and checks and any definition problems." in result.stdout
     assert "Exit codes" not in result.stdout  # the README has them
     assert invoke("--version").stdout == f"blicket {importlib.metadata.version('blicket')}\n"
     for flag in ("--help", "-h"):

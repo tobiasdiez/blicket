@@ -18,12 +18,12 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
-from blicket import builder, check, dataset
+from blicket import builder, dataset, guard
 from blicket.builder import Build, LoadedRun, Prepared
-from blicket.check import Compared
 from blicket.dataset import Found
 from blicket.discovery import discover
 from blicket.errors import BlicketError, DatasetError, Kind, LoadRefused
+from blicket.guard import Compared
 from blicket.model import BlickEntry, Registry
 from blicket.query import Options, Query, run_query
 from blicket.report import render_check
@@ -274,7 +274,7 @@ def _serve(prepared: Prepared, against: str | None, verbose: bool) -> tuple[Serv
         loaded = builder.load(prepared)
         built = builder.write(prepared, registry, loaded)
         found = dataset.find(prepared.target, loaded.run, prepared.root)
-    compared = check.compare(built, prepared.root, against)
+    compared = guard.compare(built, prepared.root, against)
     lines = [
         render_check(
             built,

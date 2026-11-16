@@ -1,0 +1,16 @@
+[project]
+name = "coherence-blicks"
+version = "0"
+description = "Expectations and checks on a made-up steel cycle, an example blicket project."
+requires-python = ">=3.14"
+dependencies = ["blicket"]
+
+[tool.uv.sources]
+# Not editable: uv rebuilds blicket when a file named in its [tool.uv] cache-keys changes.
+blicket = { path = "../.." }
+
+[tool.blicket]
+# The loader is load_run in blicketconf.py next to this file, the Blicks and checks are under
+# blicks/. runs are the folders blicket dev offers to pick when started without one. No level is
+# set, so a failed expectation fails the build unless the Blick or check says otherwise.
+runs = ["runs/*"]

@@ -4,8 +4,10 @@ import type { TableColumn } from '@nuxt/ui'
 import { unitOf, withUnit, type TableSchema } from '~/lib/manifest'
 import { display, formatValue, type Cell, type Row } from '~/lib/table'
 
-// `mapping` is the plot's, which says what measure the unit belongs to.
-const props = defineProps<{ rows: Row[], schema: TableSchema, unit: string | null, mapping: Record<string, string> }>()
+// `mapping` is the plot's, which says what measure the unit belongs to; a check's table has
+// neither a plot nor a unit. `rows` are shown in their order until a column is sorted; `note`
+// says what that order is, while no column is.
+const props = defineProps<{ rows: Row[], schema: TableSchema, unit: string | null, mapping?: Record<string, string>, note?: string }>()
 
 const LIMIT = 2000
 const UButton = resolveComponent('UButton')
@@ -37,7 +39,7 @@ const STICKY = 'max-sm:sticky max-sm:right-0 max-sm:bg-default'
 const columns = computed<TableColumn<Row>[]>(() => [
   ...props.schema.dimensions.map(d => ({ name: d.name, label: d.name, format: (value: Cell) => (value === null ? '' : display(value, d)), numeric: d.dtype === 'integer' })),
   // Six significant digits, chosen per value, so close values stay apart.
-  ...props.schema.measures.map(m => ({ name: m.name, label: withUnit(m.name, unitOf(m.name, props.unit, props.mapping)), format: (value: Cell) => (typeof value === 'number' ? formatValue(value, 6) : ''), numeric: true })),
+  ...props.schema.measures.map(m => ({ name: m.name, label: withUnit(m.name, unitOf(m.name, props.unit, props.mapping ?? {})), format: (value: Cell) => (typeof value === 'number' ? formatValue(value, 6) : ''), numeric: true })),
 ].map(({ name, label, format, numeric }, index, all) => ({
   id: name,
   accessorFn: (row: Row) => row[name],
@@ -72,7 +74,10 @@ const columns = computed<TableColumn<Row>[]>(() => [
         The first {{ LIMIT.toLocaleString('en') }} of {{ rows.length.toLocaleString('en') }} rows shown; the Parquet file has them all.
       </template>
       <template v-else>
-        {{ rows.length.toLocaleString('en') }} rows shown.
+        {{ rows.length.toLocaleString('en') }} {{ rows.length === 1 ? 'row' : 'rows' }} shown.
+      </template>
+      <template v-if="note && !sorting.length">
+        {{ note }}
       </template>
       <span v-if="overflowing"> Scroll sideways for more columns.</span>
     </p>

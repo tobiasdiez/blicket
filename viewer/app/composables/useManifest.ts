@@ -1,5 +1,5 @@
 import { isDevAnswer, isNoRun } from '~/lib/dev'
-import { SPEC, type Manifest } from '~/lib/manifest'
+import { normalized, READS, reads, type Manifest } from '~/lib/manifest'
 
 const manifest = shallowRef<Manifest | null>(null)
 const error = ref<string | null>(null)
@@ -19,10 +19,10 @@ async function load(): Promise<void> {
     }
     if (!response.ok) throw new Error(`manifest.json: ${response.status} ${response.statusText}`)
     const data = (await response.json()) as Manifest
-    if (data.spec !== SPEC) {
-      throw new Error(`another version of blicket made this build (manifest spec ${data.spec}; this viewer reads ${SPEC}); rebuild it with blicket build`)
+    if (!reads(data.spec)) {
+      throw new Error(`another version of blicket made this build (manifest spec ${data.spec}; this viewer reads ${READS.join(' and ')}); rebuild it with blicket build`)
     }
-    manifest.value = data
+    manifest.value = normalized(data)
   }
   catch (cause) {
     error.value = `cannot read the build: ${cause instanceof Error ? cause.message : String(cause)}`
@@ -30,7 +30,8 @@ async function load(): Promise<void> {
 }
 
 /**
- * The manifest of the build directory the viewer sits in, fetched once, and whether `blicket dev`
+ * The manifest of the build directory the viewer sits in, fetched once, a build of spec 0.2 as
+ * one of 0.3 without checks or outcomes (`normalized`), and whether `blicket dev`
  * serves it, which the header `Blicket-Dev` on the manifest says, so a static host needs no
  * request more; `noRun` when `blicket dev` serves no run yet, so that there is no manifest.
  */

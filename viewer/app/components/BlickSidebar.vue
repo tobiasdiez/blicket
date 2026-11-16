@@ -1,39 +1,47 @@
 <script setup lang="ts">
 import type { NavigationMenuItem } from '@nuxt/ui'
 import type { Badge } from '~/lib/comparison'
-import { byStatus } from '~/lib/manifest'
-import { changedCount, initiallyOpen, noMatch, sidebarGroups } from '~/lib/sidebar'
+import type { ExpectationBadge } from '~/lib/expectations'
+import { CHECKS, changedCount, filterOptions, footText, initiallyOpen, noMatch, notMetUnits, sidebarChecks, sidebarGroups, type SidebarFilter } from '~/lib/sidebar'
 
 const route = useRoute()
 const { manifest, dev } = useManifest()
 const { blicks, loading } = useComparison()
 const { pinned } = usePins()
 const { open, closeDrawer } = useSidebar()
-const current = useBlickId()
+const currentBlick = useBlickId()
+const currentCheck = useCheckId()
 
 // The search, the filter and the groups left open live as long as the sidebar, which is mounted
 // once and outlives the pages; they are not in the URL. `chosen` are the groups the user left
 // open, `null` before the user opened or closed one, when those of `initiallyOpen` are, together
-// with `opened`, the groups that a Blick's page opened meanwhile; `filtered` those open while a
+// with `opened`, the groups that a unit's page opened meanwhile; `filtered` those open while a
 // search or the filter is active. `opened` is kept apart from `chosen` so that the groups open at
-// first follow the comparison, which may load after the page.
+// first follow the comparison, which may load after the page. The checks are a section after the
+// groups, opened and closed as one.
 const search = ref('')
-const changedOnly = ref(false)
+const filter = ref<SidebarFilter>('all')
 const chosen = ref<string[] | null>(null)
 const opened = ref<string[]>([])
 const filtered = ref<string[]>([])
 
 const pinnedNames = computed(() => new Set(pinned.value.map(entry => entry.name)))
-const groups = computed(() => (manifest.value ? sidebarGroups(manifest.value, blicks.value, pinnedNames.value, search.value, changedOnly.value) : []))
+const groups = computed(() => {
+  if (!manifest.value) return []
+  const checks = sidebarChecks(manifest.value, search.value, filter.value)
+  return [...sidebarGroups(manifest.value, blicks.value, pinnedNames.value, search.value, filter.value), ...(checks ? [checks] : [])]
+})
 const changed = computed(() => (manifest.value ? changedCount(manifest.value, blicks.value) : 0))
-const filtering = computed(() => search.value.trim() !== '' || changedOnly.value)
-const total = computed(() => manifest.value?.blicks.length ?? 0)
+const notMet = computed(() => (manifest.value ? notMetUnits(manifest.value) : 0))
+const options = computed(() => filterOptions(changed.value, notMet.value))
+const filtering = computed(() => search.value.trim() !== '' || filter.value !== 'all')
+const total = computed(() => (manifest.value ? manifest.value.blicks.length + manifest.value.checks.length : 0))
 const matching = computed(() => groups.value.reduce((sum, group) => sum + group.entries.length, 0))
-const statuses = computed(() => byStatus(manifest.value?.blicks ?? []))
+const foot = computed(() => (manifest.value ? footText(manifest.value, filtering.value ? matching.value : null) : ''))
 
-// Without a flagged Blick the toggle is gone, and so is its filter.
-watch(changed, (count) => {
-  if (!count) changedOnly.value = false
+// A state that is no longer offered, as Changed once no Blick is flagged, gives way to All.
+watch(options, (offered) => {
+  if (!offered.some(option => option.value === filter.value)) filter.value = 'all'
 })
 
 // While a search or the filter is active, every group with a match opens as the matches change;
@@ -51,10 +59,11 @@ const expanded = computed({
   },
 })
 
-/** A Blick's item of the navigation menu, whose slots know only the groups' items. */
+/** A unit's item of the navigation menu, whose slots know only the groups' items. */
 interface BlickItem extends NavigationMenuItem {
   flag: Badge | null
-  /** A Blick skipped for the run that no comparison flags: its label is in italics. */
+  expectation: ExpectationBadge | null
+  /** A unit skipped for the run that no badge marks: its label is in italics. */
   muted: boolean
   pinned: boolean
 }
@@ -64,19 +73,21 @@ const items = computed<NavigationMenuItem[]>(() => groups.value.map(group => ({
   value: group.value,
   children: group.entries.map((shown): BlickItem => ({
     label: shown.label,
-    to: shown.entry.id ? `/blick/${shown.entry.id}` : undefined,
+    to: shown.to ?? undefined,
     disabled: shown.disabled,
     slot: 'blick',
     flag: shown.badge,
+    expectation: shown.expectation,
     muted: shown.muted,
     pinned: shown.pinned,
   })),
 })))
 
-// A Blick's page opens its group and scrolls its item into view, in the sidebar and the drawer;
-// after the group's opening animation, when it had to open.
-watch([current, manifest], async () => {
-  const group = manifest.value?.blicks.find(b => b.id === current.value)?.group
+// A unit's page opens its group, or the section of the checks, and scrolls its item into view, in
+// the sidebar and the drawer; after the group's opening animation, when it had to open.
+watch([currentBlick, currentCheck, manifest], async () => {
+  const blick = manifest.value?.blicks.find(b => b.id === currentBlick.value)
+  const group = blick?.group ?? (manifest.value?.checks.some(c => c.id === currentCheck.value) ? CHECKS : undefined)
   if (!group || !groups.value.some(g => g.value === group)) return
   const opening = !expanded.value.includes(group)
   if (opening && !filtering.value && chosen.value === null) opened.value = [...opened.value, group]
@@ -100,9 +111,9 @@ function clearSearch(event: Event) {
   content?.querySelector<HTMLInputElement>('[data-slot="header"] input')?.focus()
 }
 
-/** Show every Blick again: no search, no filter. */
+/** Show every unit again: no search, no filter. */
 function showAll(event: Event) {
-  changedOnly.value = false
+  filter.value = 'all'
   clearSearch(event)
 }
 
@@ -136,7 +147,7 @@ function focusOnOpen(event: Event) {
     }"
   >
     <template #title>
-      <UInput v-model="search" icon="i-lucide-search" placeholder="Search Blicks" aria-label="Search Blicks" class="w-full" :ui="{ trailing: 'pe-1' }">
+      <UInput v-model="search" icon="i-lucide-search" :placeholder="manifest?.checks.length ? 'Search' : 'Search Blicks'" :aria-label="manifest?.checks.length ? 'Search Blicks and checks' : 'Search Blicks'" class="w-full" :ui="{ trailing: 'pe-1' }">
         <template v-if="search" #trailing>
           <UButton color="neutral" variant="link" size="sm" icon="i-lucide-circle-x" aria-label="Clear the search" @click="clearSearch" />
         </template>
@@ -144,15 +155,16 @@ function focusOnOpen(event: Event) {
     </template>
     <template #actions>
       <!-- Its room is kept while the comparisons load, so the search box does not shrink then. -->
-      <UButton
-        v-if="changed || loading"
+      <USelect
+        v-if="options.length || loading"
+        v-model="filter"
+        :items="options"
+        value-key="value"
         size="sm"
-        color="neutral"
-        :variant="changedOnly ? 'solid' : 'outline'"
-        :aria-pressed="changedOnly"
-        :label="`Changed (${changed})`"
-        :class="{ invisible: !changed }"
-        @click="changedOnly = !changedOnly"
+        aria-label="Show"
+        :highlight="filter !== 'all'"
+        :class="['w-30 shrink-0', { invisible: !options.length }]"
+        :content="{ align: 'end' }"
       />
     </template>
 
@@ -174,18 +186,19 @@ function focusOnOpen(event: Event) {
         </template>
         <template #blick-trailing="{ item }: { item: BlickItem }">
           <FlagBadge v-if="item.flag" :badge="item.flag" size="sm" inline />
+          <OutcomeBadge v-if="item.expectation" :badge="item.expectation" size="sm" />
           <PinMark v-if="item.pinned" />
         </template>
       </UNavigationMenu>
       <div v-if="total && !groups.length" class="space-y-2 px-2.5 py-1.5 text-sm text-muted">
-        <p>{{ noMatch(search, changedOnly) }}</p>
+        <p>{{ noMatch(search, filter, !!manifest?.checks.length) }}</p>
         <UButton size="sm" color="neutral" variant="outline" label="Show all" @click="showAll" />
       </div>
     </div>
 
     <template #footer>
       <p v-if="manifest">
-        <template v-if="filtering">{{ matching }} of </template>{{ total }} Blicks<span v-if="statuses.error.length"> · {{ statuses.error.length }}&nbsp;with&nbsp;errors</span><span v-if="statuses.skipped.length"> · {{ statuses.skipped.length }}&nbsp;skipped</span><span v-if="manifest.build.incomplete"> · incomplete, a module failed to import</span>
+        {{ foot }}
       </p>
       <UButton v-if="dev" to="/builder" icon="i-lucide-wand-sparkles" label="Build a Blick" color="neutral" variant="outline" size="sm" />
     </template>

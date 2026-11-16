@@ -6,19 +6,24 @@ Blick modules use this package as ``import blicket as bk``::
 
     @bk.blick(title="Steel flows", plot=bk.plots.stacked_area(x="year", y="value", color="process"))
     def steel_by_process(run): ...
+
+    @bk.check(expect=bk.expect.no_rows(by="value", warn_within=1e-9))
+    def negative_flows(run): ...
 """
 
-from blicket import plots
+from blicket import expect, plots
 from blicket.builder import Build, NothingToBuild, build
 from blicket.comparison import Comparison
 from blicket.config import Config, find_project_root, load_config
 from blicket.dataset import Dataset, Frames, Quantity
-from blicket.definitions import blick, group, register, slug
+from blicket.definitions import blick, check, group, register, register_check, slug
 from blicket.discovery import discover
 from blicket.errors import BlicketError, ConfigError, DefinitionError, LoaderError, Problem, Skip
+from blicket.expect import Expectation, Outcome
+from blicket.expect._levels import Level
 from blicket.loader import RunSelection, fingerprint
 from blicket.manifest import Manifest, RunInfo
-from blicket.model import Blick, BlickEntry, Group, Registry
+from blicket.model import Blick, BlickEntry, Check, CheckEntry, Group, Registry
 from blicket.plots import Channel, PlotSpec, PlotType
 from blicket.schema import Change, Control, Dimension
 
@@ -29,6 +34,8 @@ __all__ = [
     "Build",
     "Change",
     "Channel",
+    "Check",
+    "CheckEntry",
     "Comparison",
     "Config",
     "ConfigError",
@@ -36,11 +43,14 @@ __all__ = [
     "Dataset",
     "DefinitionError",
     "Dimension",
+    "Expectation",
     "Frames",
     "Group",
+    "Level",
     "LoaderError",
     "Manifest",
     "NothingToBuild",
+    "Outcome",
     "PlotSpec",
     "PlotType",
     "Problem",
@@ -51,12 +61,15 @@ __all__ = [
     "Skip",
     "blick",
     "build",
+    "check",
     "discover",
+    "expect",
     "find_project_root",
     "fingerprint",
     "group",
     "load_config",
     "plots",
     "register",
+    "register_check",
     "slug",
 ]

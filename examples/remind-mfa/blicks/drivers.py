@@ -55,6 +55,7 @@ def scenario_rates(run: PlasticsModel) -> pd.DataFrame:
     unit="fraction",
     plot=bk.plots.stacked_bar(x="Region", y="value", color="Polymer"),
     controls={"End Use": "split"},  # one panel per End Use
+    expect=bk.expect.between(0, 1),  # each share
 )
 def polymer_splits(run: PlasticsModel) -> fd.FlodymArray:
     """Each polymer's share of the plastics entering use, per region and end use.

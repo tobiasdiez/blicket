@@ -111,6 +111,7 @@ def production_trade_consumption(run: PlasticsModel) -> pd.DataFrame:
     unit="fraction",
     plot=bk.plots.stacked_area(x="Time", y="value", color="End Use"),
     controls={"Region": "split"},  # one panel per Region
+    expect=bk.expect.between(0, 1),  # each share
 )
 def end_use_split(run: PlasticsModel) -> fd.FlodymArray:
     """Each end use's share of the plastics entering use, per region and year.

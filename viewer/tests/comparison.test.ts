@@ -13,6 +13,7 @@ function blick(name: string, flags: Flag[], change: Partial<Change> = {}, extra:
     message: null,
     baseline_data: null,
     baseline_hash: null,
+    expectation: null,
     ...extra,
   }
 }
@@ -20,7 +21,7 @@ function blick(name: string, flags: Flag[], change: Partial<Change> = {}, extra:
 const build: BuildRef = { id: '0123456789abcdef', run: 'r', profile: 'p', created_at: '2026-10-24T20:02:43.09Z', repository: null, incomplete: false }
 
 function comparison(blicks: BlickComparison[], incomplete: string[] = []): Comparison {
-  return { spec: '0.2', blicket: '0', created_at: build.created_at, baseline: build, current: build, incomplete, blicks }
+  return { spec: '0.2', blicket: '0', created_at: build.created_at, baseline: build, current: build, incomplete, blicks, checks: [] }
 }
 
 describe('ranked', () => {

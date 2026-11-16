@@ -1,15 +1,15 @@
-"""The build: load a run, run every Blick's transformation, write a build directory.
+"""The build: load a run, run every Blick's and check's transformation, write a build directory.
 
 ``build`` composes the steps: ``prepare`` reads the config and checks everything that can fail
-before the run is loaded, ``discover`` imports the Blicks, ``load`` loads the run, and ``write``
-runs the transformations and writes the build directory. ``blicket dev`` takes the steps one by
-one, since it keeps the run.
+before the run is loaded, ``discover`` imports the Blicks and checks, ``load`` loads the run, and
+``write`` runs the transformations, evaluates the expectations and writes the build directory.
+``blicket dev`` takes the steps one by one, since it keeps the run.
 
 A build directory holds ``manifest.json``, ``blicks/<id>.parquet`` for every Blick that built,
-and a copy of the viewer. It is assembled in a temporary directory next to its destination and
-renamed to its id at the end, so it appears complete or not at all. An existing directory of the
-same id keeps its manifest and tables; only its copy of the viewer is replaced when it is not the
-installed one.
+``checks/<id>.parquet`` for every check that found offending rows, and a copy of the viewer. It
+is assembled in a temporary directory next to its destination and renamed to its id at the end,
+so it appears complete or not at all. An existing directory of the same id keeps its manifest and
+tables; only its copy of the viewer is replaced when it is not the installed one.
 """
 
 import contextlib
@@ -31,16 +31,19 @@ from blicket import loader, manifest, tables, viewer
 from blicket.config import PYPROJECT, Config, load_config
 from blicket.discovery import discover
 from blicket.errors import NOWHERE, BlicketError, ConfigError, Kind, Problem, display_path
+from blicket.expect._levels import Level
 from blicket.loader import DEFAULT_LOADER_MODULE, RunSelection
 from blicket.manifest import BuildConfig, BuildInfo, Manifest, Repository, Run, RunInfo
-from blicket.model import Blick, BlickEntry, Registry
+from blicket.model import BlickEntry, Check, CheckEntry, Entry, Registry, Unit
 
 
 class NothingToBuild(BlicketError):
-    """No Blick of the project can be built, so no build is written; ``registry`` says why."""
+    """No Blick or check of the project can be built, so no build is written; ``registry`` says
+    why. The message names checks when the project defines some."""
 
     def __init__(self, registry: Registry) -> None:
-        super().__init__("no Blick can be built, so no build was written")
+        units = "Blick or check" if registry.with_checks else "Blick"
+        super().__init__(f"no {units} can be built, so no build was written")
         self.registry = registry
 
 
@@ -153,9 +156,10 @@ def load(prepared: Prepared) -> LoadedRun:
 
 
 def write(prepared: Prepared, registry: Registry, loaded: LoadedRun) -> Build:
-    """Run every Blick of ``registry`` on the loaded run and write the build directory.
+    """Run every Blick of ``registry`` on the loaded run, then every check, evaluate their
+    expectations at their levels, and write the build directory.
 
-    A registry without a buildable Blick gives a build of its failed Blicks and problems. Raises
+    A registry without a buildable unit gives a build of its failed units and problems. Raises
     ``BlicketError`` when the build cannot be written, before a build directory exists, or when
     the viewer of an existing build cannot be replaced.
     """
@@ -171,21 +175,26 @@ def write(prepared: Prepared, registry: Registry, loaded: LoadedRun) -> Build:
     except OSError as error:
         reason = error.strerror or str(error)
         raise BlicketError(f"cannot write the build to {destination}: {reason}") from error
+    config = prepared.config
     try:
-        entries = [_run_blick(b, loaded.run, temporary, root) for b in registry.blicks.values()]
+        ran = [
+            _run_unit(unit, loaded.run, temporary, root, registry.level_of(unit))
+            for unit in registry.units
+        ]
         # In the order of their definitions, as blicket list shows them.
-        entries = sorted([*entries, *registry.failed], key=lambda e: e.source or NOWHERE)
+        entries = sorted([*ran, *registry.failed], key=lambda e: e.source or NOWHERE)
         built = Manifest(
             blicket=importlib.metadata.version("blicket"),
             created_at=datetime.now(UTC),
             build=BuildInfo(
                 id="", incomplete=registry.incomplete, loader_ms=round(loaded.loader_ms, 1)
             ),
-            config=BuildConfig(tolerance=prepared.config.tolerance),
+            config=BuildConfig(tolerance=config.tolerance, level=config.level),
             run=Run(**loaded.info.model_dump(), paths=list(prepared.shown)),
             repository=repository,
             groups=tuple(registry.groups.values()),
-            blicks=tuple(entries),
+            blicks=tuple(e for e in entries if isinstance(e, BlickEntry)),
+            checks=tuple(e for e in entries if isinstance(e, CheckEntry)),
             problems=(*registry.problems, *problems),
         )
         build_info = built.build.model_copy(update={"id": built.content_id(root)})
@@ -211,18 +220,19 @@ def build(
     *,
     out: str | os.PathLike[str] | None = None,
 ) -> Build:
-    """Build the run at ``paths`` with the Blicks of the project at ``project``.
+    """Build the run at ``paths`` with the Blicks and checks of the project at ``project``.
 
     The build directory goes into ``out``, by default ``<project>/.blicket/build``, with the
-    viewer ``viewer.find`` returns. Problems with Blicks and files are recorded in the manifest.
-    Raises ``NothingToBuild`` when no Blick can be built, and another ``BlicketError`` when the
-    config, ``BLICKET_VIEWER``, a run path or the loader fails or the build cannot be written,
-    all before a build directory exists, or when the viewer of an existing build cannot be
-    replaced. What the loader and the transformations print goes to stderr.
+    viewer ``viewer.find`` returns. Problems with Blicks, checks and files are recorded in the
+    manifest, as are the outcomes of the expectations. Raises ``NothingToBuild`` when no Blick or
+    check can be built, and another ``BlicketError`` when the config, ``BLICKET_VIEWER``, a run
+    path or the loader fails or the build cannot be written, all before a build directory exists,
+    or when the viewer of an existing build cannot be replaced. What the loader and the
+    transformations print goes to stderr.
     """
     prepared = prepare(project, paths, out)
     registry = discover(prepared.root, prepared.config)
-    if not registry.blicks:
+    if not registry.units:
         raise NothingToBuild(registry)
     with contextlib.redirect_stdout(sys.stderr):
         return write(prepared, registry, load(prepared))
@@ -255,26 +265,34 @@ def _repository(root: Path) -> tuple[Repository | None, list[Problem]]:
     return None, [Problem(kind=Kind.REPOSITORY, severity="warning", message=message)]
 
 
-def _run_blick(blick: Blick, run: object, directory: Path, root: Path) -> BlickEntry:
-    """Build one Blick into ``directory``: its table as Parquet, and its manifest entry."""
+def _run_unit(unit: Unit, run: object, directory: Path, root: Path, level: Level) -> Entry:
+    """Build one Blick or check into ``directory`` at ``level``: its table as Parquet under
+    ``blicks/`` or ``checks/``, and its manifest entry. A check without offending rows writes no
+    table; its entry has ``rows`` 0 and no columns."""
     start = time.perf_counter()
-    checked = tables.compute(blick, run, root)
+    checked = tables.compute(unit, run, root, level)
     data: str | None = None
     digest: str | None = None
     rows: int | None = None
+    columns = checked.schema
     if checked.frame is not None:
-        data = f"blicks/{blick.id}.parquet"
-        path = directory / data
-        path.parent.mkdir(parents=True, exist_ok=True)
-        checked.frame.write_parquet(path)
-        digest = f"parquet-sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
         rows = checked.frame.height
-    return blick.entry(
+        if rows or not isinstance(unit, Check):
+            data = f"{unit.directory}/{unit.id}.parquet"
+            path = directory / data
+            path.parent.mkdir(parents=True, exist_ok=True)
+            checked.frame.write_parquet(path)
+            digest = f"parquet-sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+        else:
+            columns = None
+    return unit.entry(
+        level=level,
         problems=checked.problems,
         data=data,
         hash=digest,
         rows=rows,
-        columns=checked.schema,
+        columns=columns,
+        outcome=checked.outcome,
         timing_ms=round((time.perf_counter() - start) * 1000, 1),
         skipped=checked.skipped,
     )

@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { byStatus } from '~/lib/manifest'
+import { expectationSection, outcomeSentence } from '~/lib/expectations'
+import { byStatus, unitPath, units, type Problem } from '~/lib/manifest'
 import { PREVIEWS, pinnedHint, previewSections, skippedLine, troubles } from '~/lib/preview'
 import { sidebarOrder } from '~/lib/sidebar'
 
@@ -20,7 +21,22 @@ const more = computed(() => {
   return changed?.cards.length && changed.listed.length ? `${changed.listed.length} more changed` : null
 })
 const statuses = computed(() => byStatus(manifest.value?.blicks ?? []))
-const broken = computed(() => statuses.value.error)
+// The Blicks and checks in error, and those whose expectation cannot be evaluated, which is an
+// error of the build too, with their problems; the overview lists them.
+const broken = computed(() => (manifest.value ? units(manifest.value) : []).flatMap((entry) => {
+  const unevaluable: Problem[] = entry.outcome?.result === 'error'
+    ? [{ kind: 'expectation', severity: 'error', source: entry.source, module: entry.module, ids: [], message: outcomeSentence(entry.outcome), traceback: null }]
+    : []
+  const problems = entry.status === 'error' ? entry.problems : unevaluable
+  return problems.length ? [{ key: `${entry.kind}:${entry.name}`, name: entry.name, to: unitPath(entry), problems }] : []
+}))
+const checks = computed(() => manifest.value?.checks.length ?? 0)
+// The expectations: the units not met, the fixed and the dropped, against the baseline shown; not
+// before the comparisons are read, so that the transitions show at once.
+const expectations = computed(() => {
+  if (!manifest.value || loading.value) return null
+  return expectationSection([...entries.value, ...manifest.value.checks], comparison.value)
+})
 // How many Blicks the run skipped, which neither the cards nor the problems show.
 const skipped = computed(() => skippedLine(manifest.value?.blicks ?? []))
 // With every Blick skipped and nothing pinned, the pinned section has nothing to offer.
@@ -80,6 +96,35 @@ async function refocus(name: string, index: number) {
     <p v-if="skipped" class="text-sm text-muted">
       {{ skipped }}
     </p>
+    <section v-if="expectations" class="space-y-3" aria-labelledby="expectations">
+      <h2 id="expectations" class="text-sm font-semibold text-highlighted">
+        Expectations
+      </h2>
+      <dl class="space-y-0.5 text-sm text-muted">
+        <div class="flex flex-wrap gap-x-1">
+          <dt>This run:</dt>
+          <dd>{{ expectations.run }}</dd>
+        </div>
+        <div v-if="expectations.baseline" class="flex flex-wrap gap-x-1">
+          <dt>Against the baseline:</dt>
+          <dd>{{ expectations.baseline }}</dd>
+        </div>
+      </dl>
+      <ul v-if="expectations.notMet.length || expectations.resolved.length" class="divide-y divide-default">
+        <li v-for="item in [...expectations.notMet, ...expectations.resolved]" :key="item.key" class="flex flex-wrap items-baseline gap-x-2 gap-y-1 py-2 text-sm">
+          <NuxtLink v-if="item.to" :to="item.to" class="min-w-0 font-medium break-words text-highlighted hover:underline">
+            {{ item.label }}
+          </NuxtLink>
+          <span v-else class="min-w-0 font-mono break-all text-muted">{{ item.label }}</span>
+          <span class="text-xs text-muted">{{ item.kind }}</span>
+          <OutcomeBadge v-if="item.badge" :badge="item.badge" size="sm" wide />
+          <span v-if="item.transition" class="text-muted">{{ item.transition }}</span>
+          <p v-if="item.sentence" class="w-full break-words text-muted">
+            {{ item.sentence }}
+          </p>
+        </li>
+      </ul>
+    </section>
     <template v-if="sections && total">
       <section v-if="sections.changed" class="space-y-3" aria-labelledby="changed">
         <h2 id="changed" class="text-sm font-semibold text-highlighted">
@@ -97,10 +142,10 @@ async function refocus(name: string, index: number) {
           </p>
           <ul class="divide-y divide-default">
             <li v-for="item in sections.changed.listed" :key="item.name" class="flex flex-wrap items-baseline gap-x-2 gap-y-1 py-2 text-sm">
-              <NuxtLink v-if="item.to" :to="item.to" class="min-w-0 font-medium text-highlighted hover:underline" :class="{ 'font-mono font-normal': item.byName }">
+              <NuxtLink v-if="item.to" :to="item.to" class="min-w-0 font-medium break-words text-highlighted hover:underline" :class="{ 'font-mono font-normal break-all': item.byName }">
                 {{ item.label }}
               </NuxtLink>
-              <span v-else class="min-w-0 font-mono text-muted">{{ item.label }}</span>
+              <span v-else class="min-w-0 font-mono break-all text-muted">{{ item.label }}</span>
               <FlagBadge v-if="item.badge" :badge="item.badge" size="sm" />
               <p v-if="item.note" class="w-full whitespace-pre-wrap break-words text-muted">
                 {{ item.note }}
@@ -138,6 +183,9 @@ async function refocus(name: string, index: number) {
       </p>
       <UButton to="/builder" icon="i-lucide-wand-sparkles" label="Build a Blick" color="neutral" variant="outline" />
     </div>
+    <p v-else-if="!total && checks" class="text-sm text-muted">
+      This build has no Blicks, only {{ checks === 1 ? 'one check' : `${checks} checks` }}; the sidebar lists {{ checks === 1 ? 'it' : 'them' }}.
+    </p>
     <p v-else-if="!total" class="text-sm text-muted">
       This build has no Blicks.
     </p>
@@ -147,16 +195,16 @@ async function refocus(name: string, index: number) {
         Problems
       </h2>
       <p v-if="manifest.build.incomplete" class="text-sm">
-        This build is incomplete: a Blick module failed to import, so the Blicks it defines are missing.
+        This build is incomplete: a Blick module failed to import, so the Blicks and checks it defines are missing.
       </p>
-      <div v-for="entry in broken" :key="entry.name" class="space-y-2">
+      <div v-for="unit in broken" :key="unit.key" class="space-y-2">
         <h3 class="text-sm font-medium text-highlighted">
-          <NuxtLink v-if="entry.id" :to="`/blick/${entry.id}`" class="font-mono hover:underline">
-            {{ entry.name }}
+          <NuxtLink v-if="unit.to" :to="unit.to" class="font-mono break-all hover:underline">
+            {{ unit.name }}
           </NuxtLink>
-          <span v-else class="font-mono">{{ entry.name }}</span>
+          <span v-else class="font-mono break-all">{{ unit.name }}</span>
         </h3>
-        <ProblemList :problems="entry.problems" />
+        <ProblemList :problems="unit.problems" />
       </div>
       <div v-if="errors.length || warnings.length" class="space-y-2">
         <h3 class="text-sm font-medium text-highlighted">

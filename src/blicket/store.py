@@ -65,9 +65,9 @@ class Store:
         return cls(root / load_config(root).store)
 
     def push(self, build: Path) -> Pushed:
-        """Copy the manifest of the build directory ``build``, the tables its entries name, and
-        the files in its ``compare`` directory, but those under names starting with a dot, into
-        the store; nothing else, so not the viewer.
+        """Copy the manifest of the build directory ``build``, the tables its entries of both kinds
+        name, Blicks' and checks', and the files in its ``compare`` directory, but those under
+        names starting with a dot, into the store; nothing else, so not the viewer.
 
         Nothing is written when the store holds the build already, so comparisons written after
         the first push stay out. Raises ``BlicketError`` when the manifest cannot be read, the
@@ -86,7 +86,7 @@ class Store:
         ]
         names = [
             manifest.MANIFEST,
-            *(e.data for e in built.blicks if e.data is not None),
+            *(e.data for e in built.entries if e.data is not None),
             *compared,
         ]
         inside = build.resolve()

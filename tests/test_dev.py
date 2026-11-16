@@ -192,6 +192,38 @@ def test_dev_goes_on_without_the_baseline_against_names(
     assert serving(served).served.compared.comparison is None
 
 
+EXPECTING = (
+    VALUES.replace(
+        'plot=bk.plots.line(x="year", y="value")',
+        'plot=bk.plots.line(x="year", y="value"), expect=bk.expect.at_most(2)',
+    )
+    + """
+
+@bk.check(expect=bk.expect.at_least(0, on="share"))
+def unevaluable(run):
+    return pl.DataFrame({"year": [2020], "value": [1.0]})
+"""
+)
+
+
+def test_dev_reports_the_expectations_and_goes_on(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, served: list[serve.Server]
+) -> None:
+    project(tmp_path, monkeypatch, files={"blicks/a.py": EXPECTING})
+    result = dev_run("runs/a")
+    assert result.exit_code == 0, result.output  # a failed and an unevaluable expectation
+    lines = result.stdout.splitlines()
+    assert lines[1:4] == [
+        "1 Blick: 1 built",
+        "1 check: 1 ran",
+        "expectations: 1 failed · 1 cannot be evaluated",
+    ]
+    assert "expectations failed" in lines
+    assert "    1 of 3 rows offends: expected value at most 2" in lines
+    outcomes = serving(served).served.build.manifest.results
+    assert outcomes == {"failed": 1, "error": 1}
+
+
 @pytest.mark.parametrize(
     "files",
     [

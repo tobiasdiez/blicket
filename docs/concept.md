@@ -54,6 +54,17 @@ process. Dimensions are how comparison *within* a run works, for example SSP1 ag
 Dimensions of the output table that are not bound to a channel become controls: filter to
 one value, or split by the dimension.
 
+**Check.** A property that every run must have and nobody wants as a chart, such as flows that
+are never negative or stocks that balance their flows (added 2026-11-16). A check is a second unit
+beside the Blick: a function of the run that returns the offending rows as a long table, no rows
+meaning that the property holds, shown in the catalog as a table instead of a chart. A Blick
+plotted for its own sake can carry the same kind of property on its table, an **expectation**,
+such as shares between 0 and 1. Both are evaluated whenever a run is built and give one kind of
+**outcome** (met, warning or failed; how many rows offend, the worst and where), which the build
+reports, the catalog shows, the comparison relates to the baseline's, and which can fail CI. A
+**level** per check, group or project says what a failed expectation is: off, a warning, or an
+error.
+
 **Plot type.** A named chart kind with a fixed contract (see below). A small vocabulary ships
 with the tool: line, stacked area, bar, and similar. A project can define its own plot types,
 for example a map of regions, and then has to implement the full contract.
@@ -93,7 +104,8 @@ blicket's since its first release, 0.1.0, on 2026-11-02.
    against their snapshots, inspect them with controls, iterate on the model or on the Blick
    code. Blick code changes should hot reload.
 2. **Automated guard.** In CI or after each model run: build, compare, produce a change
-   report. Fail or warn when unaccepted changes exist. The exact policy is still open.
+   report. Fail or warn when unaccepted changes exist. The exact policy is still open for
+   changes; an expectation of level error that fails makes the guard fail (decided 2026-11-16).
 3. **Communication artifact.** The built catalog is a static site, so it can be shared
    with colleagues, reviewers, or as a paper supplement. This follows from job 1.
 4. **Exploration.** The controls on each Blick give basic interactive exploration. In dev
@@ -207,18 +219,40 @@ Taken after an architecture plan and its adversarial review; details in architec
   builds and the store.
 - **Reference and historical data.** As a dimension value, as a pseudo-run, or per Blick.
 - **Variants.** Saved control presets per Blick. Useful for communication, skipped for now.
-- **Checks.** Assertions such as mass balance or non-negativity. Out of scope for now.
 - **Auto-accepting** small changes, and **grouping** of changes by shared input variables.
   Both plausible triage aids, not chosen yet. (The noise tolerance itself is decided; see
   2026-10-23.)
 - **CI policy.** Whether unreviewed changes fail the build or only produce a report. Tied to
-  the accept design.
+  the accept design. For expectations it is decided (2026-11-16): one of level error that fails
+  fails the build, since an expectation is a human's decision made ahead.
 - **Arbitrary run against run** comparison. Any two builds in the store can be diffed; the
   user interface for it is deferred.
 - **Export of ad hoc Blicks** as Python or R code, and predefined Blick sets generated from
   remind2's compareScenarios2 as code.
 - **A shipped IAMC adapter**: mif and xlsx reading, the run-folder naming scheme, the plus-sign
   hierarchy, plotstyle colours, validation data.
+
+## Decisions taken on 2026-11-16
+
+Taken with [plans/coherence-checks.md](plans/coherence-checks.md), after remind-mfa shipped about
+200,000 slightly negative flows of a run into an export while the model's own check tolerated them;
+details in architecture.md.
+
+- The deferred decision "Checks" is taken: a check is a second unit beside the Blick, a function of
+  the run that returns its offending rows, shown as a table; a Blick may carry an expectation on its
+  table. Both give one outcome model, met, warning or failed, or error when the expectation cannot
+  be evaluated.
+- The vocabulary is `bk.expect`: `no_rows`, optionally with a function that picks the offending
+  rows, and the bounds `at_most`, `at_least` and `between`. Round-off against a real violation is
+  one expectation with two bounds, `warn_within`, not two checks at two levels.
+- Levels `off`, `warn` and `error`, per unit, group and project, after Storybook's accessibility
+  tests.
+- A failed expectation of level error fails `build` and `check` (exit 1); `check
+  --exit-zero-on-changes` keeps flagged Blicks from doing so, so that a CI that tolerates changes can
+  still fail on a check. "A human decides, CI only reports" keeps holding for changes.
+- The comparison relates the outcomes to the baseline's as broken, new, fixed, still failing or
+  dropped; the transitions flag no Blick.
+- There is no API that runs the checks on a loaded run without a build.
 
 ## Open questions
 

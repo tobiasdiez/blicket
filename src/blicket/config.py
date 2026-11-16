@@ -7,12 +7,14 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from blicket.errors import ConfigError, did_you_mean
+from blicket.expect._levels import DEFAULT_LEVEL, Level
 
 PYPROJECT = "pyproject.toml"
 
 # Messages for values of the wrong type, in place of pydantic's.
 _WRONG_TYPE = {
     "blicks": "blicks must be a list of glob strings, got {value!r}",
+    "level": 'level must be "off", "warn" or "error", got {value!r}',
     "loader": 'loader must be a string "package.module:function", got {value!r}',
     "runs": "runs must be a list of glob strings, got {value!r}",
     "store": "store must be a directory path, got {value!r}",
@@ -54,6 +56,13 @@ class Config(BaseModel):
         lt=1,
         allow_inf_nan=False,
         description="Relative tolerance below which a value counts as unchanged, in (0, 1).",
+    )
+    level: Level = Field(
+        default=DEFAULT_LEVEL,
+        description=(
+            "What a failed expectation is, unless a group or a Blick or check says: off (not "
+            "evaluated), warn (reported) or error (the build exits 1)."
+        ),
     )
 
 

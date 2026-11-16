@@ -1,4 +1,4 @@
-import { offered, type BlickComparison, type Comparison } from '~/lib/comparison'
+import { offered, type BlickComparison, type CheckComparison, type Comparison } from '~/lib/comparison'
 
 const baselines = shallowRef<Comparison[]>([])
 const chosen = ref<string | null>(null)
@@ -13,7 +13,13 @@ async function readComparison(id: string): Promise<Comparison | null> {
   try {
     const response = await fetch(`./compare/${id}/comparison.json`, { cache: 'no-cache' })
     if (!response.ok) throw new Error(`${response.status} ${response.statusText}`)
-    return (await response.json()) as Comparison
+    // A comparison written for a 0.2 build has neither the checks nor the Blicks' expectations.
+    const comparison = (await response.json()) as Comparison
+    return {
+      ...comparison,
+      blicks: comparison.blicks.map(blick => ({ ...blick, expectation: blick.expectation ?? null })),
+      checks: comparison.checks ?? [],
+    }
   }
   catch (cause) {
     console.warn(`blicket: the comparison with build ${id} cannot be read: ${message(cause)}`)
@@ -42,7 +48,8 @@ async function load(): Promise<void> {
  * The comparisons that `blicket check` wrote into the build directory, fetched once; `baselines`
  * are those offered, with a build of another run, in the order of `compare/index.json`. `chosen`
  * is the baseline shown, at first the one of them checked last, `null` for none; `comparison` is
- * its comparison and `blicks` every Blick of it by name. The build's own Blicks find themselves
+ * its comparison, one written for a 0.2 build read with no checks, `blicks` every Blick of it by
+ * name and `checks` every check by name. The build's own Blicks find themselves
  * there, a skipped one that the comparison removes too; a Blick of the baseline only has a name
  * that no Blick of the build has. A build that was never compared has none, and no error.
  */
@@ -53,5 +60,6 @@ export function useComparison() {
   }
   const comparison = computed(() => baselines.value.find(c => c.baseline.id === chosen.value) ?? null)
   const blicks = computed(() => new Map<string, BlickComparison>((comparison.value?.blicks ?? []).map(b => [b.name, b])))
-  return { baselines, chosen, comparison, blicks, loading, error }
+  const checks = computed(() => new Map<string, CheckComparison>((comparison.value?.checks ?? []).map(c => [c.name, c])))
+  return { baselines, chosen, comparison, blicks, checks, loading, error }
 }

@@ -10,6 +10,17 @@ in the current build, it is ``removed`` when the baseline has a table for it, an
 flag and counts as skipped, not as unchanged, since nothing was compared; skipped in the baseline
 only, it is ``new``.
 
+The outcomes of the expectations are related too, for Blicks and checks alike, checks matched by
+id and alias among the checks as Blicks among the Blicks; a check's table is not compared. The
+results are ordered met < warning < failed. An expectation not met now is ``broken`` when it is
+worse than the baseline's outcome of the same expectation and ``still_failing`` otherwise, and
+``new`` when the baseline has no outcome of it: the unit or the expectation is new or changed, or
+was off, skipped or in error there. One met now that was not met there is ``fixed``. One not met
+in the baseline without an outcome now, since the unit or the expectation is gone, off, skipped or
+in error, is ``dropped``, so that silencing a failing check shows. An outcome ``error`` is no
+outcome to relate. Whether the expectation is the same is read from its record in the two
+manifests. The transitions flag no Blick.
+
 ``write`` puts a comparison into the current build directory, under ``compare/<baseline id>/``:
 ``comparison.json`` and the baseline tables of the Blicks flagged ``value`` or ``schema`` as
 ``blicks/<current id>.parquet``. ``compare/index.json`` lists the baseline ids of the comparisons
@@ -22,18 +33,25 @@ import os
 import secrets
 import shutil
 from collections import Counter
+from collections.abc import Callable, Iterator, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import ClassVar, Literal
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict
 
 from blicket import manifest
 from blicket.errors import BlicketError, Kind, os_reason
+from blicket.expect._outcome import Outcome, rank
 from blicket.manifest import Manifest, Repository
-from blicket.model import BlickEntry, BuildPath
+from blicket.model import BlickEntry, BuildPath, Entry
 from blicket.plots import builtin
 from blicket.schema import Change, Flag
+
+type Transition = Literal["broken", "new", "fixed", "still_failing", "dropped"]
+# The transitions in the order reports count them.
+TRANSITIONS: tuple[Transition, ...] = ("broken", "new", "fixed", "still_failing", "dropped")
 
 COMPARE = "compare"
 COMPARISON = "comparison.json"
@@ -54,13 +72,57 @@ class BuildRef(BaseModel):
     incomplete: bool
 
 
-class BlickComparison(BaseModel):
-    """A Blick of a comparison.
+class ExpectationComparison(BaseModel):
+    """The outcome of a unit's expectation now and in the baseline, and the transition between.
 
-    ``id`` is the current id, the baseline id for a removed Blick that no current Blick claims,
-    and ``None`` for a current Blick without a usable id; ``name`` is the entry's name.
-    ``matched`` is the id of the baseline Blick matched when it differs from the current one, as
-    for a Blick matched through an alias. ``skipped`` says that the current Blick's transformation
+    ``current`` is the outcome now, one that cannot be evaluated included; ``baseline`` the
+    baseline's outcome of the same expectation, or, when there is no outcome now or one that
+    cannot be evaluated, of the expectation the baseline had. ``transition`` is ``None`` when
+    nothing changed that a report names: met in both, met now and without an outcome there, or
+    without an outcome on either side; an outcome that cannot be evaluated counts as none for it.
+    ``message`` says why a side has no outcome, or that the expectation changed.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    transition: Transition | None
+    current: Outcome | None
+    baseline: Outcome | None
+    message: str | None = None
+
+
+class UnitComparison(BaseModel):
+    """What a comparison records of a Blick or a check.
+
+    ``id`` is the current id, the baseline id for a unit of the baseline that no current unit
+    claims, and ``None`` for a current unit without a usable id; ``name`` is the entry's name.
+    ``matched`` is the id of the baseline unit matched when it differs from the current one, as
+    for a unit matched through an alias. ``expectation`` relates the outcomes of the unit's
+    expectation, ``None`` when neither build gives the unit one. ``message`` is the cause of a unit
+    in error, and for a Blick also why it has no table or was not compared.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # How reports name the kind: "Blick" or "check".
+    kind: ClassVar[str]
+
+    id: str | None
+    name: str
+    matched: str | None = None
+    expectation: ExpectationComparison | None = None
+    message: str | None = None
+
+    @property
+    def error(self) -> bool:
+        """Whether the unit is in error in the current build."""
+        raise NotImplementedError
+
+
+class BlickComparison(UnitComparison):
+    """A Blick of a comparison, ``UnitComparison`` with the change of its table.
+
+    ``skipped`` says that the current Blick's transformation
     skipped the run, so that no tables were compared: such a Blick is ``removed`` when the
     baseline has a table for it, and otherwise has no flag and is not unchanged.
 
@@ -76,16 +138,29 @@ class BlickComparison(BaseModel):
     hash in the baseline manifest; both are ``None`` for the other Blicks and before ``write``.
     """
 
-    model_config = ConfigDict(frozen=True)
+    kind: ClassVar[str] = "Blick"
 
-    id: str | None
-    name: str
-    matched: str | None = None
     change: Change
     skipped: bool = False
-    message: str | None = None
     baseline_data: BuildPath | None = None
     baseline_hash: str | None = None
+
+    @property
+    def error(self) -> bool:
+        return "error" in self.change.flags
+
+
+class CheckComparison(UnitComparison):
+    """A check of a comparison: a current check, or a baseline check that no current check claims
+    and whose expectation is dropped. Its table is not compared. ``message`` is the cause of a
+    current check in error, its first error's first line, as a Blick's is, and ``None`` for any
+    other."""
+
+    kind: ClassVar[str] = "check"
+
+    @property
+    def error(self) -> bool:
+        return self.message is not None
 
 
 class Comparison(BaseModel):
@@ -93,9 +168,11 @@ class Comparison(BaseModel):
 
     ``spec`` is the current manifest's, ``blicket`` the version that compared, which names the
     formula of the magnitude. ``blicks`` lists the current Blicks in the current manifest's order,
-    the skipped ones among them, then the removed ones that no current Blick claims.
-    ``incomplete`` holds the reasons why removed Blicks were not judged: a file of the current
-    build that failed, a current Blick without a usable id; it is empty when they were.
+    the skipped ones among them, then the removed ones that no current Blick claims; ``checks``
+    the current checks, then the baseline checks whose expectation is dropped.
+    ``incomplete`` holds the reasons why removed Blicks were not judged, and dropped checks: a
+    file of the current build that failed, a current unit without a usable id; it is empty when
+    they were.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -107,6 +184,38 @@ class Comparison(BaseModel):
     current: BuildRef
     incomplete: tuple[str, ...]
     blicks: tuple[BlickComparison, ...]
+    checks: tuple[CheckComparison, ...] = ()
+
+    @property
+    def units(self) -> tuple[UnitComparison, ...]:
+        """The units of both kinds, the Blicks first, each kind in the comparison's order."""
+        return (*self.blicks, *self.checks)
+
+    def errors(self) -> Iterator[UnitComparison]:
+        """The units in error in the current build, Blicks flagged ``error`` and checks in error,
+        in the order of ``units``; each has its cause as ``message``."""
+        return (unit for unit in self.units if unit.error)
+
+    def unevaluable(self) -> Iterator[tuple[UnitComparison, Outcome]]:
+        """The units whose expectation cannot be evaluated now, and that outcome."""
+        for unit, related in self.expectations():
+            if related.current is not None and related.current.result == "error":
+                yield unit, related.current
+
+    def expectations(self) -> Iterator[tuple[UnitComparison, ExpectationComparison]]:
+        """Every unit with an expectation, and the expectation, in the order of ``units``."""
+        for unit in self.units:
+            if unit.expectation is not None:
+                yield unit, unit.expectation
+
+    @property
+    def transitions(self) -> Counter[Transition]:
+        """How many expectations of both kinds have each transition."""
+        return Counter(
+            related.transition
+            for _, related in self.expectations()
+            if related.transition is not None
+        )
 
     @property
     def counts(self) -> Counter[Flag]:
@@ -125,8 +234,9 @@ class Comparison(BaseModel):
 
     @property
     def has_errors(self) -> bool:
-        """Whether removed Blicks were not judged or a Blick is flagged ``error``."""
-        return bool(self.incomplete) or self.counts["error"] > 0
+        """Whether the comparison holds an error of any kind: removed Blicks and dropped checks not
+        judged, a unit in error, an expectation that cannot be evaluated."""
+        return bool(self.incomplete) or any(self.errors()) or any(True for _ in self.unevaluable())
 
     def movers(self, n: int) -> list[BlickComparison]:
         """The ``n`` Blicks flagged ``value`` with the largest magnitudes, by name when they are
@@ -146,71 +256,44 @@ def compare_builds(baseline: Path, current: Path) -> Comparison:
     otherwise. A new Blick whose counterpart has no table says why in its ``message``. A plot type
     that this blicket does not know, or whose ``diff`` rejects the tables, makes the Blick
     ``error``. Raises ``BlicketError`` when a manifest or a table cannot be read.
+
+    The checks are matched as the Blicks are, among the checks, a check that ran preferred; each
+    current check is listed, and a baseline check that no current check claims when its
+    expectation is dropped, unless ``incomplete`` names a reason. Every expectation is related as
+    the module says.
     """
     before, after = manifest.read(baseline), manifest.read(current)
-    by_id: dict[str, BlickEntry] = {}
-    for entry in before.blicks:
-        # Only Blicks that failed share an id; one with a table is the one to compare with.
-        if entry.id is not None and (entry.id not in by_id or entry.data is not None):
-            by_id[entry.id] = entry
-    claimed: set[str] = set()
+    # Only Blicks that failed share an id; one with a table is the one to compare with.
+    find = _Counterparts(before.blicks, lambda entry: entry.data is not None)
     blicks: list[BlickComparison] = []
     for entry in after.blicks:
-        names = [name for name in (entry.id, *entry.aliases) if name is not None]
-        claimed.update(names)
-        found = [by_id[name] for name in names if name in by_id]
-        counterpart = next((e for e in found if e.data is not None), found[0] if found else None)
-        table = counterpart.data if counterpart else None
-        matched = counterpart.id if counterpart and counterpart.id != entry.id else None
-        if entry.status == "skipped":
-            message = _absence(entry)
-            if table is not None:
-                blicks.append(_flagged(entry, "removed", message, skipped=True, matched=matched))
-                continue
-            there = (
-                _absence(counterpart, "in the baseline") if counterpart else "not in the baseline"
+        counterpart = find(entry)
+        compared = _blick_comparison(entry, counterpart, baseline, current, after.config.tolerance)
+        blicks.append(compared.model_copy(update={"expectation": relate(entry, counterpart)}))
+    checks: list[CheckComparison] = []
+    find_check = _Counterparts(before.checks, lambda entry: entry.status == "ok")
+    for entry in after.checks:
+        counterpart = find_check(entry)
+        checks.append(
+            CheckComparison(
+                id=entry.id,
+                name=entry.name,
+                matched=counterpart.id if counterpart and counterpart.id != entry.id else None,
+                expectation=relate(entry, counterpart),
+                message=_cause(entry) if entry.status == "error" else None,
             )
-            blicks.append(
-                BlickComparison(
-                    id=entry.id,
-                    name=entry.name,
-                    change=Change(),
-                    skipped=True,
-                    message=f"{message} ({there})",
-                )
-            )
-            continue
-        if entry.id is None or entry.definition is None or entry.data is None:
-            blicks.append(_flagged(entry, "error", _cause(entry)))
-            continue
-        if table is None:
-            message = _absence(counterpart, "in the baseline") if counterpart else None
-            blicks.append(_flagged(entry, "new", message))
-            continue
-        plot = entry.definition.plot
-        try:
-            change = builtin(plot.type).diff(
-                _table(baseline, table),
-                _table(current, entry.data),
-                plot.mapping,
-                entry.panels,
-            )
-        except (ValueError, TypeError) as error:  # DefinitionError for an unknown plot type
-            blicks.append(_flagged(entry, "error", str(error)))
-            continue
-        tolerance = entry.definition.tolerance
-        if tolerance is None:
-            tolerance = after.config.tolerance
-        if change.magnitude is not None and change.magnitude > tolerance:
-            change = change.model_copy(update={"flags": change.flags | {"value"}})
-        blicks.append(BlickComparison(id=entry.id, name=entry.name, matched=matched, change=change))
+        )
     incomplete = _incomplete(after)
     if not incomplete:
         blicks.extend(
-            _flagged(entry, "removed")
-            for entry in before.blicks
-            if entry.data is not None and entry.id not in claimed
+            _flagged(entry, "removed").model_copy(update={"expectation": relate(None, entry)})
+            for entry in find.unclaimed()
+            if entry.data is not None
         )
+        for entry in find_check.unclaimed():
+            related = relate(None, entry)
+            if related is not None and related.transition == "dropped":
+                checks.append(CheckComparison(id=entry.id, name=entry.name, expectation=related))
     return Comparison(
         spec=after.spec,
         blicket=importlib.metadata.version("blicket"),
@@ -219,6 +302,143 @@ def compare_builds(baseline: Path, current: Path) -> Comparison:
         current=_reference(after),
         incomplete=incomplete,
         blicks=tuple(blicks),
+        checks=tuple(checks),
+    )
+
+
+def _blick_comparison(
+    entry: BlickEntry,
+    counterpart: BlickEntry | None,
+    baseline: Path,
+    current: Path,
+    tolerance: float,
+) -> BlickComparison:
+    """A current Blick of the build in ``current`` compared with its ``counterpart`` in the
+    build in ``baseline``, without its expectation; ``tolerance`` is the project's."""
+    table = counterpart.data if counterpart else None
+    matched = counterpart.id if counterpart and counterpart.id != entry.id else None
+    if entry.status == "skipped":
+        message = _absence(entry)
+        if table is not None:
+            return _flagged(entry, "removed", message, skipped=True, matched=matched)
+        there = _absence(counterpart, "in the baseline") if counterpart else "not in the baseline"
+        return BlickComparison(
+            id=entry.id,
+            name=entry.name,
+            change=Change(),
+            skipped=True,
+            message=f"{message} ({there})",
+        )
+    if entry.id is None or entry.definition is None or entry.data is None:
+        return _flagged(entry, "error", _cause(entry))
+    if table is None:
+        message = _absence(counterpart, "in the baseline") if counterpart else None
+        return _flagged(entry, "new", message)
+    plot = entry.definition.plot
+    try:
+        change = builtin(plot.type).diff(
+            _table(baseline, table),
+            _table(current, entry.data),
+            plot.mapping,
+            entry.panels,
+        )
+    except (ValueError, TypeError) as error:  # DefinitionError for an unknown plot type
+        return _flagged(entry, "error", str(error))
+    if entry.definition.tolerance is not None:
+        tolerance = entry.definition.tolerance
+    if change.magnitude is not None and change.magnitude > tolerance:
+        change = change.model_copy(update={"flags": change.flags | {"value"}})
+    return BlickComparison(id=entry.id, name=entry.name, matched=matched, change=change)
+
+
+class _Counterparts[E: Entry]:
+    """Finds the counterpart of a current entry among the baseline's entries of its kind.
+
+    A current entry claims the baseline entries of its id and its aliases, whether or not they
+    built; its counterpart is the first of them that ``preferred`` accepts, else the first of
+    them. ``unclaimed`` are the baseline entries with an id that no current entry claimed.
+    """
+
+    def __init__(self, entries: Sequence[E], preferred: Callable[[E], bool]) -> None:
+        self._entries = entries
+        self._preferred = preferred
+        self._by_id: dict[str, E] = {}
+        for entry in entries:
+            if entry.id is not None and (entry.id not in self._by_id or preferred(entry)):
+                self._by_id[entry.id] = entry
+        self._claimed: set[str] = set()
+
+    def __call__(self, entry: Entry) -> E | None:
+        names = [name for name in (entry.id, *entry.aliases) if name is not None]
+        self._claimed.update(names)
+        found = [self._by_id[name] for name in names if name in self._by_id]
+        return next((e for e in found if self._preferred(e)), found[0] if found else None)
+
+    def unclaimed(self) -> list[E]:
+        return [e for e in self._entries if e.id is not None and e.id not in self._claimed]
+
+
+def _usable(outcome: Outcome | None) -> Outcome | None:
+    """``outcome`` as the transitions take it: none for an outcome ``error``."""
+    return None if outcome is None or outcome.result == "error" else outcome
+
+
+def _no_outcome(entry: Entry | None, place: str, missing: str) -> str | None:
+    """Why ``entry`` has no outcome, ``None`` when it has one; ``place`` names the build, such as
+    ``in the baseline``, and ``missing`` says that the build lacks the unit."""
+    if entry is None:
+        return missing
+    if entry.outcome is not None:
+        return None
+    if entry.status == "skipped":
+        return f"skipped {place}: {_first(entry.skipped or '')}"
+    if entry.status == "error":
+        return f"in error {place}"
+    if entry.expectation is None:
+        return f"no expectation {place}"
+    if entry.level == "off":
+        return f"level off {place}"
+    return f"no outcome {place}"
+
+
+def relate(current: Entry | None, baseline: Entry | None) -> ExpectationComparison | None:
+    """The outcomes of the expectation of a current unit and its baseline counterpart, either of
+    which may be missing, related as the module says; ``None`` when neither declares an
+    expectation."""
+    declared_now = current.expectation if current is not None else None
+    declared_then = baseline.expectation if baseline is not None else None
+    if declared_now is None and declared_then is None:
+        return None
+    now_any = current.outcome if current is not None else None
+    then_any = baseline.outcome if baseline is not None else None
+    now, then = _usable(now_any), _usable(then_any)
+    changed = (
+        declared_now is not None and declared_then is not None and declared_now != declared_then
+    )
+    same = None if changed or declared_now is None else then
+    transition: Transition | None = None
+    if now is not None and now.offends:
+        if same is None:
+            transition = "new"
+        elif rank(now.result) > rank(same.result):
+            transition = "broken"
+        else:
+            transition = "still_failing"
+    elif now is not None:
+        transition = "fixed" if same is not None and same.offends else None
+    elif then is not None and then.offends:
+        transition = "dropped"
+    reasons = [
+        _no_outcome(current, "now", "not in the current build"),
+        _no_outcome(baseline, "in the baseline", "not in the baseline"),
+        *(["the expectation changed since the baseline"] if changed else []),
+    ]
+    message = "; ".join(reason for reason in reasons if reason) or None
+    return ExpectationComparison(
+        transition=transition,
+        current=now_any,
+        baseline=then_any if now is None or not changed else None,
+        message=message,
     )
 
 
@@ -301,7 +521,7 @@ def _first(text: str) -> str:
     return next(iter(text.splitlines()), "")
 
 
-def _cause(entry: BlickEntry) -> str | None:
+def _cause(entry: Entry) -> str | None:
     """The first line of the entry's first error."""
     errors = [p for p in entry.problems if p.severity == "error"]
     return _first(errors[0].message) if errors else None
@@ -317,8 +537,8 @@ def _absence(entry: BlickEntry, where: str = "") -> str:
 
 
 def _incomplete(built: Manifest) -> tuple[str, ...]:
-    """Why the Blicks missing from ``built`` cannot be judged removed: the files that failed and
-    the Blicks without a usable id."""
+    """Why the Blicks missing from ``built`` cannot be judged removed, nor the checks missing
+    from it dropped: the files that failed and the units without a usable id."""
     reasons: list[str] = []
     for problem in built.problems:
         if problem.severity == "error":
@@ -329,7 +549,7 @@ def _incomplete(built: Manifest) -> tuple[str, ...]:
                 if problem.kind == Kind.IMPORT
                 else f"{where}: {first}"
             )
-    reasons += [f"{entry.name} has no usable id" for entry in built.blicks if entry.id is None]
+    reasons += [f"{entry.name} has no usable id" for entry in built.entries if entry.id is None]
     return tuple(reasons)
 
 

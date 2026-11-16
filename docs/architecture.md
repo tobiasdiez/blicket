@@ -15,7 +15,10 @@ how changes are accepted and managed (see below).
    extracted from the reference implementation and versioned from the first release.
 5. **Builds are immutable.** A build is never modified after it is written. Whatever the accept design
    becomes, it attaches decisions to builds; it does not rewrite them.
-6. **A human decides.** A human inspects and accepts; CI only reports.
+6. **A human decides.** A human inspects and accepts; CI only reports. Amendment of 2026-11-16
+   ([plans/coherence-checks.md](plans/coherence-checks.md)): this holds for changes. An expectation
+   of level `error` that fails makes `build` and `check` exit 1: it is a human's decision made
+   ahead, not a change for a human to look at.
 7. **Measure before choosing.** Tolerance and cache defaults come from real remind-mfa outputs in
    milestone 0, not from synthetic data.
 
@@ -127,6 +130,30 @@ object is reusable across Blicks in one process; what it is comes from the adapt
 Amendment of 2026-11-02: a transformation raises `bk.Skip(reason)` when its Blick does not apply
 to the run, a cement Blick on a steel run or a validation Blick without its data; the Blick is
 then `skipped`, a status beside `ok` and `error` (see the change detection section).
+
+Amendment of 2026-11-16 ([plans/coherence-checks.md](plans/coherence-checks.md)): a Blick may
+state a property of its table, `expect=bk.expect.between(0, 1)`, and a property nobody wants as a
+chart is a check, a second unit beside the Blick, `@bk.check` or `bk.register_check`, whose
+function returns the offending rows as a long table:
+
+```python
+@bk.check(expect=bk.expect.no_rows(by="relative", warn_within=1e-9))  # the default: no_rows()
+def non_negative_flows(run):
+    ...                                     # every negative cell, relative to its system's scale
+```
+
+An expectation maps a table to its offending rows, each with a distance: `no_rows` lets every row
+offend, or the rows its function picks; `at_most`, `at_least` and `between` bound a measure. Rows
+within `warn_within` are a warning, rows beyond it a failure. `level=` (`off`, `warn`, `error`) is
+the unit's, else its group's (`bk.group(..., level=)`), else `level` in `[tool.blicket]`. Checks
+live in the Blick modules, share their groups, take aliases and share one namespace of ids with the
+Blicks. `Check` and `Blick` share a base, `Unit`, and so do their entries; definition, assembly,
+the table rules and the build are parameterised by the kind. A check's table may hold nulls in its
+dimensions and any number of measures, has no plot, and has no rows when the property holds. The
+code is in the package `blicket/expect/`: its `__init__` is the public vocabulary, `bk.expect`,
+and private modules hold the levels, the outcome, the expectations and their evaluation; the
+comparison with the baseline in the store, which the export `bk.check` displaced from
+`blicket/check.py`, is `blicket/guard.py`.
 
 ## Adapter and loader protocol
 
@@ -302,6 +329,18 @@ skipped in both builds, it carries no flag and is counted as `skipped`, never as
 nothing was compared. `blicket list` runs no transformation and does not know what a run will
 skip.
 
+Amendment of 2026-11-16 ([plans/coherence-checks.md](plans/coherence-checks.md)): beside the status
+stands the **outcome** of a unit's expectation, `met`, `warning`, `failed`, or `error` when it
+cannot be evaluated, with the rows evaluated and offending, those within `warn_within`, the worst
+value and where it is. A Blick whose expectation failed or cannot be evaluated built its table, is
+`ok`, is drawn and compared as any Blick; "status `error`" keeps meaning "no table". A check is
+`ok`, `skipped` (by `bk.Skip`, or at level `off`) or `error`. Against the baseline's outcome of the
+same expectation, read from its record in the two manifests, an outcome not met now is `broken` when
+worse (met < warning < failed) and `still_failing` otherwise, `new` without one; one met now that
+was not is `fixed`; one not met there without an outcome now is `dropped`. The transitions flag no
+Blick and change no exit code; checks are matched by id and alias among checks, and their tables are
+not compared.
+
 **Tolerance.** `[tool.blicket] tolerance = 1e-5` project-wide, `tolerance=` per Blick, in the
 same relative-to-panel-scale units as the magnitude. A row is *same* when
 |current − baseline| / s ≤ tolerance, with s the panel scale. Amendment of 2026-10-24: nothing
@@ -355,6 +394,16 @@ my-model/
     store/                        default store location
 ```
 
+Amendment of 2026-11-16 ([plans/coherence-checks.md](plans/coherence-checks.md)): a build
+directory also holds `checks/<id>.parquet`, the offending rows of each check that found some,
+worst first, at most 100,000, and the manifest is `spec` 0.3: `checks` beside `blicks`, the
+project's `level` in `config`, a group's `level`, and per entry its definition with the expectation
+as declared and the declared level, the level resolved, and the `outcome`. The expectation, the
+declared level and the outcome are in the build id; the resolved level and the expectation in
+words are blicket's derivations and stay out of it, as the controls do. blicket and its viewer read
+spec 0.2 as well, every new field having its default, so that a store keeps its baselines; their
+expectations read as `new`. `push` copies the tables of both kinds.
+
 The build directory is the portable unit: it can be copied from a cluster to a laptop and viewed
 there with `blicket serve <dir>`. Relative paths in the manifest, a Nuxt build generated with a
 relative base URL, and hash routing mean a build directory works on GitHub Pages, under subpaths,
@@ -391,6 +440,17 @@ one `BLICKET_VIEWER` names in a checkout.
   unless the comparison flags it; a group whose Blicks are all skipped starts collapsed; the
   overview says how many Blicks are skipped for the run, and a skipped Blick's page and card
   show the reason instead of a chart.
+- Amendment of 2026-11-16 ([plans/coherence-checks.md](plans/coherence-checks.md)): the sidebar
+  lists the checks under the groups in a section of their own, each with a badge of its outcome
+  when it is not met (`failed`, `error`, `warning`), as a Blick whose expectation is not met carries
+  one beside its flags; its one filter becomes a choice of "All", "Changed (N)" and "Not met (N)".
+  The overview has a section "Expectations" above the changed Blicks: the counts, the transitions,
+  the units not met, the worst first, then those fixed and dropped. A check has a page,
+  `#/check/<id>`, with an outcome strip and the table of its offending rows; a Blick's page has the
+  same strip under its change strip, with "Show worst row". Both pages share their frame,
+  `UnitPage`. `lib/expectations.ts` holds what the sidebar, the overview and both pages say of
+  outcomes. The viewer normalises a manifest of spec 0.2 to 0.3 when it reads it, and tags each
+  entry with its kind.
 - Blick page: chart, controls derived by the plot type, URL-carried control state, a comparison
   switch on by default, a strip with the flags, the largest change (as a percent of the chart's
   scale), where it is and against which baseline, with a button that sets the controls there.
@@ -502,7 +562,15 @@ exits 0 and writes no comparison. Amendment of 2026-10-24 (M0.7): the comparison
 summary only. It runs as a
 post-run step on the cluster or in CI for models that run there. It never changes the store beyond
 pushing its own build. Whether a flagged-but-reviewed change still exits 1 is part of the deferred
-design.
+design. Amendment of 2026-11-16 ([plans/coherence-checks.md](plans/coherence-checks.md)): `build`
+and `check` also exit 1 when an expectation of level `error` failed, and 2 when one cannot be
+evaluated, errors winning, so the first `check` of a profile exits 0 only when neither happens;
+`check --exit-zero-on-changes` keeps flagged Blicks from exiting 1, so that 1 means a failed
+expectation only, and a CI that tolerates 1 for changes can fail on any code but 0. `dev` exits 0
+whatever the build holds; `diff` exits 0 whatever the expectations give, but 2 for one that cannot
+be evaluated, as for a Blick or check in error. The report adds the line `expectations vs baseline:`
+and the units of each transition but still failing; the Markdown a table of the expectations not
+met, fixed or dropped, also without a baseline.
 
 ## Accepting and managing changes: deferred
 
@@ -593,7 +661,9 @@ ship none, are hand-written for now.
   documented as the protocol, difference chart, store `gc`. Amendment of 2026-11-02: the Sankey
   is a built-in plot type already, so the project plot type of M4 is another one.
 - **Later.** R; composition of several models or runs; preview deploys; DuckDB in the browser for
-  large tables; the concept's deferred items (variants, checks, auto-accept, grouping).
+  large tables; the concept's deferred items (variants, checks, auto-accept, grouping). Amendment of
+  2026-11-16: checks and expectations are built
+  ([plans/coherence-checks.md](plans/coherence-checks.md)).
 
 ## Verification
 

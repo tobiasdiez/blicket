@@ -15,6 +15,7 @@ const entry = {
   name: 'flows/x',
   definition: { title: 'X', description: 'About x.', unit: null, tags: [], plot: { type: 'line', mapping: { x: 'Time', y: 'value', color: 'Region' } }, independent_y: false },
   columns: schema,
+  controls: [],
 } as unknown as BlickEntry
 
 describe('the search', () => {

@@ -18,7 +18,15 @@ from types import ModuleType
 from blicket import definitions
 from blicket.assembly import assemble
 from blicket.config import PYPROJECT, Config, load_config
-from blicket.errors import MISSING, DefinitionError, Kind, Problem, Source, display_path
+from blicket.errors import (
+    MISSING,
+    MISSING_UNITS,
+    DefinitionError,
+    Kind,
+    Problem,
+    Source,
+    display_path,
+)
 from blicket.model import Registry
 from blicket.tracebacks import in_project, locate, project_traceback, raised_at
 
@@ -74,7 +82,7 @@ def discover(project: str | os.PathLike[str], config: Config | None = None) -> R
                 records.append(record or definitions.ModuleRecord(target.name, target.path))
     # A package __init__.py that raises fails every Blick module under it alike.
     unique = list({(p.kind, p.source, p.message): p for p in problems}.values())
-    return assemble(records, unique, root=root)
+    return assemble(records, unique, root=root, level=config.level)
 
 
 # ---------------------------------------------------------------------------------------------
@@ -213,7 +221,8 @@ def _execution_error(target: _Target, root: Path, error: BaseException) -> Probl
 
     The location is the line of the Blick module that led to the error, with the place it was
     raised added when that is another project file. When no frame lies in the Blick module (its
-    package's ``__init__.py`` raised, say), it is the last frame in the project.
+    package's ``__init__.py`` raised, say), it is the last frame in the project. An error of the
+    API of checks says that the checks of the file are missing too.
     """
     source = locate(error, root, prefer=target.path) or Source(target.path)
     first = str(error) if isinstance(error, DefinitionError) else f"{type(error).__name__}: {error}"
@@ -222,9 +231,10 @@ def _execution_error(target: _Target, root: Path, error: BaseException) -> Probl
         lines.append(f"is {error.name!r} installed in {sys.prefix}?")
     # The location already says all a traceback of these two would: it is blicket's own frames.
     plain = isinstance(error, DefinitionError | SyntaxError)
+    missing = MISSING_UNITS if isinstance(error, DefinitionError) and error.checks else MISSING
     return Problem(
         kind=error.kind if isinstance(error, DefinitionError) else Kind.IMPORT,
-        message="\n".join([*lines, MISSING]),
+        message="\n".join([*lines, missing]),
         source=source,
         module=target.name,
         traceback=None if plain else project_traceback(error, root),

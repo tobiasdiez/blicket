@@ -1,20 +1,24 @@
-"""Checks of the arguments of ``bk.blick``, ``bk.register`` and ``bk.group``.
+"""Checks of the arguments of ``bk.blick``, ``bk.register``, ``bk.check``, ``bk.register_check``
+and ``bk.group``.
 
 Every check normalises one value or raises ``_Invalid`` with all that is wrong with it; the
 collectors at the end turn those into lists of problems, each saying what to do.
 """
 
-import annotationlib
-import inspect
 import math
 import re
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any, TypedDict, get_args
+from typing import Any, Literal, TypedDict, cast, get_args
 
+from blicket._callables import one_argument_problem
 from blicket.errors import did_you_mean
+from blicket.expect._levels import Level, level_problem
+from blicket.expect._vocabulary import CONCRETE, FACTORIES, Expectation, NoRows
 from blicket.plots import PlotSpec
 from blicket.schema import ControlKind
+
+type DefinitionKind = Literal["blick", "check"]
 
 SEGMENT_RULE = "lowercase letters, digits, '_' and '-', starting with a letter or digit"
 _SEGMENT = re.compile(r"[a-z0-9][a-z0-9_-]*")
@@ -52,11 +56,28 @@ class BlickOptions(TypedDict, total=False):
     dims: Iterable[str]
     measures: Iterable[str]
     order: Mapping[str, Iterable[Any]]
+    expect: Expectation
+    level: Level
+
+
+class CheckOptions(TypedDict, total=False):
+    """The options of ``@bk.check`` and ``bk.register_check``."""
+
+    id: str
+    title: str
+    description: str
+    tags: Iterable[str]
+    aliases: Iterable[str]
+    expect: Expectation
+    level: Level
+    dims: Iterable[str]
+    measures: Iterable[str]
 
 
 @dataclass(frozen=True)
 class CheckedOptions:
-    """The valid options of a definition as ``Blick`` fields, empty where not given or invalid."""
+    """The valid options of a definition as ``Blick`` or ``Check`` fields, empty where not given
+    or invalid."""
 
     id: str | None = None
     title: str | None = None
@@ -72,6 +93,8 @@ class CheckedOptions:
     dims: tuple[str, ...] | None = None
     measures: tuple[str, ...] | None = None
     order: Mapping[str, tuple[Any, ...]] = field(default_factory=dict)
+    expect: Expectation | None = None
+    level: Level | None = None
 
 
 def valid_segment(text: str) -> bool:
@@ -151,18 +174,11 @@ def _title(value: object, what: str = "title") -> str:
 def _transform(value: object, what: str) -> None:
     if not callable(value):
         raise _Invalid(f"{what} must be a function of the run, got {_shown(value)}")
-    try:
-        # A name bound only under TYPE_CHECKING stays a ForwardRef instead of raising.
-        signature = inspect.signature(value, annotation_format=annotationlib.Format.FORWARDREF)
-    except ValueError:  # some builtins, such as str, have no signature; nothing to check
-        return
-    try:
-        signature.bind(None)
-    except TypeError:
+    if (signature := one_argument_problem(value)) is not None:
         raise _Invalid(
             f"{what} must take exactly one positional parameter, the run; "
             f"its signature is {signature}"
-        ) from None
+        )
 
 
 def _json_issues(value: object, where: str) -> Iterator[str]:
@@ -247,6 +263,38 @@ def _aliases(value: object) -> tuple[str, ...]:
     return aliases
 
 
+def _expect(value: object) -> Expectation:
+    """One expectation made by ``bk.expect``; the message says what to write for what else."""
+    if type(value) in CONCRETE:
+        return cast("Expectation", value)
+    made = (
+        "expect must be an expectation made by bk.expect.no_rows(), at_most(), at_least() or "
+        "between()"
+    )
+    if any(value is factory for factory in FACTORIES):
+        name = getattr(value, "__name__", "")
+        raise _Invalid(f"{made}; bk.expect.{name} is not called: call it, bk.expect.{name}(...)")
+    if isinstance(value, Expectation):
+        raise _Invalid(f"{made}, got {value!r}, which bk.expect does not make")
+    if isinstance(value, type):
+        raise _Invalid(f"{made}, not the class {value.__name__}")
+    if isinstance(value, list | tuple | set):
+        raise _Invalid(f"{made}; a Blick or check takes one expectation, got {_shown(value)}")
+    if callable(value):
+        name = getattr(value, "__name__", "function")
+        raise _Invalid(
+            f"{made}; a function that picks the offending rows goes into one: "
+            f"bk.expect.no_rows({name})"
+        )
+    raise _Invalid(f"{made}, got {_shown(value)}")
+
+
+def _level(value: object) -> Level:
+    if (problem := level_problem(value)) is not None:
+        raise _Invalid(problem)
+    return cast("Level", value)
+
+
 def _order(value: object) -> dict[str, tuple[Any, ...]]:
     order = _json_mapping(value, "order", "column to a list of values")
     issues = [
@@ -275,7 +323,18 @@ _CHECKS: dict[str, Callable[[object], Any]] = {
     "dims": lambda value: _strings(value, "dims"),
     "measures": lambda value: _strings(value, "measures"),
     "order": _order,
+    "expect": _expect,
+    "level": _level,
 }
+# The options of a check, those of CheckOptions, all checked as a Blick's are.
+_CHECK_OPTIONS = tuple(CheckOptions.__annotations__)
+
+
+def options_of(kind: DefinitionKind) -> dict[str, Callable[[object], Any]]:
+    """The checks of the options a definition of ``kind`` takes, by option."""
+    if kind == "blick":
+        return _CHECKS
+    return {key: _CHECKS[key] for key in _CHECK_OPTIONS}
 
 
 # ---------------------------------------------------------------------------------------------
@@ -292,37 +351,78 @@ def _collect[T](problems: list[str], check: Callable[..., T], *args: object) -> 
 
 
 def validate_definition(
-    options: Mapping[str, object], transform: object, transform_label: str
+    options: Mapping[str, object],
+    transform: object,
+    transform_label: str,
+    kind: DefinitionKind = "blick",
 ) -> tuple[CheckedOptions, list[str]]:
-    """Check the options of a definition and its transform, and collect every problem.
+    """Check the options of a definition of ``kind`` and its transform, and collect every problem.
 
     An option passed as ``None`` counts as not given. ``transform`` is ``None`` when missing.
     """
+    checks = options_of(kind)
     values: dict[str, Any] = {}
     problems: list[str] = []
     for key, value in options.items():
-        if key not in _CHECKS:
-            problems.append(_unknown_option(key))
+        if key not in checks:
+            problems.append(_unknown_option(key, kind))
         elif value is not None:
-            values[key] = _collect(problems, _CHECKS[key], value)
-    if options.get("plot") is None:
+            values[key] = _collect(problems, checks[key], value)
+    if kind == "blick" and options.get("plot") is None:
         problems.append("plot= is missing; pass a plot spec such as bk.plots.line(x=..., y=...)")
     if transform is None:
         problems.append("transform= is missing; pass a function that takes the run")
     else:
         _collect(problems, _transform, transform, transform_label)
-    checked = {key: value for key, value in values.items() if value is not None}
-    return CheckedOptions(**checked), problems
+    checked = CheckedOptions(**{key: value for key, value in values.items() if value is not None})
+    problems.extend(_measure_problems(checked))
+    return checked, problems
 
 
-def _unknown_option(key: str) -> str:
+def _measure_problems(options: CheckedOptions) -> list[str]:
+    """Where the measure the expectation names contradicts ``measures=`` or ``dims=``; a function
+    of ``no_rows`` returns a table of its own, which these do not describe."""
+    expectation = options.expect
+    if expectation is None or (named := expectation.measure) is None:
+        return []
+    if isinstance(expectation, NoRows) and expectation.rows is not None:
+        return []
+    option = expectation.option
+    if named in (options.dims or ()):
+        return [
+            f"expect names {named!r} with {option}=, which dims= makes a dimension; name a measure"
+        ]
+    if options.measures is not None and named not in options.measures:
+        listed = ", ".join(options.measures) or "none"
+        return [
+            f"expect names {named!r} with {option}=, which measures= leaves out; the measures "
+            f"are {listed}"
+        ]
+    return []
+
+
+# The function that registers a definition of each kind, and its decorator.
+_APIS: dict[DefinitionKind, tuple[str, str]] = {
+    "blick": ("bk.register", "@bk.blick"),
+    "check": ("bk.register_check", "@bk.check"),
+}
+
+
+def _unknown_option(key: str, kind: DefinitionKind) -> str:
     if key == "transform":
+        register, decorator = _APIS[kind]
         return (
-            "transform= belongs to bk.register(); with @bk.blick the decorated function is the "
+            f"transform= belongs to {register}(); with {decorator} the decorated function is the "
             "transform"
         )
-    close = did_you_mean(key, _CHECKS)
-    hint = f"did you mean {close}=?" if close else f"valid: {', '.join(_CHECKS)}"
+    checks = options_of(kind)
+    if kind == "check" and key in _CHECKS:
+        return (
+            f"{key}= is an option of Blicks, which a check does not take: a check has no chart, "
+            f"and its table is not compared; the options of a check are {', '.join(checks)}"
+        )
+    close = did_you_mean(key, checks)
+    hint = f"did you mean {close}=?" if close else f"valid: {', '.join(checks)}"
     return f"unknown option {key}=; {hint}"
 
 
@@ -334,12 +434,22 @@ class GroupArguments:
     title: str | None = None
     tags: tuple[str, ...] = ()
     problems: list[str] = field(default_factory=list)
+    level: Level | None = None
 
 
-def validate_group(name: object, title: object = None, tags: object = ()) -> GroupArguments:
+def validate_group(
+    name: object, title: object = None, tags: object = (), level: object = None
+) -> GroupArguments:
     """Check the arguments of ``bk.group()``, or a group name derived from a module name."""
     problems: list[str] = []
     checked_name = _collect(problems, _group_name, name)
     checked_title = None if title is None else _collect(problems, _title, title, "the group title")
     checked_tags = _collect(problems, _strings, tags, "tags") or ()
-    return GroupArguments(checked_name, checked_title, tuple(dict.fromkeys(checked_tags)), problems)
+    checked_level = None if level is None else _collect(problems, _level, level)
+    return GroupArguments(
+        checked_name,
+        checked_title,
+        tuple(dict.fromkeys(checked_tags)),
+        problems,
+        checked_level,
+    )

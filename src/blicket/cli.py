@@ -1,8 +1,11 @@
 """The ``blicket`` command line.
 
-Exit codes: 0 success, 1 a Blick flagged by ``check``, 2 errors of any kind. typer alone exits 1
-on an uncaught exception, so ``_App`` maps those to 2 for every command; click's usage errors exit
-2 by themselves.
+Exit codes: 0 success, 1 an expectation of level ``error`` that failed in ``build`` or ``check``,
+or a Blick flagged by ``check`` unless ``--exit-zero-on-changes``, 2 errors of any kind, an
+expectation that cannot be evaluated among them; errors win. ``dev`` exits 0 whatever the build
+holds; ``diff`` exits 0 whatever the changes and transitions are, and 2 for errors of any kind.
+typer alone exits 1 on an uncaught exception, so ``_App`` maps those to 2 for every command;
+click's usage errors exit 2 by themselves.
 
 Streams: a command's result is the report on stdout, as text or, with ``--json``, as JSON; every
 problem found in the project is part of it. ``check --json`` prints the comparison, or ``null``,
@@ -25,7 +28,7 @@ from typing import Annotated, Any
 import typer
 from typer.core import TyperGroup, TyperOption
 
-from blicket import check, comparison, dev, serve
+from blicket import comparison, dev, guard, serve
 from blicket.builder import Build, NothingToBuild, build
 from blicket.config import ProjectNotFound, find_project_root
 from blicket.discovery import discover
@@ -43,7 +46,7 @@ from blicket.report import (
 )
 from blicket.store import Store
 
-FLAGGED_EXIT_CODE = 1
+FLAGGED_EXIT_CODE = 1  # a Blick flagged by check, or an expectation that failed
 ERROR_EXIT_CODE = 2
 STEP_SUMMARY_ENV = "GITHUB_STEP_SUMMARY"
 _VERBOSE = "blicket.verbose"
@@ -206,7 +209,8 @@ def main(
         ),
     ] = False,
 ) -> None:
-    """A catalog of charts (Blicks) built from model runs.
+    """A catalog of charts (Blicks) built from model runs, and of checks of the
+    properties every run must have.
 
     Without a command, blicket is blicket dev: blicket runs/x is blicket dev runs/x.
     """
@@ -220,11 +224,16 @@ def _root(project: Path | None) -> Path:
 def list_command(
     project: ProjectOption = None,
     as_json: Annotated[
-        bool, typer.Option("--json", help="Print the Blicks and problems as JSON.")
+        bool, typer.Option("--json", help="Print the Blicks, checks and problems as JSON.")
     ] = False,
     verbose: VerboseOption = False,
 ) -> None:
-    """Show the project's Blicks and any definition problems."""
+    """Show the project's Blicks and checks and any definition problems.
+
+    A check shows check where a Blick shows its plot type; a Blick or check
+    with an expectation shows it as declared, and its level when it is not
+    error.
+    """
     registry = discover(_root(project))
     finish(_list_report(registry, as_json, verbose), failed=registry.has_errors)
 
@@ -237,17 +246,25 @@ def build_command(
     as_json: Annotated[bool, typer.Option("--json", help="Print the manifest as JSON.")] = False,
     verbose: VerboseOption = False,
 ) -> None:
-    """Build every Blick of a run into a browsable build directory.
+    """Build every Blick and check of a run into a browsable build directory.
 
-    Writes to .blicket/build/<id>/ (under --out if given) and prints the id; show it with
-    blicket serve.
+    Writes to .blicket/build/<id>/ (under --out if given) and prints the id;
+    show it with blicket serve. The expectations of the Blicks and checks are
+    evaluated; --json prints the manifest, which holds their outcomes. A
+    level, off, warn or error, says what a failed expectation is: level= on
+    the Blick or check, else on its group, else level in \\[tool.blicket].
+
+    Exit codes: 0 built; 1 an expectation of level error failed; 2 errors,
+    a Blick or check in error or an expectation that cannot be evaluated
+    among them.
     """
     built = _build_or_exit(_root(project), runs, out, as_json, verbose)
     if as_json:
         text = built.manifest.model_dump_json(indent=2)
     else:
         text = render_build(built, verbose=verbose)
-    finish(text, failed=built.manifest.has_errors)
+    failed = built.manifest.has_errors
+    finish(text, failed=failed, flagged=built.manifest.failed_expectations > 0)
 
 
 @app.command("serve")
@@ -322,6 +339,12 @@ def diff_command(
     A Blick is flagged value, schema, new, removed or error.
     Each top mover shows its largest change as a percent of the chart's
     scale, and the row where it occurs (--json: the magnitude, 0 to 1).
+    The expectations of Blicks and checks are broken, new, fixed, still
+    failing or dropped, which changes no exit code.
+
+    Exit codes: 0 compared, changes found included; 2 errors: a Blick or
+    check in error, an expectation that cannot be evaluated, removed Blicks
+    not judged.
     """
     compared = comparison.compare_builds(
         _build_path(baseline, project), _build_path(current, project)
@@ -337,13 +360,23 @@ def check_command(
     push: Annotated[
         bool, typer.Option("--push", help="Push the build into the store, comparison included.")
     ] = False,
+    exit_zero_on_changes: Annotated[
+        bool,
+        typer.Option(
+            "--exit-zero-on-changes",
+            help=(
+                "Exit 0 when Blicks are flagged, so that 1 means a failed expectation only; "
+                "errors still exit 2."
+            ),
+        ),
+    ] = False,
     as_json: Annotated[
         bool,
         typer.Option(
             "--json",
             help=(
-                "Print the comparison as JSON on stdout (null without baseline); the report goes "
-                "to stderr."
+                "Print the comparison as JSON on stdout (null without baseline; the outcomes are "
+                "then in the manifest only, blicket build --json); the report goes to stderr."
             ),
         ),
     ] = False,
@@ -351,7 +384,7 @@ def check_command(
     out: OutOption = None,
     verbose: VerboseOption = False,
 ) -> None:
-    """Build a run, compare it with its baseline, write the comparison.
+    """Build a run, evaluate its expectations, compare it with its baseline, write the comparison.
 
     The baseline is the newest pushed build of the run's profile at the
     build's commit or an ancestor. --against names another baseline, or a
@@ -361,14 +394,19 @@ def check_command(
     Markdown summary to the file GITHUB_STEP_SUMMARY names. A Blick is
     flagged value, schema, new, removed or error; each top mover shows its
     largest change as a percent of the chart's scale (--json: the
-    magnitude, 0 to 1).
+    magnitude, 0 to 1). An expectation is broken, new, fixed, still failing
+    or dropped against the baseline, which flags no Blick. A level, off, warn
+    or error, says what a failed expectation is: level= on the Blick or
+    check, else on its group, else level in \\[tool.blicket].
 
-    Exit codes: 0 nothing flagged or no baseline yet; 1 value, schema, new
-    or removed; 2 errors or a baseline that cannot be resolved.
+    Exit codes: 0 nothing flagged or no baseline yet, and no expectation
+    failed; 1 value, schema, new or removed, unless --exit-zero-on-changes,
+    or an expectation of level error failed; 2 errors, a baseline that cannot
+    be resolved or an expectation that cannot be evaluated among them.
     """
     root = _root(project)
     built = _build_or_exit(root, runs, out, as_json, verbose, null=True)
-    result = check.compare(built, root, against)
+    result = guard.compare(built, root, against)
     resolution, compared = result.resolution, result.comparison
     pushed = Store.of_project(root).push(built.path) if push else None
     text = render_check(built, resolution, compared, pushed, result.warnings, verbose=verbose)
@@ -387,7 +425,8 @@ def check_command(
         or resolution.failed
         or (compared is not None and compared.has_errors)
     )
-    finish(text, failed=failed, flagged=compared is not None and compared.flagged > 0)
+    changes = compared is not None and compared.flagged > 0 and not exit_zero_on_changes
+    finish(text, failed=failed, flagged=changes or built.manifest.failed_expectations > 0)
 
 
 @app.command("dev")
@@ -412,9 +451,9 @@ def dev_command(
     globs in runs in \\[tool.blicket] match, newest first; without runs,
     exit 2.
 
-    Exit codes: 0 when stopped with Ctrl-C, whatever the build holds or a
-    run picked in the viewer did; 2 when the session cannot start, without
-    RUN_PATH also when runs is not set.
+    Exit codes: 0 when stopped with Ctrl-C, whatever the build holds, its
+    expectations included, or a run picked in the viewer did; 2 when the
+    session cannot start, without RUN_PATH also when runs is not set.
     """
     root = _root(project)
     # Bound first, so that a port in use fails before the run is loaded.
@@ -500,7 +539,7 @@ def _build_path(given: str, project: Path | None) -> Path:
 
 def finish(text: str, *, failed: bool, flagged: bool = False) -> None:
     """Print a command's report on stdout; exit 2 if it holds an error, else 1 if it flags a
-    Blick."""
+    Blick or an expectation failed, as ``flagged`` says."""
     _echo(text)
     if failed:
         raise typer.Exit(ERROR_EXIT_CODE)

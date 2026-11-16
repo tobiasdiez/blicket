@@ -1,10 +1,12 @@
 # blicket
 
 Storybook for scientific model outputs. A *Blick* is a named view on a model run: a function that
-turns the run into a table, and how to plot that table. blicket discovers a project's Blicks,
-lists them with every problem it finds in their definitions, builds their tables for a model run,
-shows them in a web viewer, compares two builds, and checks a run against its baseline; while you
-develop, it keeps a run in memory and charts any quantity of it in a Blick builder. The idea
+turns the run into a table, and how to plot that table. A *check* is a property every run must
+have, such as flows that are never negative: a function that returns the rows that offend. blicket
+discovers a project's Blicks and checks, lists them with every problem it finds in their
+definitions, builds their tables for a model run and evaluates their expectations, shows them in a
+web viewer, compares two builds, and checks a run against its baseline; while you develop, it keeps
+a run in memory and charts any quantity of it in a Blick builder. The idea
 behind it is in
 [docs/concept.md](https://github.com/tobiasdiez/blicket/blob/main/docs/concept.md), the design in
 [docs/architecture.md](https://github.com/tobiasdiez/blicket/blob/main/docs/architecture.md).
@@ -109,11 +111,17 @@ flows  Material flows  [mfa]
 ```
 
 `blicket list` looks for the project by walking up from the working directory; `--project PATH`
-names the project directory instead. `-v` shows tracebacks, `--json` prints the report as JSON.
+names the project directory instead. `-v` shows tracebacks, `--json` prints the report as JSON,
+with the checks under `checks`. A [check](#expectations-and-checks) is listed in its group with
+`check` where a Blick has its plot type, and a Blick or check with an expectation shows it as
+declared, `expect: at least 0`, without the measure a default would pick, since `list` runs
+nothing; then its level when it is not `error`, and the summary counts the checks.
 
 Exit codes, for every command: 0 success (for `serve` and `dev`, stopped with Ctrl-C; for `diff`,
-changes found included), 1 for `check` when a Blick is flagged, 2 errors of any kind, a Blick that
-fails to build included, except in `dev`, which reports it and goes on.
+changes found included), 1 for `build` and `check` when an expectation of level `error` failed and
+for `check` when a Blick is flagged, unless `--exit-zero-on-changes` is given, 2 errors of any kind,
+a Blick or check that fails and an expectation that cannot be evaluated, at level `warn` too,
+included, except in `dev`, which reports them and goes on. Errors win over 1.
 
 ### Plot types
 
@@ -230,14 +238,24 @@ The first line names the run and its profile, the commit of the repository that 
 (`blicks at`, marked `(dirty)` with uncommitted changes), and the loader's wall time.
 
 The build directory holds `manifest.json`, which describes the run, the project's settings and git
-state, every Blick's definition, table schema, controls and problems, one `blicks/<id>.parquet` per
-Blick that built, and a copy of the viewer (`index.html`, `favicon.svg`, `_nuxt/`, and a
-`viewer-version` marker listing the copied files). The build id is a hash of the manifest without
-the timestamps and timings, the blicket version, tracebacks, the run's id, paths and model
-checkout, the repository's branch and dirty flag, where the Blicks are defined, and the controls
-blicket derives for them; it covers the Blicks' definitions, tables, problems and skip reasons, the
-settings, the run's profile and fingerprint, and the commit. Building the same run with the same
-Blicks at the same commit gives the same id again and leaves the directory as it is. A
+state, every Blick's and check's definition, table schema, controls, outcome and problems, one
+`blicks/<id>.parquet` per Blick that built, one `checks/<id>.parquet` per check that found rows
+(see [Expectations and checks](#expectations-and-checks)), and a copy of the viewer (`index.html`,
+`favicon.svg`, `_nuxt/`, and a `viewer-version` marker listing the copied files). The manifest is
+`spec` 0.3: beside `blicks` it lists the `checks`; a definition has its `expect` as declared and its
+`level`, a group its `level`, `config.level` is the project's, and an entry has the `level` it is
+evaluated at and the `outcome` of its expectation, `null` without one: the `result`, the
+`expectation` in words, how many rows it `evaluated`, how many are `offending` and how many of them
+lie `within` `warn_within`, the `worst` value, its `distance`, `where` it is, and a `message` when
+it cannot be evaluated. blicket and its viewer read builds of 0.2 as well, which have no checks or
+outcomes, so a store keeps its baselines. The build id is a hash of the manifest without the
+timestamps and timings, the blicket version, tracebacks, the run's id, paths and model checkout,
+the repository's branch and dirty flag, where the Blicks and checks are defined, and what blicket
+derives for them: the controls, the level a unit has from its group or the project, and the
+expectation in words; it covers the definitions with their expectations and declared levels, the
+tables, the outcomes, problems and skip reasons, the settings, the run's profile and fingerprint,
+and the commit. Building the same run with the same Blicks at the same commit gives the same id
+again and leaves the directory as it is. A
 transformation that raises, or a table that fails a check, is listed under `errors` like a problem
 of `blicket list`; the other Blicks are built all the same, and the exit code is 2. `--json`
 prints the manifest, `--out DIR` puts the build directory into `DIR` instead of `.blicket/build`,
@@ -278,6 +296,164 @@ without a table, and the exit code does not change. The section `skipped` lists 
 under their reasons; `diff` and `check` show the first line of a reason. `blicket list` runs no
 transformation, so it cannot tell which Blicks a run skips.
 
+## Expectations and checks
+
+A property that every run must have is stated once and evaluated whenever a run is built: on a
+Blick's table as `expect=`, or, for a property that no chart shows, as a check. A check is a
+function of the run, as a transformation is, that returns the rows that offend as a long table;
+no rows means that the property holds.
+
+```python
+# blicks/flows.py, the Blick of Building a run with an expectation
+@bk.blick(
+    title="Steel flows by process",
+    unit="t per year",
+    plot=bk.plots.stacked_area(x="year", y="value", color="process"),
+    expect=bk.expect.at_least(0),
+)
+def steel_by_process(run):
+    return run["flows"]
+```
+
+```python
+# blicks/checks.py
+import polars as pl
+
+import blicket as bk
+
+bk.group("checks", title="Coherence checks")
+
+
+@bk.check(
+    title="Flows sum to at most 2.1 t", expect=bk.expect.no_rows(by="excess", warn_within=0.05)
+)
+def total_flow(run):
+    """The flows of a year add up to at most 2.1 t."""
+    totals = run["flows"].group_by("year").agg(total=pl.col("value").sum())
+    return totals.with_columns(excess=pl.col("total") - 2.1).filter(pl.col("excess") > 0)
+```
+
+`@bk.check` works bare and with options, and `bk.register_check(id=..., transform=...)` declares
+checks in a loop, as `bk.register` declares Blicks. Their options are `id`, `title`, `description`
+(the docstring by default), `tags`, `aliases`, `expect`, `level`, `dims` and `measures`; the id
+defaults to `<group>/<function name>` and the title to the function name in words. Checks live in
+the Blick modules and share their groups, and a check and a Blick cannot share an id or claim each
+other's as an alias.
+
+```python
+# blicks/checks.py, a family of checks
+import functools
+
+import polars as pl
+
+import blicket as bk
+
+
+def negative_flows(run, process):
+    return run["flows"].filter(pl.col("process") == process, pl.col("value") < 0)
+
+
+for process in ["BOF", "EAF"]:
+    bk.register_check(
+        id=f"checks/{process.lower()}_not_negative",
+        transform=functools.partial(negative_flows, process=process),
+    )
+```
+
+The checks of such a family are registered when the module is imported, before a run is loaded, so
+their names come from the code; a family over what a run holds, its regions say, is one check whose
+table has a column for them.
+
+An expectation, from `bk.expect`, says which rows of a table offend, and by how much, their
+distance:
+
+- `no_rows(rows=None, *, by=None, warn_within=None)`: no row offends. Without `rows`, every row of
+  the table offends, which suits a check, whose table is what offends, and a check's expectation
+  is `no_rows()` unless it names another. `rows` is a function of the table that returns the
+  offending rows, for a property that relates rows to each other, such as a share against a
+  maximum in other rows of the same table: `bk.expect.no_rows(above_maximum, by="excess")`. It
+  receives the table with the dimensions first, sorted, and returns what a check may return. On a
+  Blick its rows are counted and the Blick stores its own table; a check stores them as its table.
+  The expectation records the function by its name, so that editing its body, or an argument of a
+  `functools.partial`, does not change the expectation against the baseline. `by` names the
+  measure whose absolute value is the distance, and `warn_within` needs it.
+- `at_most(bound, *, on=None, warn_within=None)`, `at_least(bound, ...)` and `between(low, high,
+  ...)`: the measure `on` lies within the bounds, which are included; a row offends by as much as
+  its value lies outside, and a null value never offends.
+
+`on` and `by` default to the table's only measure; a bound on a table of several measures needs
+`on`, and `no_rows` without `by` there ranks nothing. `warn_within` makes the rows whose distance is
+at most that a warning rather than a failure, `bk.expect.at_least(0, warn_within=1e-9)` for a
+quantity that solvers leave slightly below zero. It is absolute, in the units of the measure; a
+check that wants it relative returns a measure normalised by a scale its code knows. The functions
+check their arguments when the module runs and say what to write instead.
+
+The evaluation gives an outcome: `met` when no row offends, `failed` when one offends beyond
+`warn_within`, `warning` when all lie within it, and `error` when the expectation cannot be
+evaluated, as when `on` names no measure of the table or the `rows` function raises, `bk.Skip`
+included; an expectation on a table without rows is met: the column it names is only looked for
+among the table's columns, whatever their roles, and not at all when the table has no column or the
+expectation has a `rows` function, which is not called, so that `no_rows(above_maximum, by="typo")`
+is met on an empty table. A level says what a failed expectation is: `off`, not evaluated; `warn`, a
+warning whatever the rows; `error`, the default, a failure. It is the Blick's or check's own
+`level=`, else its group's (`bk.group("checks", level="warn")`), else `level` in `[tool.blicket]`:
+
+```toml
+[tool.blicket]
+level = "warn"  # off, warn or error (the default); a group or a unit may say otherwise
+```
+
+A project that adopts checks may set `level = "warn"` and raise single checks to `error`. A group
+named in several modules takes the first level given, with a warning, as for its title.
+
+`blicket build` reports the checks and the outcomes, and exits 1 when an expectation of level
+`error` failed:
+
+```console
+$ blicket build runs/2026-10-23
+run 2026-10-23 · profile baseline · blicks at a248f8f · loaded in 8 ms
+1 Blick: 1 built
+1 check: 1 ran
+expectations: 1 met · 1 failed
+build d495d10d5024be4c → .blicket/build/d495d10d5024be4c
+
+expectations failed
+  blicks/flows.py:6  Blick flows/steel_by_process
+    1 of 4 rows offends: expected value at least 0
+    worst -0.02 at year=2021, process=EAF
+$ echo $?
+1
+```
+
+Here EAF went to -0.02 in 2021. A run whose 2021 adds up to 2.13 t gives the check a warning, which
+leaves the exit code at 0:
+
+```console
+expectations warned
+  blicks/checks.py:8  check checks/total_flow
+    1 row offends, all within warn_within: expected no rows, by excess, a warning within 0.05
+    worst 0.03 at year=2021
+```
+
+The line `N checks:` counts the checks that ran, were skipped and are in error (`N errors`);
+`expectations:` the outcomes per result. Each outcome names its rows: those offending, of how many a
+bound was applied to, how many lie within `warn_within`, the expectation in words with its measure,
+and where the worst row is, or the first when nothing ranks them. The sections end with the most
+severe: `skipped`, `warnings`, `expectations warned`, `expectations failed`, `errors`; an
+expectation that cannot be evaluated is an error, under `errors`, and makes the exit code 2, at
+level `warn` as well, since a check that cannot say whether the property holds is broken; only level
+`off`, which evaluates nothing, avoids it.
+
+An outcome stands beside the status: a Blick whose expectation failed, or cannot be evaluated, built
+its table, is `ok`, is drawn and is compared with the baseline as any Blick. A check is `ok` when it
+ran, `skipped` when it raised `bk.Skip` or its level is `off` (the reason then says so), and
+`error` when it raised or returned no table. A check's table may hold nulls in its dimensions, the
+union of several arrays' dimensions, say, with no two rows alike, nulls counting as equal; it may
+have any number of measures and no rows at all, with or without columns, which is the normal case.
+`None` is an error, since a forgotten `return` would pass. The build stores the offending rows as
+`checks/<id>.parquet`, worst first (by distance, then in the order of the dimensions, nulls last),
+at most 100,000 of them; the outcome counts all. A check that is met stores no table.
+
 ## Looking at a build
 
 ```console
@@ -296,8 +472,9 @@ small charts: of the Blicks that changed since the baseline, the largest change 
 panel where its change is largest with the baseline faded behind (but for a Sankey diagram, which
 does not draw the baseline), and of the Blicks you pinned.
 While nothing is pinned and nothing changed, it shows the first six Blicks instead, as "A first
-look", each card with a button that pins it. A line at the top says when Blicks failed to build or
-the build is incomplete; their problems are listed under the charts. Pins are kept in the browser
+look", each card with a button that pins it. A line at the top says when Blicks or checks failed
+to build or run, when expectations cannot be evaluated, or the build is incomplete; their problems
+are listed under the charts. Pins are kept in the browser
 per origin, that is per address and port: the builds that `blicket serve` shows on one port share
 them, as do the catalogs on one static host, and nothing is written to the project or the build. A
 pinned Blick that a build lacks is left out, and a renamed one keeps its pin through its aliases. A
@@ -310,6 +487,30 @@ the data tab), so a link reproduces the view. A chart exports as PNG or SVG, the
 CSV. A Blick skipped for the run is in italics in the sidebar, unless a flag of the comparison
 gives it a badge, and the sidebar counts the skipped Blicks at its foot; the overview says how many
 the run skipped, and a card or page gives the reason instead of a chart.
+
+A build with [checks](#expectations-and-checks) lists them in the sidebar under the groups, in a
+section "Checks" of their own, one list in the order of their definitions, each with a badge when
+its expectation is not met: `failed` or `error` in the error colour, `warning` in the warning
+colour. A Blick whose expectation is not met carries the same badge beside the badge of its flags,
+in the sidebar and on its card. The filter of the sidebar is a choice of "All", "Changed (N)",
+the Blicks the comparison flags, and "Not met (N)", the Blicks and checks whose expectation warned,
+failed or cannot be evaluated; a choice whose N is 0 is not offered, and without either there is no
+filter. The search finds checks too, and the foot counts them, `6 of 12 shown · 4 Blicks and 8
+checks`. The overview has a section "Expectations" above the changed Blicks: a line `This run:` with
+the outcomes per result (`2 failed · 1 cannot be evaluated · 1 warning · 4 met`, or `all 6
+expectations met`), and against a baseline a line `Against the baseline:` with the transitions (`1
+broken · 1 fixed`, see [Checking a run](#checking-a-run)); then the Blicks and checks not met,
+failed and in error first, each with its badge, its outcome as the terminal says it and its
+transition, and after them those fixed and dropped. A check's page (`#/check/<id>`) gives its
+description, its rows, its level when it is not `error`, and where it is defined, a strip with the
+outcome and its transition, and the table of the offending rows, worst first, whose columns sort; a
+met check says `no row offends: ...` and has no table, one whose table the build cut says how many
+of the offending rows are stored, and one whose expectation cannot be evaluated shows the rows the
+check returned, as they are. A Blick's page has the same strip under the one of its changes, with a
+"Show worst row" button that sets the filters to the worst row and then says "Worst row shown"; a
+met expectation is one muted line, `no row offends: expected value at least 0`. A Blick or a check
+whose page is asked for under the other kind's address, `#/blick/<id of a check>`, opens its own
+page.
 
 The build directory is self-contained: copied to a laptop or a static host such as GitHub Pages, it
 works from any sub-path. Opened from the file system it does not, because browsers do not let a
@@ -361,11 +562,13 @@ skipped in the current build, whether or not they are also `removed`, as in
 `4 Blicks: 1 unchanged · 3 skipped · 1 removed`.
 
 `diff` exits 0 when it finds changes, which are an answer, not a failure; it exits 2 when a build
-cannot be read, a Blick is flagged `error`, or removed Blicks were not judged. `--json` prints the
+cannot be read, a Blick is flagged `error`, a check is in error, an expectation cannot be evaluated,
+or removed Blicks were not judged. `--json` prints the
 comparison instead, which is also its file format, read back by `bk.Comparison`: `spec`, the version
 of blicket that compared (`blicket`, which names the formula of the magnitude), `created_at`, the
 `baseline` and `current` builds (id, run, profile, time, `repository` with commit, branch and dirty
-flag, and `incomplete`), `incomplete`, the reasons why removed Blicks were not judged, empty when
+flag, and `incomplete`), `incomplete`, the reasons why removed Blicks and dropped checks were not
+judged, empty when
 they were, and `blicks`, the current Blicks in the order of the manifest followed by the removed
 ones, each with its `id`, `name`, `matched`, the id of the baseline Blick when it differs, as for a
 Blick matched through an alias, `change` (the flags, the magnitude, the columns and values added and
@@ -375,6 +578,39 @@ compared, that a `new` Blick did not build in the baseline or was skipped there,
 skipped Blick has no table (`skipped: ...`). `baseline_data` and `baseline_hash`, the path of the
 copied baseline table in the build directory and its hash in the baseline manifest, are set by
 `check` (below) for the Blicks flagged `value` or `schema`, and are `null` otherwise.
+`expectation` relates the outcomes of the Blick's expectation (see [Expectations and
+checks](#expectations-and-checks)), `null` when neither build gives it one: the `transition`, the
+`current` outcome, the `baseline`'s outcome of the same expectation, or, when there is none now, of
+the one it had, and `message`, why a side has no outcome or that the expectation changed. `checks`
+holds the same per current check, and per baseline check whose expectation is dropped when the
+current build is complete (a check missing from an incomplete build may only have failed to load),
+each with its `id`, `name`, `matched`, `expectation` and `message`, the cause of a check in error,
+`null` for any other; checks are matched by id and aliases among checks, as Blicks among Blicks, and
+their tables are not compared.
+
+The outcomes are ordered met < warning < failed. Against the baseline's outcome of the same
+expectation, one not met now is `broken` when it is worse and `still_failing` otherwise; one met now
+that was not met there is `fixed`. One not met now without an outcome of the same expectation in the
+baseline, since the unit or the expectation is new or changed, or was off, skipped or in error
+there, is `new`, as is every one not met against a baseline of `spec` 0.2, which has no outcomes;
+one not met in the baseline without an outcome now, since the unit or the expectation is gone, off,
+skipped or in error, is `dropped`, so that silencing a failing check shows. An outcome that cannot
+be evaluated is no outcome here, and whether the expectation is the same is read from its record in
+the two manifests. The transitions flag no Blick and change no exit code (an outcome that cannot be
+evaluated is an error, which does): `diff` adds a line such as `expectations vs baseline: 1 broken ·
+1 fixed` and sections that name the units of each transition but `still failing`:
+
+```console
+$ blicket diff .blicket/build/55f3a5efad101f50 .blicket/build/87d349c37481eaa9
+baseline 55f3a5efad101f50 · run 2026-10-22 · profile baseline · blicks at a248f8f
+current  87d349c37481eaa9 · run 2026-10-24 · profile baseline · blicks at a248f8f
+1 Blick: 1 value
+expectations vs baseline: 1 broken
+top movers: flows/steel_by_process 1.4% of scale (year=2021, process=EAF)
+
+expectations broken
+  check checks/total_flow  warning, was met
+```
 
 `blicket push` copies a build into the store, where it is never changed again:
 
@@ -422,7 +658,8 @@ names the baseline itself: the id of a build in the store or a build directory, 
 
 Without a baseline, `check` says why (`baseline: none (no other pushed build of profile
 baseline)`, or that none of the pushed builds is at the commit or its ancestors), writes no
-comparison and exits 0: nothing to compare is not a change. It exits 2 with `error: no baseline:
+comparison and exits 0 unless an expectation of level `error` failed (1) or the build has errors
+(2): nothing to compare is not a change. It exits 2 with `error: no baseline:
 …` when the baseline named by `--against` cannot be found, and when no pushed build of the profile
 is on the history while the clone lacks the commits of some, since one of them may be the
 baseline, as in a shallow clone; GitHub Actions clones one commit by default. The message names
@@ -442,14 +679,40 @@ summary to the file it names, which GitHub shows as the job's summary: the two b
 counts, a table of the flagged Blicks with their largest change as a percent of the chart's scale
 and where they changed most, the values that appeared or vanished, the messages of the `new` and
 `removed` Blicks, and the errors; or why there is no baseline. A skipped Blick that is removed has
-the flags `removed (skipped)` there. A summary that cannot be appended is a warning.
+the flags `removed (skipped)` there. With [expectations](#expectations-and-checks), the summary has
+a table "expectations" of those not met, fixed or dropped: the unit, the result, the rows, the
+worst value and where it is, and the transition against the baseline; without a baseline, the
+expectations not met follow the line that says why there is none, so CI shows them on a first run
+too. A summary that cannot be appended is a warning.
 
-`check` exits 0 when no Blick is flagged, 1 when one is flagged `value`, `schema`, `new` or
-`removed`, and 2 on errors: a Blick in error, removed Blicks not judged, a baseline that cannot be
-resolved. `--push` pushes the build afterwards, its comparisons included, whatever the exit code,
-so that CI keeps what it checked; the push line names the comparisons. `--json` prints the
-comparison file on stdout instead of the report, `null` without a baseline, and the report on
-stderr. `--out` and `--project` work as for `build`.
+With expectations, the report has, after `vs baseline:`, the transitions as `diff` gives them, and
+the verdict names the failed ones, `flagged: 1 of 1 Blick · failed: 1 expectation`:
+
+```console
+$ blicket check runs/2026-10-23
+...
+baseline 55f3a5efad101f50 · run 2026-10-22 · blicks at a248f8f · built 2026-11-16 00:15 UTC
+vs baseline: 1 value
+expectations vs baseline: 1 broken
+top movers: flows/steel_by_process 34% of scale (year=2021, process=EAF)
+flagged: 1 of 1 Blick · failed: 1 expectation
+comparison → .blicket/build/d495d10d5024be4c/compare/55f3a5efad101f50
+
+expectations broken
+  Blick flows/steel_by_process  failed, was met
+```
+
+`check` exits 0 when no Blick is flagged and no expectation of level `error` failed, 1 when a
+Blick is flagged `value`, `schema`, `new` or `removed` or such an expectation failed, and 2 on
+errors: a Blick or check in error, an expectation that cannot be evaluated, removed Blicks not
+judged, a baseline that cannot be resolved. With `--exit-zero-on-changes`, flagged Blicks do not
+make it exit 1, so that 1 means a failed expectation only: a CI that tolerates 1 for the changes a
+pull request brings can then fail on a check, by failing on any code but 0. `--push` pushes the
+build afterwards, its comparisons included, whatever the exit code, so that CI keeps what it
+checked; the push line names the comparisons. `--json` prints the comparison file on stdout instead
+of the report, `null` without a baseline, and the report on stderr; without a baseline the
+outcomes are then in the manifest only, which `build --json` prints. `--out` and `--project` work
+as for `build`.
 
 `blicket serve` on a checked build directory shows the comparison. The overview names the baseline's
 run in a selector over the baselines the build was checked against, the one checked last first, each
@@ -503,8 +766,9 @@ viewer: http://127.0.0.1:8765/#/   (Ctrl-C stops)
 The line `builder:` says whether the Blick builder is on, with the size of the project's dataset,
 or why it is off. `dev` takes `--against`, `--out` and `--project` as `check` does and `--port`,
 `--host` and `--open` as `serve` does; it binds the port before loading the run, so a taken `--port`
-fails at once. It exits 0 when stopped with Ctrl-C, whatever the build holds: flagged Blicks and
-Blicks that fail are in the report and the viewer, and a baseline that `--against` names but cannot
+fails at once. It exits 0 when stopped with Ctrl-C, whatever the build holds: flagged Blicks,
+Blicks and checks that fail and expectations not met are in the report and the viewer, and a
+baseline that `--against` names but cannot
 be found is in the report. Only a session that cannot start exits 2, as `check` would: an invalid
 `[tool.blicket]`, a loader that raises, no viewer, a taken `--port`, no run given and no `runs`
 to pick one from. `-v` shows tracebacks, of the Blicks at the start, of a run picked in the viewer
@@ -624,9 +888,17 @@ than such an object, is a warning at start, and the builder is off for the sessi
 
 ## Examples
 
+[examples/coherence](https://github.com/tobiasdiez/blicket/tree/main/examples/coherence) is a small
+project that shows [expectations and checks](#expectations-and-checks) and needs no data from
+elsewhere: three Blicks with an expectation and three checks on a made-up steel cycle, and two runs
+in the repository, a coherent one and one whose stock no longer balances its flows. Its README
+walks through `check` on both and what the viewer shows; blicket's tests build it.
+
 [examples/remind-mfa](https://github.com/tobiasdiez/blicket/tree/main/examples/remind-mfa) is a
-project on runs of remind-mfa's plastics model: a loader that unpickles a run, and ten Blicks,
-mostly ported from remind-mfa's own figures, which return flodym arrays and pandas frames. It has
+project on runs of remind-mfa's plastics model: a loader that unpickles a run, ten Blicks, mostly
+ported from remind-mfa's own figures, which return flodym arrays and pandas frames, two of them
+with an expectation, and two checks, of the flows that must not be negative and the stocks that
+must balance their flows, over every cell of the model's two MFA systems. It has
 its own uv environment with remind-mfa from a checkout next to this repository. The runs are not in
 the repository, and producing one needs remind-mfa's input data, which is not public; the example's
 README says how to set it up and build a run.

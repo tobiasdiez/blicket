@@ -1,8 +1,9 @@
 // What the overview shows: the changed and the pinned Blicks as small charts, and the state each
 // small chart is drawn at.
 import { baselineTable, blickBadge, ranked, whereState, whereText, type Badge, type BlickComparison } from './comparison'
+import { unevaluableCount } from './expectations'
 import { queryFromState, stateFromQuery, withoutSplit, type ControlState, type YAxis } from './controls'
-import { byStatus, firstLine, type BlickEntry, type Dimension, type Manifest, type Problem, type Value } from './manifest'
+import { byStatus, firstLine, units, type BlickEntry, type Dimension, type Manifest, type Problem, type Value } from './manifest'
 import { display, valueKey } from './table'
 
 /** How many Blicks a section of the overview shows as cards, unless they are pinned. */
@@ -56,15 +57,20 @@ function noteOf(entry: BlickEntry): string | null {
 const counted = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`
 
 /**
- * The build's trouble in a line, for the top of the overview, `1 Blick failed to build · build
- * incomplete · 1 error in files or the project`; empty when there is none. Warnings, such as a
- * project outside git, and skipped Blicks are no trouble.
+ * The build's trouble in a line, for the top of the overview, `1 Blick failed to build · 1 check
+ * failed to run · 2 expectations cannot be evaluated · build incomplete · 1 error in files or the
+ * project`; empty when there is none. Warnings, such as a project outside git, skipped units and
+ * expectations whose rows offend are no trouble; the expectations have a section of their own.
  */
-export function troubles(manifest: Pick<Manifest, 'blicks' | 'build' | 'problems'>): string {
+export function troubles(manifest: Pick<Manifest, 'blicks' | 'checks' | 'build' | 'problems'>): string {
   const failed = byStatus(manifest.blicks).error.length
+  const checks = byStatus(manifest.checks).error.length
+  const unevaluable = unevaluableCount(units(manifest))
   const errors = manifest.problems.filter(p => p.severity === 'error').length
   return [
     ...(failed ? [`${counted(failed, 'Blick', 'Blicks')} failed to build`] : []),
+    ...(checks ? [`${counted(checks, 'check', 'checks')} failed to run`] : []),
+    ...(unevaluable ? [`${counted(unevaluable, 'expectation cannot', 'expectations cannot')} be evaluated`] : []),
     ...(manifest.build.incomplete ? ['build incomplete'] : []),
     ...(errors ? [`${counted(errors, 'error', 'errors')} in files or the project`] : []),
   ].join(' · ')

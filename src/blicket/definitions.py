@@ -1,12 +1,14 @@
-"""The definition API (``bk.group``, ``@bk.blick``, ``bk.register``, ``bk.slug``) and its records.
+"""The definition API (``bk.group``, ``@bk.blick``, ``bk.register``, ``@bk.check``,
+``bk.register_check``, ``bk.slug``) and its records.
 
-The API does not build Blicks directly. It appends to the record of the Blick module a call is
-attributed to; ``assembly`` turns the records into a registry once all modules have been
+The API does not build Blicks or checks directly. It appends to the record of the Blick module a
+call is attributed to; ``assembly`` turns the records into a registry once all modules have been
 imported, because only then are the group, the default ids and the default titles known. So
 ``bk.group()`` may stand anywhere in a module, and a module that runs again, in a second discovery
-for instance, simply gets a fresh record.
+for instance, simply gets a fresh record. Blicks and checks go through the same steps, told apart
+by the definition's ``kind``.
 
-During discovery, invalid definitions are recorded, so that one bad Blick does not hide the
+During discovery, invalid definitions are recorded, so that one bad definition does not hide the
 others. Outside discovery, in a notebook or a test, they raise ``DefinitionError`` at once.
 """
 
@@ -24,6 +26,8 @@ from typing import Any, NoReturn, Unpack, overload
 from blicket._validation import (
     BlickOptions,
     CheckedOptions,
+    CheckOptions,
+    DefinitionKind,
     GroupArguments,
     reserved_name,
     reserved_segment,
@@ -32,9 +36,13 @@ from blicket._validation import (
     validate_group,
 )
 from blicket.errors import DefinitionError, Kind, Source
+from blicket.expect._levels import Level
 from blicket.model import Transform
 
-__all__ = ["blick", "group", "register", "slug"]
+__all__ = ["blick", "check", "group", "register", "register_check", "slug"]
+
+# How messages name a definition of each kind.
+_KIND_WORDS: dict[DefinitionKind, str] = {"blick": "Blick", "check": "check"}
 
 
 @dataclass
@@ -47,7 +55,8 @@ class GroupCall:
 
 @dataclass
 class Definition:
-    """One ``@bk.blick`` or ``bk.register`` call, checked, before its group is known.
+    """One ``@bk.blick``, ``bk.register``, ``@bk.check`` or ``bk.register_check`` call, checked,
+    before its group is known; ``kind`` says whether it defines a Blick or a check.
 
     ``given_id`` is the id as passed, valid or not. ``problems`` leave out whether an id can be
     derived from the function name; ``id_problem`` says that.
@@ -59,6 +68,12 @@ class Definition:
     transform: object
     problems: list[str]
     source: Source
+    kind: DefinitionKind = "blick"
+
+    @property
+    def label(self) -> str:
+        """How messages name the definition: ``Blick flows/x``, ``check checks/y``."""
+        return f"{_KIND_WORDS[self.kind]} {self.name}"
 
     @property
     def name(self) -> str:
@@ -79,7 +94,7 @@ class Definition:
             return f"the function name {self.function_name!r} cannot be an id segment; pass id="
         return None
 
-    def blick_id(self, group: str) -> str | None:
+    def unit_id(self, group: str) -> str | None:
         """The given id if valid, else the id derived from the group and the function name."""
         if self.given_id is not None or self.id_problem is not None:
             return self.options.id
@@ -172,10 +187,13 @@ def _source(frame: FrameType, function: object = None) -> Source:
     return Source(file, frame.f_lineno)
 
 
-def _definition_failure(label: str, source: Source, problems: list[str]) -> DefinitionError:
-    """The error raised outside discovery, worded as ``blicket list`` prints it."""
+def _definition_failure(
+    label: str, source: Source, problems: list[str], *, checks: bool = False
+) -> DefinitionError:
+    """The error raised outside discovery, worded as ``blicket list`` prints it; ``checks`` says
+    that a check's definition failed."""
     lines = "".join(f"\n    {problem}" for problem in problems)
-    return DefinitionError(f"{source.display()}  {label}{lines}")
+    return DefinitionError(f"{source.display()}  {label}{lines}", checks=checks)
 
 
 def slug(text: str) -> str:
@@ -194,11 +212,18 @@ def slug(text: str) -> str:
     return result
 
 
-def group(name: str = "", title: str | None = None, tags: Iterable[str] = ()) -> None:
-    """Name the group of the calling Blick module and give it a title and tags.
+def group(
+    name: str = "",
+    title: str | None = None,
+    tags: Iterable[str] = (),
+    level: Level | None = None,
+) -> None:
+    """Name the group of the calling Blick module and give it a title, tags and a level.
 
     May stand anywhere in the module, once. Without it the group is named after the module file,
-    or after the package for an ``__init__.py``. Several modules may contribute to one group.
+    or after the package for an ``__init__.py``. Several modules may contribute to one group; the
+    first title and the first level given are its. ``level`` is the level of the group's Blicks
+    and checks that give none: ``off``, ``warn`` or ``error``.
     """
     if not name:
         raise DefinitionError(
@@ -207,7 +232,7 @@ def group(name: str = "", title: str | None = None, tags: Iterable[str] = ()) ->
         )
     frame = _attributed_frame()
     source = _source(frame)
-    arguments = validate_group(name, title, tags)
+    arguments = validate_group(name, title, tags, level)
     if arguments.problems and not _importing:
         raise _definition_failure("bk.group()", source, arguments.problems)
     _record_for(frame).group_calls.append(GroupCall(arguments, source))
@@ -220,21 +245,34 @@ def _define(
     transform: object,
     transform_label: str,
     function_name: str | None = None,
+    kind: DefinitionKind = "blick",
 ) -> None:
-    """Check a definition; record it during discovery, else raise if it is invalid."""
-    checked, problems = validate_definition(options, transform, transform_label)
+    """Check a definition of ``kind``; record it during discovery, else raise if it is invalid."""
+    checked, problems = validate_definition(options, transform, transform_label, kind)
     if (
         checked.description is None
         and inspect.isfunction(transform)
         and (doc := inspect.getdoc(transform))
     ):
         checked = dataclasses.replace(checked, description=doc)
-    definition = Definition(options.get("id"), function_name, checked, transform, problems, source)
+    definition = Definition(
+        options.get("id"), function_name, checked, transform, problems, source, kind
+    )
     if not _importing:
         all_problems = [*filter(None, [definition.id_problem]), *problems]
         if all_problems:
-            raise _definition_failure(f"Blick {definition.name}", source, all_problems)
+            raise _definition_failure(
+                definition.label, source, all_problems, checks=kind == "check"
+            )
     _record_for(frame).definitions.append(definition)
+
+
+def _define_function(function: object, options: Mapping[str, object], kind: DefinitionKind) -> None:
+    """Record the decorated ``function`` as a definition of ``kind`` with ``options``."""
+    frame = _attributed_frame()
+    name = getattr(function, "__name__", None)
+    label = f"the function {name}" if name else "the decorated callable"
+    _define(frame, _source(frame, function), options, function, label, name, kind)
 
 
 @overload
@@ -251,10 +289,7 @@ def blick(function: object = None, /, **options: Any) -> Any:
         raise DefinitionError("use @bk.blick(plot=...), with parentheses")
 
     def decorate[F: Callable[..., Any]](function: F) -> F:
-        frame = _attributed_frame()
-        name = getattr(function, "__name__", None)
-        label = f"the function {name}" if name else "the decorated callable"
-        _define(frame, _source(frame, function), options, function, label, function_name=name)
+        _define_function(function, options, "blick")
         return function
 
     return decorate
@@ -268,3 +303,61 @@ def register(*, transform: Transform | None = None, **options: Unpack[BlickOptio
     """
     frame = _attributed_frame()
     _define(frame, _source(frame), options, transform, "transform")
+
+
+@overload
+def check[F: Callable[..., Any]](function: F, /) -> F: ...
+@overload
+def check[F: Callable[..., Any]](**options: Unpack[CheckOptions]) -> Callable[[F], F]: ...
+def check(function: object = None, /, **options: Any) -> Any:
+    """Declare the decorated function, which takes the run, as a check: it returns the rows of
+    the run that offend a property, as a long table, and an empty one when the property holds.
+
+    Works bare, ``@bk.check``, and with keyword options, ``@bk.check(expect=...)``:
+
+    - ``id``: by default ``<group>/<function name>``; ``aliases``: former ids.
+    - ``title``: by default the function name with spaces; ``description``: by default the
+      docstring; ``tags``.
+    - ``expect``: the expectation on the rows, ``bk.expect.no_rows()`` unless it names another,
+      such as ``bk.expect.no_rows(by="relative", warn_within=1e-9)``.
+    - ``level``: ``off`` (the check does not run), ``warn`` or ``error``, by default its group's
+      or the project's, ``level`` in ``[tool.blicket]``.
+    - ``dims`` and ``measures``: the roles of the columns where their types do not say them.
+
+    The function raises ``bk.Skip(reason)`` when the check does not apply to the run. It is
+    returned unchanged.
+    """
+    if function is not None:
+        if options:
+            raise DefinitionError(
+                "use @bk.check(...) with options, or @bk.check alone", checks=True
+            )
+        if not callable(function):
+            raise DefinitionError(
+                f"@bk.check got {function!r} as its argument; use @bk.check bare, or with keyword "
+                'options: @bk.check(title="...", expect=bk.expect.no_rows(...))',
+                checks=True,
+            )
+        _define_function(function, {}, "check")
+        return function
+
+    def decorate[F: Callable[..., Any]](function: F) -> F:
+        _define_function(function, options, "check")
+        return function
+
+    return decorate
+
+
+def register_check(*, transform: Transform | None = None, **options: Unpack[CheckOptions]) -> None:
+    """Declare a check from a transformation, for families generated in a loop, as
+    ``bk.register`` declares a Blick: ``bk.register_check(id=f"balance/{model}",
+    transform=functools.partial(mass_balance, model=model))``.
+
+    ``id`` is required, because a lambda or a ``functools.partial`` has no usable name. The
+    title defaults to the last id segment with spaces. The other options are those of
+    ``@bk.check``: ``title``, ``description``, ``tags``, ``aliases``, ``expect``, ``level``,
+    ``dims`` and ``measures``. The checks of a family are registered when the module is imported,
+    before a run is loaded; a family over what a run holds is one check with a column instead.
+    """
+    frame = _attributed_frame()
+    _define(frame, _source(frame), options, transform, "transform", kind="check")

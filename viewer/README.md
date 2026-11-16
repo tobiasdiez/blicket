@@ -17,7 +17,7 @@ $ cd examples/remind-mfa && uv run blicket serve       # terminal 1, the data
 $ cd viewer && pnpm install && pnpm dev                # terminal 2, the app
 ```
 
-The dev server forwards `/manifest.json`, `/blicks/`, `/compare/` and `/dev/` to `blicket serve`
+The dev server forwards `/manifest.json`, `/blicks/`, `/checks/`, `/compare/` and `/dev/` to `blicket serve`
 at `http://127.0.0.1:8765`, or the address in `BLICKET_SERVE`, so the app reads `./manifest.json`
 as it does in a build directory, and nothing else on the machine can read the data. To work on
 the comparison, serve a build directory that `blicket check` wrote comparisons into. To work on
@@ -74,10 +74,17 @@ a column of the header, the page and the footer. From 1280 px (Tailwind's `xl`) 
 next to the page and the header's button collapses it; below, it is a drawer that the button opens
 and a picked Blick closes. Whether it is open on a wide window is kept in the browser's
 `localStorage` under `blicket:sidebar` (`useSidebar`), written only by the button, since the
-sidebar closes itself on a narrow window. The search and the "Changed" filter are the sidebar's
-own state, not in the URL, since the sidebar outlives the page; `app/lib/sidebar.ts` groups,
-searches and filters the Blicks, and `app/lib/comparison.ts` gives each its badge
-(`blickBadge`, drawn by `FlagBadge`). A Blick skipped for the run that no comparison flags has no
+sidebar closes itself on a narrow window. The search and the filter are the sidebar's own state,
+not in the URL, since the sidebar outlives the page; `app/lib/sidebar.ts` groups, searches and
+filters the Blicks, lists the checks in a section "Checks" under the groups (`sidebarChecks`,
+`CHECKS` its value among the groups'), and says what the foot counts (`footText`), and
+`app/lib/comparison.ts` gives each Blick its badge (`blickBadge`, drawn by `FlagBadge`). The filter
+is one select of three states, "All", "Changed (N)" and "Not met (N)" (`filterOptions`), each of the
+last two offered when its N is not 0; without either there is none. A Blick or check whose
+expectation is not met carries the badge of its outcome (`expectationBadge` in
+`app/lib/expectations.ts`, drawn by `OutcomeBadge`), beside a Blick's flag badge. Which page is a
+unit's comes from the route: `useBlickId` and `useCheckId` give an id only on their own pages.
+A Blick skipped for the run that no comparison flags has no
 badge but its label in italics, its search text holds `skipped` and the reason, and the sidebar's
 foot counts the skipped Blicks; a group of nothing but such Blicks starts closed
 (`initiallyOpen`). The pins are a list of Blick ids under `blicket:pins`
@@ -99,17 +106,38 @@ export menu; the tooltips and highlights are kept, and the baseline too except o
 config's `legend.disable`. A card of a skipped Blick says so with the first
 line of the reason, and its page with the whole reason; a line under the comparison says how many
 Blicks the run skipped (`skippedLine`). Under the cards, whatever the comparison, the
-overview lists the Blicks in error with their problems, the build's own problems from
+overview lists the Blicks and checks in error, and the expectations that cannot be evaluated,
+with their problems, the build's own problems from
 `manifest.json`, and whether a Blick module failed to import: a Blick's problems are in its entry
 only, and the sidebar, collapsed or a drawer, may not be in view. A line at the top (`troubles`)
-says so with a button that brings the list into view.
+says so with a button that brings the list into view, for Blicks that failed to build, checks
+that failed to run and expectations that cannot be evaluated alike.
+
+`app/lib/expectations.ts` holds what the viewer says of the outcomes of expectations, for the
+sidebar, the overview and both pages: the badges, the counts per result and per transition, the
+outcome in a sentence as the terminal's reports say it (`outcome_sentence` and `outcome_worst` in
+`src/blicket/report.py`) but for a place written `Region: SSA` and a number written as the tables
+write it (`valueText`, with the digits that keep a value apart from the bound it violates), the
+transitions in words, the overview's section (`expectationSection`, over the comparison's Blicks
+and checks: the units not met, failed and in error first, then the fixed and the dropped, a
+dropped one with the baseline's outcome, a removed Blick or a gone check too), and the check
+page's notes on its table (`tableOrder`, `cutNote`). It tells the outcomes whose rows offend
+(`offends`) from those not met (`isNotMet`), which include the ones that cannot be evaluated and
+carry a badge. `UnitPage` is the frame of a Blick's page and a check's: breadcrumb, title, meta
+line, problems or the reason of a skipped unit; an id of the other kind opens that unit's page.
+`OutcomeStrip` draws an outcome on both pages, on a Blick's under the change strip with "Show
+worst row", which sets the filters to the worst row through `whereState` and then says "Worst row
+shown", and on a check's (`app/pages/check/[...id].vue`) over the table of the offending rows
+(`DataTable`, which needs no plot mapping), worst first as the build stored them.
 
 `app/lib/manifest.ts` describes the manifest of the spec in its `SPEC` by hand; the Python models in
-`src/blicket/manifest.py` and `model.py` are its source of truth, and the viewer refuses a build
-of another spec. `app/lib/comparison.ts` describes `compare/<baseline id>/comparison.json` the
-same way, after `src/blicket/comparison.py`. A build that was never checked has no
-`compare/index.json`, and the browser's console logs the request's 404, as every static host
-answers it.
+`src/blicket/manifest.py`, `model.py` and the `expect` package are its source of truth. The viewer
+reads the specs in `READS`, 0.2 and 0.3, and refuses others; `normalized`, which `useManifest`
+applies, tags each entry with its `kind`, from the list it is in (`isCheck`, `unitPath`), and gives
+a manifest of 0.2 the fields 0.3 added, without checks or outcomes; `units` lists the entries of
+both kinds. `app/lib/comparison.ts` describes `compare/<baseline id>/comparison.json` the same way,
+after `src/blicket/comparison.py`. A build that was never checked has no `compare/index.json`, and
+the browser's console logs the request's 404, as every static host answers it.
 
 A plot type's browser half (`app/plots/`) is a Vega-Lite specification built from the rows the
 controls select, and from the baseline's rows after the same filters when the chart is compared

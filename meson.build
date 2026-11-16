@@ -7,11 +7,11 @@ py = import('python').find_installation(pure: true)
 # tests/test_packaging.py checks that every file under src/blicket is listed here.
 py.install_sources(
   'src/blicket/__init__.py',
+  'src/blicket/_callables.py',
   'src/blicket/_validation.py',
   'src/blicket/assembly.py',
   'src/blicket/baseline.py',
   'src/blicket/builder.py',
-  'src/blicket/check.py',
   'src/blicket/cli.py',
   'src/blicket/comparison.py',
   'src/blicket/config.py',
@@ -20,6 +20,7 @@ py.install_sources(
   'src/blicket/dev.py',
   'src/blicket/discovery.py',
   'src/blicket/errors.py',
+  'src/blicket/guard.py',
   'src/blicket/loader.py',
   'src/blicket/manifest.py',
   'src/blicket/model.py',
@@ -33,6 +34,15 @@ py.install_sources(
   'src/blicket/tracebacks.py',
   'src/blicket/viewer.py',
   subdir: 'blicket',
+)
+
+py.install_sources(
+  'src/blicket/expect/__init__.py',
+  'src/blicket/expect/_evaluation.py',
+  'src/blicket/expect/_levels.py',
+  'src/blicket/expect/_outcome.py',
+  'src/blicket/expect/_vocabulary.py',
+  subdir: 'blicket/expect',
 )
 
 py.install_sources(

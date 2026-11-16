@@ -1,8 +1,9 @@
 # remind-mfa Blicks
 
 A blicket project on runs of [remind-mfa](https://github.com/pik-piam/remind-mfa)'s plastics model:
-a loader that unpickles a run and ten [Blicks](../../README.md), mostly ported from remind-mfa's own
-plastics figures. The runs are not in this repository, and producing one needs remind-mfa's input
+a loader that unpickles a run, ten [Blicks](../../README.md), mostly ported from remind-mfa's own
+plastics figures, and two [checks](../../README.md#expectations-and-checks) of properties every run
+must have. The runs are not in this repository, and producing one needs remind-mfa's input
 data, which is not public (it lives on the PIK cluster).
 
 ## Prerequisites
@@ -64,6 +65,7 @@ names it instead with `loader = "package.module:function"` under `[tool.blicket]
 holds the Blicks, one group per file:
 
 ```
+blicks/checks.py        the checks: flows that are not negative, stocks that balance their flows
 blicks/drivers.py       GDP per capita, scenario rates, polymer splits
 blicks/flows.py         consumption, production by polymer and by source, production versus net
                         imports versus consumption, end-use split
@@ -83,7 +85,7 @@ $ uv sync
 $ uv run blicket list
 ```
 
-`blicket list` needs no run; it lists the three groups and ten Blicks.
+`blicket list` needs no run; it lists the four groups, ten Blicks and two checks.
 
 The environment holds blicket and remind-mfa together, since a run unpickles only where
 remind-mfa is importable. remind-mfa is installed editable, so it is the code checked out in
@@ -154,12 +156,15 @@ is not needed; the Blicks then run on the released blicket, not on the checkout'
 
 ```console
 $ uv run blicket build ../../data_out/2026-10-24--01-25-28_plastics_SSP2_h12
-run 2026-10-24--01-25-28_plastics_SSP2_h12 · profile plastics_SSP2_h12 · blicks at e7a2a23 (dirty) · loaded in 949 ms
+run 2026-10-24--01-25-28_plastics_SSP2_h12 · profile plastics_SSP2_h12 · blicks at dcfd796 (dirty) · loaded in 765 ms
 10 Blicks: 10 built
-build dfa92620f1ae4726 → .blicket/build/dfa92620f1ae4726
+2 checks: 2 ran
+expectations: 2 met · 2 warnings
+build da6e3c48f2d8498f → .blicket/build/da6e3c48f2d8498f
 ```
 
-"loaded in" includes importing remind-mfa. The commit after "blicks at" is the one of the blicket
+The checks' warnings follow, see [Checks and expectations](#checks-and-expectations). "loaded in"
+includes importing remind-mfa. The commit after "blicks at" is the one of the blicket
 repository, which holds the Blicks, not remind-mfa's, and `(dirty)` after it marks uncommitted
 changes there; commit and build id differ from the ones shown here. Building the same run again
 prints `(built before, left as it was)` after the build directory. The build directory holds one
@@ -175,19 +180,70 @@ $ uv run python -c "import polars as pl; print(pl.read_parquet('.blicket/build/<
 CI does not build this example: it needs the remind-mfa checkout and the runs, which are not in
 the repository.
 
+## Checks and expectations
+
+`blicks/checks.py` holds two checks over every cell of the model's two MFA systems, the future and
+the historical one, each with the cells that offend as rows: `System`, `Flow` or `Stock`, the
+union of the arrays' dimensions, null where an array lacks one (`Historical Time` is called
+`Time`), and two measures, the value and `relative`, the value divided by the largest flow or stock
+of its system, the scale of flodym's own checks.
+
+- `checks/non_negative_flows`: every flow below zero.
+- `checks/stock_balance`: every cell of a stock whose inflow minus outflow differs from the
+  stock's change since the year before, as flodym's `get_stock_balance` computes it; the gap is
+  the measure beside `relative`.
+
+Both expect `bk.expect.no_rows(by="relative", warn_within=1e-13)`: a value within 1e-13 of its
+system's scale is round-off, a little more than flodym's tolerance of 100 float epsilons, and is a
+warning; beyond it, a cell fails. The project sets `level = "warn"` in `pyproject.toml`, so that a
+failed expectation is a warning, and the check of the flows raises its own to `error`, so that a
+negative flow beyond round-off fails the build. `end_use_split` and `polymer_splits` expect each
+share `between(0, 1)`. On run 28:
+
+```console
+$ uv run blicket build ../../data_out/2026-10-24--01-25-28_plastics_SSP2_h12
+run 2026-10-24--01-25-28_plastics_SSP2_h12 · profile plastics_SSP2_h12 · blicks at dcfd796 (dirty) · loaded in 765 ms
+10 Blicks: 10 built
+2 checks: 2 ran
+expectations: 2 met · 2 warnings
+build da6e3c48f2d8498f → .blicket/build/da6e3c48f2d8498f
+
+expectations warned
+  blicks/checks.py:65  check checks/non_negative_flows
+    4,186 rows offend, all within warn_within: expected no rows, by relative, a warning within 1e-13
+    worst -9.96e-18 at System=future, Flow=aux_recyclate_market => primary_market, Time=2014, Element=C, Region=MEA, Polymer=PUR
+  blicks/checks.py:88  check checks/stock_balance
+    330,299 rows offend, 251,929 within warn_within, a warning at level warn: expected no rows, by relative, a warning within 1e-13
+    worst -0.00308 at System=future, Stock=use, Time=2019, Element=C, Region=CHA, Polymer=PP, End Use=Buildings & Construction
+```
+
+The shares are met. The negative flows, 4,186 cells, are all round-off, the worst 1e-17 of the
+scale. The stock balance is the finding: in the future system's `use` stock, 78,370 cells of the
+years 1953 to 2024 differ by more than round-off, the worst by 0.3% of the system's scale (2.4e7 t
+against 7.8e9 t), none after 2025; every other stock balances within round-off. Whether that is by
+design, as in years the model fits to history, is remind-mfa's to say; at level `warn` it shows
+without failing the build. The five example runs give the same picture: 4,062 to 4,186 negative
+flows, all round-off, and 330,104 to 332,884 unbalanced cells, of which 78,370 to 78,559, all of
+`use`, beyond round-off. The two checks take about 20 ms and 250 ms of a build of about 1.7 s, the
+loader's 0.6 to 0.8 s included. The build stores the 100,000 worst cells of the stock balance, of
+330,299, as `checks/checks/stock_balance.parquet`; the viewer's page of the check says so, shows the
+first 2,000, worst first by `relative`, and puts the check's level, `warn`, on its meta line.
+
 ## Comparing runs
 
-With runs 28, 31 and 34 built, `diff` compares two of them Blick by Blick, here run 28 with run
-34:
+With runs 28, 31 and 34 built, `diff` compares two of them Blick by Blick, and the outcomes of their
+expectations, here run 28 with run 34:
 
 ```console
 $ uv run blicket diff .blicket/build/<id of run 28> .blicket/build/<id of run 34>
 baseline bfa7f61fc79b65c2 · run 2026-10-24--01-25-28_plastics_SSP2_h12 · profile plastics_SSP2_h12 · blicks at fe4d2dd (dirty)
 current  34247dcb88fd54c3 · run 2026-10-24--01-25-34_plastics_SSP2_h12 · profile plastics_SSP2_h12 · blicks at fe4d2dd (dirty)
 10 Blicks: 9 unchanged · 1 value
+expectations vs baseline: 2 still failing
 top movers: flows/production_by_source 2.1% of scale (Flow=Primary, Time=2100, Region=SSA)
 ```
 
+The two checks warn in both runs, `still failing`.
 The lower collection rate shows in production by source only: primary production in SSA in 2100
 changed by 2.1% of the highest stack of the chart, whose regions share one scale as they share the
 y axis. Run 28 against run 31, an unchanged rerun, gives `10 Blicks: 10 unchanged`.
@@ -205,16 +261,24 @@ and ids differ on your checkout):
 $ uv run blicket check ../../data_out/2026-10-24--01-25-34_plastics_SSP2_h12
 run 2026-10-24--01-25-34_plastics_SSP2_h12 · profile plastics_SSP2_h12 · blicks at 604e20c (dirty) · loaded in 953 ms
 10 Blicks: 10 built
+2 checks: 2 ran
+expectations: 2 met · 2 warnings
 build c6317235ed070309 → .blicket/build/c6317235ed070309
+
+expectations warned
+  ...
 
 baseline bfa7f61fc79b65c2 · run 2026-10-24--01-25-28_plastics_SSP2_h12 · blicks at fe4d2dd (dirty) · built 2026-10-24 13:28 UTC
 vs baseline: 9 unchanged · 1 value
+expectations vs baseline: 2 still failing
 top movers: flows/production_by_source 2.1% of scale (Flow=Primary, Time=2100, Region=SSA)
 flagged: 1 of 10 Blicks
 comparison → .blicket/build/c6317235ed070309/compare/bfa7f61fc79b65c2
 ```
 
-It exits 1, since a Blick is flagged. The comparison in `compare/bfa7f61fc79b65c2/` holds
+It exits 1, since a Blick is flagged; the checks' warnings do not change that.
+`--exit-zero-on-changes` makes it exit 0 here, and 1 only for a failed expectation, such as a
+negative flow beyond round-off. The comparison in `compare/bfa7f61fc79b65c2/` holds
 `comparison.json` and run 28's table of production by source, 35 KB next to the build's 594 KB
 of manifest and tables. `--against <branch>` searches that branch's history instead of the commit
 checked out, `--against <id>` compares with that build, and `--push` pushes the build afterwards,

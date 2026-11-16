@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { TAB, queryFromState, stateFromQuery, yAxisOf, type ControlState } from '~/lib/controls'
 import { downloadCsv } from '~/lib/csv'
-import { sourceText } from '~/lib/manifest'
 import { drawsBaseline, nothingToCompare } from '~/plots'
 import { CATEGORICAL, GHOST } from '~/plots/theme'
 
@@ -16,14 +15,12 @@ const theme = useTheme()
 
 const id = useBlickId()
 const entry = computed(() => manifest.value?.blicks.find(b => b.id === id.value) ?? null)
-const group = computed(() => manifest.value?.groups.find(g => g.name === entry.value?.group) ?? null)
 const definition = computed(() => entry.value?.definition ?? null)
 const schema = computed(() => entry.value?.columns ?? null)
 const controls = computed(() => entry.value?.controls ?? [])
 const defaultY = computed(() => yAxisOf(definition.value))
 const parsed = computed(() => (schema.value ? stateFromQuery(controls.value, schema.value, route.query, defaultY.value) : null))
 const state = computed(() => parsed.value?.state ?? null)
-const warnings = computed(() => entry.value?.problems.filter(p => p.severity === 'warning') ?? [])
 
 watch(() => parsed.value?.unknown.join(', '), (unknown) => {
   if (unknown) console.warn(`blicket: the URL names ${unknown}, which this Blick has no control for; ignored`)
@@ -33,6 +30,8 @@ watch(() => parsed.value?.unknown.join(', '), (unknown) => {
 const change = computed(() => (entry.value ? blicks.value.get(entry.value.name) ?? null : null))
 // A skipped Blick that no flag marks was not compared, so a strip would wrongly say unchanged.
 const strip = computed(() => (change.value && !(change.value.skipped && !change.value.change.flags.length) ? change.value : null))
+// How the outcome of the Blick's expectation relates to the baseline's.
+const related = computed(() => change.value?.expectation ?? null)
 const compare = ref(true)
 // `fileName` names exported images and the CSV file; `chartProps` is what the chart and the
 // change charts are drawn from.
@@ -58,8 +57,6 @@ const incomparable = computed(() => {
   return nothingToCompare(type, { table: shown.value, baseline: baseline.value, schema: schema.value, mapping })
 })
 
-useHead({ title: computed(() => `${definition.value?.title ?? id.value} · blicket`) })
-
 /** Put the control state into the URL, without a history entry. */
 async function update(next: ControlState) {
   if (!schema.value) return
@@ -69,7 +66,7 @@ async function update(next: ControlState) {
 
 const controlBar = useTemplateRef<{ $el: HTMLElement }>('controlBar')
 
-/** Show the largest change, and keep the keyboard focus on the page: on the first control. */
+/** Show the largest change, or the worst row of the expectation, and keep the keyboard focus on the page: on the first control. */
 async function showWhere(next: ControlState) {
   await update(next)
   await nextTick()
@@ -79,65 +76,35 @@ async function showWhere(next: ControlState) {
 function saveCsv() {
   if (shown.value && schema.value && definition.value) downloadCsv(shown.value, schema.value, definition.value.unit, definition.value.plot.mapping, fileName.value)
 }
-
-// The overview is the one page above a Blick; the group is a label, not a page. On a narrow
-// page the title, which the heading repeats, makes room for the group.
-const breadcrumb = computed(() => [
-  { label: 'Overview', to: '/' },
-  { label: group.value?.title ?? entry.value?.group ?? '', ui: { separator: 'max-sm:hidden' } },
-  { label: definition.value?.title ?? id.value, ui: { item: 'max-sm:hidden' } },
-])
-const source = computed(() => (entry.value?.source ? sourceText(entry.value.source) : null))
 </script>
 
 <template>
-  <div v-if="!entry" class="space-y-3">
-    <h1 class="text-lg font-semibold text-highlighted">
-      No such Blick in this build
-    </h1>
-    <p class="text-sm text-muted">
-      This build has no Blick <code>{{ id }}</code>.
-    </p>
-    <UButton to="/" icon="i-lucide-arrow-left" variant="outline" color="neutral" label="Overview" />
-  </div>
-  <div v-else class="space-y-5">
-    <div class="space-y-1">
-      <UBreadcrumb :items="breadcrumb" />
-      <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
-        <h1 class="min-w-0 text-xl font-semibold text-highlighted">
-          {{ definition?.title ?? entry.name }}
-        </h1>
-        <PinButton :id="id" :label="definition?.title ?? entry.name" class="shrink-0" />
-      </div>
-      <p v-if="definition?.description" class="max-w-3xl text-sm text-muted">
-        {{ definition.description }}
-      </p>
-      <p class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
-        <span class="font-mono">{{ entry.name }}</span>
-        <span v-if="definition">{{ definition.plot.type }}</span>
-        <span v-if="definition?.unit">unit: {{ definition.unit }}</span>
-        <span v-if="entry.rows !== null">{{ entry.rows.toLocaleString('en') }} rows</span>
-        <a v-if="entry.data" :href="`./${entry.data}`" download class="underline hover:text-default">Parquet file</a>
-        <button v-if="shown?.length" type="button" class="underline hover:text-default" @click="saveCsv">
-          CSV of this selection
-        </button>
-        <span v-if="source">defined at <span class="font-mono">{{ source }}</span></span>
-      </p>
-    </div>
-
-    <ChangeStrip
-      v-if="strip"
-      :blick="strip"
-      :baseline="comparison!.baseline"
-      :state="state"
-      :schema="schema"
-      :mapping="definition?.plot.mapping ?? {}"
-      @update="showWhere"
-    />
-    <ProblemList v-if="entry.status === 'error'" :problems="entry.problems" />
-    <UAlert v-else-if="entry.status === 'skipped'" color="neutral" variant="subtle" icon="i-lucide-circle-slash" title="Skipped for this run" :description="entry.skipped ?? undefined" :ui="{ description: 'whitespace-pre-wrap wrap-anywhere' }" />
-    <template v-else-if="schema && state && definition">
-      <ProblemList v-if="warnings.length" :problems="warnings" />
+  <UnitPage kind="Blick" :id="id" :entry="entry">
+    <template #actions>
+      <PinButton :id="id" :label="definition?.title ?? id" class="shrink-0" />
+    </template>
+    <template #meta>
+      <span v-if="definition">{{ definition.plot.type }}</span>
+      <span v-if="definition?.unit">unit: {{ definition.unit }}</span>
+    </template>
+    <template #files>
+      <button v-if="shown?.length" type="button" class="underline hover:text-default" @click="saveCsv">
+        CSV of this selection
+      </button>
+    </template>
+    <template #strips>
+      <ChangeStrip
+        v-if="strip"
+        :blick="strip"
+        :baseline="comparison!.baseline"
+        :state="state"
+        :schema="schema"
+        :mapping="definition?.plot.mapping ?? {}"
+        @update="showWhere"
+      />
+      <OutcomeStrip v-if="entry" :outcome="entry.outcome" :related="related" :state="state" :schema="schema" :why="entry.status !== 'skipped'" @update="showWhere" />
+    </template>
+    <template v-if="schema && state && definition">
       <UAlert v-for="notice in parsed?.notices" :key="notice" color="neutral" variant="subtle" icon="i-lucide-info" :title="notice" />
       <ControlBar v-if="controls.length || comparing" ref="controlBar" :controls="controls" :schema="schema" :state="state" :axes="tab === 'chart'" @update="update">
         <template v-if="comparing">
@@ -159,7 +126,7 @@ const source = computed(() => (entry.value?.source ? sourceText(entry.value.sour
       <p v-else-if="!shown || waiting" class="text-sm text-muted">
         Loading the table…
       </p>
-      <p v-else-if="entry.rows === 0" class="text-sm text-muted">
+      <p v-else-if="entry?.rows === 0" class="text-sm text-muted">
         This Blick's table has no rows.
       </p>
       <p v-else-if="!shown.length" class="text-sm text-muted">
@@ -176,5 +143,5 @@ const source = computed(() => (entry.value?.source ? sourceText(entry.value.sour
       </div>
       <DataTable v-else :rows="shown" :schema="schema" :unit="definition.unit" :mapping="definition.plot.mapping" />
     </template>
-  </div>
+  </UnitPage>
 </template>

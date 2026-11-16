@@ -1,8 +1,8 @@
 // The shape of compare/<baseline id>/comparison.json, written by hand. The source of truth is the
-// blicket package: BuildRef, BlickComparison and Comparison in src/blicket/comparison.py, Change
-// in schema.py.
+// blicket package: BuildRef, BlickComparison, CheckComparison, ExpectationComparison and
+// Comparison in src/blicket/comparison.py, Change in schema.py.
 import { parseValue, type ControlState } from './controls'
-import type { BlickEntry, Repository, TableSchema, Value } from './manifest'
+import type { BlickEntry, Outcome, Repository, TableSchema, Value } from './manifest'
 import { formatter, valueKey, type TableFile } from './table'
 import { utcTime } from './time'
 
@@ -34,6 +34,24 @@ export interface BuildRef {
   incomplete: boolean
 }
 
+/** How an expectation's outcome relates to the baseline's; see `ExpectationComparison`. */
+export type Transition = 'broken' | 'new' | 'fixed' | 'still_failing' | 'dropped'
+
+/**
+ * The outcome of a unit's expectation now and in the baseline, and the transition between: an
+ * outcome not met now is `broken` when it is worse than the baseline's of the same expectation
+ * and `still_failing` otherwise, `new` without one; one met now that was not is `fixed`; one not
+ * met there without an outcome now is `dropped`.
+ */
+export interface ExpectationComparison {
+  transition: Transition | null
+  current: Outcome | null
+  /** The baseline's outcome of the same expectation, or of the one it had when there is none now or one that cannot be evaluated. */
+  baseline: Outcome | null
+  /** Why a side has no outcome, or that the expectation changed. */
+  message: string | null
+}
+
 export interface BlickComparison {
   /** The current id; the baseline id of a removed Blick that no current Blick claims. */
   id: string | null
@@ -54,6 +72,18 @@ export interface BlickComparison {
   /** The copy of the baseline table in the build directory, for Blicks flagged `value` or `schema`. */
   baseline_data: string | null
   baseline_hash: string | null
+  /** The outcomes of the Blick's expectation; `null` when neither build gives it one, and in a comparison written for a 0.2 build, which has none. */
+  expectation: ExpectationComparison | null
+}
+
+/** A check of a comparison: a current one, or one of the baseline whose expectation is dropped. */
+export interface CheckComparison {
+  id: string | null
+  name: string
+  matched: string | null
+  expectation: ExpectationComparison | null
+  /** The cause of a current check in error. */
+  message: string | null
 }
 
 export interface Comparison {
@@ -66,6 +96,8 @@ export interface Comparison {
   incomplete: string[]
   /** The current Blicks, then the removed ones that no current Blick claims. */
   blicks: BlickComparison[]
+  /** The current checks, then those of the baseline whose expectation is dropped; absent in a comparison written for a 0.2 build, which `useComparison` reads as none. */
+  checks: CheckComparison[]
 }
 
 // The order of the flagged Blicks: the changed values first.

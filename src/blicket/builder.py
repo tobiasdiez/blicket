@@ -3,7 +3,8 @@
 ``build`` composes the steps: ``prepare`` reads the config and checks everything that can fail
 before the run is loaded, ``discover`` imports the Blicks, ``load`` loads the run, and ``write``
 runs the transformations and writes the build directory. ``blicket dev`` takes the steps one by
-one, since it keeps the run.
+one, since it keeps the run, and the parts of ``write`` instead of it, ``run_blick`` for one
+Blick and ``assemble`` for the manifest, and keeps the tables in memory.
 
 A build directory holds ``manifest.json``, ``blicks/<id>.parquet`` for every Blick that built,
 and a copy of the viewer. It is assembled in a temporary directory next to its destination and
@@ -13,7 +14,6 @@ installed one.
 """
 
 import contextlib
-import hashlib
 import importlib.metadata
 import os
 import secrets
@@ -21,7 +21,7 @@ import shutil
 import subprocess
 import sys
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -160,7 +160,7 @@ def write(prepared: Prepared, registry: Registry, loaded: LoadedRun) -> Build:
     the viewer of an existing build cannot be replaced.
     """
     root, destination = prepared.root, prepared.destination
-    repository, problems = _repository(root)
+    repository = read_repository(root)
     temporary = destination / f".tmp-{os.getpid()}-{secrets.token_hex(4)}"
     try:
         if prepared.default_out:  # .blicket/ ignores itself, so builds never make the tree dirty
@@ -172,22 +172,15 @@ def write(prepared: Prepared, registry: Registry, loaded: LoadedRun) -> Build:
         reason = error.strerror or str(error)
         raise BlicketError(f"cannot write the build to {destination}: {reason}") from error
     try:
-        entries = [_run_blick(b, loaded.run, temporary, root) for b in registry.blicks.values()]
-        # In the order of their definitions, as blicket list shows them.
-        entries = sorted([*entries, *registry.failed], key=lambda e: e.source or NOWHERE)
-        built = Manifest(
-            blicket=importlib.metadata.version("blicket"),
-            created_at=datetime.now(UTC),
-            build=BuildInfo(
-                id="", incomplete=registry.incomplete, loader_ms=round(loaded.loader_ms, 1)
-            ),
-            config=BuildConfig(tolerance=prepared.config.tolerance),
-            run=Run(**loaded.info.model_dump(), paths=list(prepared.shown)),
-            repository=repository,
-            groups=tuple(registry.groups.values()),
-            blicks=tuple(entries),
-            problems=(*registry.problems, *problems),
-        )
+        entries: list[BlickEntry] = []
+        for blick in registry.blicks.values():
+            entry, table = run_blick(blick, loaded.run, root, in_build)
+            if table is not None and entry.data is not None:
+                path = temporary / entry.data
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(table)
+            entries.append(entry)
+        built = assemble(prepared, registry, loaded, entries, repository, datetime.now(UTC))
         build_info = built.build.model_copy(update={"id": built.content_id(root)})
         built = built.model_copy(update={"build": build_info})
         text = built.model_dump_json(indent=2, context={"root": root})
@@ -228,12 +221,44 @@ def build(
         return write(prepared, registry, load(prepared))
 
 
+def assemble(
+    prepared: Prepared,
+    registry: Registry,
+    loaded: LoadedRun,
+    entries: Sequence[BlickEntry],
+    repository: tuple[Repository | None, Sequence[Problem]],
+    created_at: datetime,
+    build_id: str = "",
+) -> Manifest:
+    """The manifest of the run ``loaded`` with the ``entries`` of the Blicks of ``registry`` and
+    its failed Blicks, in the order of their definitions as ``blicket list`` shows them, and the
+    state of the ``repository`` holding the Blicks, as ``read_repository`` gives it."""
+    state, problems = repository
+    # In the order of their definitions, as blicket list shows them.
+    ordered: list[BlickEntry] = sorted(
+        [*entries, *registry.failed], key=lambda e: e.source or NOWHERE
+    )
+    return Manifest(
+        blicket=importlib.metadata.version("blicket"),
+        created_at=created_at,
+        build=BuildInfo(
+            id=build_id, incomplete=registry.incomplete, loader_ms=round(loaded.loader_ms, 1)
+        ),
+        config=BuildConfig(tolerance=prepared.config.tolerance),
+        run=Run(**loaded.info.model_dump(), paths=list(prepared.shown)),
+        repository=state,
+        groups=tuple(registry.groups.values()),
+        blicks=tuple(ordered),
+        problems=(*registry.problems, *problems),
+    )
+
+
 def _git(root: Path, *args: str) -> str:
     result = subprocess.run(["git", *args], cwd=root, capture_output=True, text=True, check=True)
     return result.stdout.strip()
 
 
-def _repository(root: Path) -> tuple[Repository | None, list[Problem]]:
+def read_repository(root: Path) -> tuple[Repository | None, list[Problem]]:
     """The commit, branch and dirty flag of the repository holding ``root``, or a warning."""
     try:
         commit = _git(root, "rev-parse", "--verify", "-q", "HEAD")
@@ -255,21 +280,30 @@ def _repository(root: Path) -> tuple[Repository | None, list[Problem]]:
     return None, [Problem(kind=Kind.REPOSITORY, severity="warning", message=message)]
 
 
-def _run_blick(blick: Blick, run: object, directory: Path, root: Path) -> BlickEntry:
-    """Build one Blick into ``directory``: its table as Parquet, and its manifest entry."""
+def in_build(blick: Blick, digest: str) -> str:
+    """Where a build directory holds the table of ``blick``: ``blicks/<id>.parquet``."""
+    return f"blicks/{blick.id}.parquet"
+
+
+def run_blick(
+    blick: Blick, run: object, root: Path, place: Callable[[Blick, str], str]
+) -> tuple[BlickEntry, bytes | None]:
+    """Build one Blick on ``run`` of the project at ``root``: its manifest entry, and its table as
+    Parquet bytes, ``None`` when it has none. ``place`` names the table's path in the entry, given
+    the Blick and the sha256 of the bytes in hex; the entry's ``hash`` is
+    ``tables.content_hash`` of it."""
     start = time.perf_counter()
     checked = tables.compute(blick, run, root)
     data: str | None = None
     digest: str | None = None
     rows: int | None = None
+    table: bytes | None = None
     if checked.frame is not None:
-        data = f"blicks/{blick.id}.parquet"
-        path = directory / data
-        path.parent.mkdir(parents=True, exist_ok=True)
-        checked.frame.write_parquet(path)
-        digest = f"parquet-sha256:{hashlib.sha256(path.read_bytes()).hexdigest()}"
+        table, hexdigest = tables.parquet(checked.frame)
+        data = place(blick, hexdigest)
+        digest = tables.content_hash(hexdigest)
         rows = checked.frame.height
-    return blick.entry(
+    entry = blick.entry(
         problems=checked.problems,
         data=data,
         hash=digest,
@@ -278,3 +312,4 @@ def _run_blick(blick: Blick, run: object, directory: Path, root: Path) -> BlickE
         timing_ms=round((time.perf_counter() - start) * 1000, 1),
         skipped=checked.skipped,
     )
+    return entry, table

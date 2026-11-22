@@ -75,8 +75,11 @@ export interface BlickDefinition {
   order: Record<string, Value[]>
 }
 
-/** What became of a Blick in a build: it built a table, its transformation skipped the run, or it failed. */
-export const STATUSES = ['ok', 'skipped', 'error'] as const
+/**
+ * What became of a Blick in a build: it built a table, its transformation skipped the run, or it
+ * failed; or, in the manifest of a session of `blicket dev`, it is not built yet.
+ */
+export const STATUSES = ['ok', 'skipped', 'error', 'pending'] as const
 export type Status = typeof STATUSES[number]
 
 /** Whether `value` is one of `STATUSES`. */
@@ -100,7 +103,18 @@ export interface BlickEntry {
   /** Why the transformation skipped the run with `bk.Skip`; such a Blick has no table, controls or problems. */
   skipped: string | null
   problems: Problem[]
-  /** `skipped` when `skipped` is set, else `error` when a problem is an error, else `ok`. */
+  /**
+   * Whether the Blick is not built yet, which only the manifest of a session of `blicket dev`
+   * says; absent when it is not. Such a Blick has its definition and nothing else.
+   */
+  pending?: boolean
+  /**
+   * Whether the session builds the Blick when its page asks and on `Rebuild`, not in the
+   * background, which only the manifest of a session of `blicket dev` says; absent when it does
+   * not.
+   */
+  expensive?: boolean
+  /** `pending` when `pending` is set, else `skipped` when `skipped` is set, else `error` when a problem is an error, else `ok`. */
   status: Status
 }
 
@@ -141,7 +155,7 @@ export interface Manifest {
 
 /** The entries of each status, each list in the order of `entries`. */
 export function byStatus(entries: readonly BlickEntry[]): Record<Status, BlickEntry[]> {
-  const found: Record<Status, BlickEntry[]> = { ok: [], skipped: [], error: [] }
+  const found: Record<Status, BlickEntry[]> = { ok: [], skipped: [], error: [], pending: [] }
   for (const entry of entries) found[entry.status].push(entry)
   return found
 }

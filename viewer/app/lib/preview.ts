@@ -2,6 +2,7 @@
 // small chart is drawn at.
 import { baselineTable, blickBadge, ranked, whereState, whereText, type Badge, type BlickComparison } from './comparison'
 import { queryFromState, stateFromQuery, withoutSplit, type ControlState, type YAxis } from './controls'
+import { isInvalid } from './jobs'
 import { byStatus, firstLine, type BlickEntry, type Dimension, type Manifest, type Problem, type Value } from './manifest'
 import { display, valueKey } from './table'
 
@@ -32,7 +33,10 @@ export interface ListedBlick {
 export interface PreviewSections {
   /** The flagged Blicks, the first with a table as cards, the rest listed; `null` when none is flagged. */
   changed: { cards: PreviewCard[], listed: ListedBlick[] } | null
-  /** The pinned Blicks; while none is, the first Blicks with a table, unless *changed* has cards. */
+  /**
+   * The pinned Blicks; while none is, the first Blicks with a table, unless *changed* has cards,
+   * and in a session with an expensive Blick the first Blicks, whatever they are.
+   */
   pinned: PreviewCard[]
   /** Whether nothing is pinned, so that `pinned` holds the first Blicks, if any. */
   unpinned: boolean
@@ -58,12 +62,17 @@ const counted = (n: number, one: string, many: string) => `${n} ${n === 1 ? one 
 /**
  * The build's trouble in a line, for the top of the overview, `1 Blick failed to build · build
  * incomplete · 1 error in files or the project`; empty when there is none. Warnings, such as a
- * project outside git, and skipped Blicks are no trouble.
+ * project outside git, and skipped Blicks are no trouble. In a session of blicket dev, `session`,
+ * a Blick whose definition is invalid, which no build was asked for, is named apart: `1 Blick has
+ * an invalid definition`.
  */
-export function troubles(manifest: Pick<Manifest, 'blicks' | 'build' | 'problems'>): string {
-  const failed = byStatus(manifest.blicks).error.length
+export function troubles(manifest: Pick<Manifest, 'blicks' | 'build' | 'problems'>, session = false): string {
+  const inError = byStatus(manifest.blicks).error
+  const invalid = session ? inError.filter(isInvalid).length : 0
+  const failed = inError.length - invalid
   const errors = manifest.problems.filter(p => p.severity === 'error').length
   return [
+    ...(invalid ? [invalid === 1 ? '1 Blick has an invalid definition' : `${invalid} Blicks have invalid definitions`] : []),
     ...(failed ? [`${counted(failed, 'Blick', 'Blicks')} failed to build`] : []),
     ...(manifest.build.incomplete ? ['build incomplete'] : []),
     ...(errors ? [`${counted(errors, 'error', 'errors')} in files or the project`] : []),
@@ -91,6 +100,9 @@ export function skippedLine(entries: readonly BlickEntry[]): string {
  * name no Blick of the build has. *Pinned*: the pinned Blicks in the sidebar's order as cards, a
  * Blick in error or skipped too; while none is pinned, no cards when *changed* has some, and
  * otherwise the first `limit` Blicks with a table. A Blick both changed and pinned is a card in both.
+ * In a session with an expensive Blick, `expensive`, which is built when it is opened, the first
+ * `limit` Blicks not under *changed* fill in, whatever their status and whatever changed, so that
+ * a session without a Blick built shows its first Blicks to open.
  */
 export function previewSections(
   entries: BlickEntry[],
@@ -98,6 +110,7 @@ export function previewSections(
   changes: ReadonlyMap<string, BlickComparison>,
   pinned: BlickEntry[],
   limit: number,
+  expensive = false,
 ): PreviewSections {
   const byName = new Map(entries.map(entry => [entry.name, entry]))
   const card = (entry: BlickEntry): PreviewCard => ({ entry, change: changes.get(entry.name) ?? null })
@@ -128,8 +141,9 @@ export function previewSections(
 
   const chosen = new Set(pinned)
   if (chosen.size) return { changed, pinned: entries.filter(entry => chosen.has(entry)).map(card), unpinned: false }
-  const fill = changed?.cards.length ? [] : entries.filter(hasTable).slice(0, limit).map(card)
-  return { changed, pinned: fill, unpinned: true }
+  const under = new Set(flagged.map(blick => blick.name))
+  const fill = expensive ? entries.filter(entry => !under.has(entry.name)) : changed?.cards.length ? [] : entries.filter(hasTable)
+  return { changed, pinned: fill.slice(0, limit).map(card), unpinned: true }
 }
 
 // The counts of first Blicks as words, up to the cards of a section.

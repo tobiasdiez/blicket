@@ -210,6 +210,12 @@ year,process,value
 loader that collects several runs into one reads `selection.paths`. `fingerprint` is required: it
 identifies the input files, and `bk.fingerprint` computes one from them. `profile` names the run
 configuration, such as "baseline" or "policy", so that each has its own baseline.
+`expensive=True` says that the run's Blicks take long to build, as on a checkout of a model that
+computes each exported file on demand: `blicket dev` then builds such a Blick when it is opened in
+the viewer, not in the background (see [Expensive Blicks](#expensive-blicks)). `build` and `check`
+build every Blick either way, and no manifest records the flag: `expensive` is not part of
+`info.model_dump()`, so a `RunInfo` made again from a dump says nothing of it, while
+`info.model_copy(update=...)` keeps it.
 
 A transformation returns a long table: a polars or pandas frame, an Arrow table, or an object with
 `to_df()` or `to_dataframe()`, such as a flodym array or an xarray object. Named levels of a pandas
@@ -482,37 +488,81 @@ page says so instead of drawing the two charts. A build that was never checked l
 
 ## Developing Blicks
 
-`blicket dev` checks a run as `check` does, without pushing it, then serves the build as `serve`
-does and keeps the run in memory for the [Blick builder](#the-blick-builder):
+`blicket dev` loads a run, finds its baseline as `check` does and serves the viewer at once,
+keeping the run in memory for the [Blick builder](#the-blick-builder). It builds the Blicks while
+the viewer is open, one at a time, and compares each with the baseline as it is built: a cheap
+Blick in the background from the start, and again whenever its page is opened; an
+[expensive one](#expensive-blicks) when its page is opened. It writes nothing, no build directory
+and nothing for the store; `build` and `check` do.
 
 ```console
 $ blicket dev runs/2026-10-23
 run 2026-10-23 · profile baseline · blicks at 0a6b858 · loaded in 12 ms
-1 Blick: 1 built
-build 8e21b7c04f6a9d35 → .blicket/build/8e21b7c04f6a9d35
+1 Blick, built in the background
 
 baseline 5d0c3f1e2a9b8c47 · run 2026-10-22 · blicks at 0a6b858 · built 2026-10-22 09:14 UTC
+builder: 1 quantity, 2 dimensions
+viewer: http://127.0.0.1:8765/#/   (Ctrl-C stops)
+12:00:01 1 Blick: 1 built
+
 vs baseline: 1 value
 top movers: flows/steel_by_process 3.2% of scale (year=2021, process=EAF)
 flagged: 1 of 1 Blick
-comparison → .blicket/build/8e21b7c04f6a9d35/compare/5d0c3f1e2a9b8c47
-builder: 1 quantity, 2 dimensions
-viewer: http://127.0.0.1:8765/#/   (Ctrl-C stops)
 ```
 
-The line `builder:` says whether the Blick builder is on, with the size of the project's dataset,
-or why it is off. `dev` takes `--against`, `--out` and `--project` as `check` does and `--port`,
-`--host` and `--open` as `serve` does; it binds the port before loading the run, so a taken `--port`
-fails at once. It exits 0 when stopped with Ctrl-C, whatever the build holds: flagged Blicks and
-Blicks that fail are in the report and the viewer, and a baseline that `--against` names but cannot
-be found is in the report. Only a session that cannot start exits 2, as `check` would: an invalid
-`[tool.blicket]`, a loader that raises, no viewer, a taken `--port`, no run given and no `runs`
-to pick one from. `-v` shows tracebacks, of the Blicks at the start, of a run picked in the viewer
-that cannot be loaded, and of the builder's queries while the session runs. A project with a loader
-and no Blick yet is no error in `dev`: the report says `no Blicks yet`, the build holds no Blick and
-is complete, and the overview offers the builder, as the foot of the Blick list always does. The
-viewer knows it is served by `dev` from the header `Blicket-Dev: 1` on `manifest.json`, which `dev`
-answers from memory, and with a 404 while it serves no run yet.
+The report before the viewer's URL is `check`'s without the build: the run, how many Blicks there
+are and how they are built (`20 Blicks, built in the background`; `62 Blicks: 2 built in the
+background, 60 when opened in the viewer (expensive)` with expensive Blicks), the problems of the
+definitions and files, the baseline or why there is none, the Blicks of the baseline that no Blick
+of the project claims (`vs baseline: 1 removed (steel/old_trade)`), which the definitions alone
+tell, and the line `builder:`, which says whether the Blick builder is on, with the size of the
+project's dataset, or why it is off. A build in the background prints no line of its own; once the
+background has built every cheap Blick, `dev` prints the rest of `check`'s report for the Blicks
+built so far, stamped with the time of day: the counts, the skipped Blicks, the problems and the
+comparison with the baseline, without `comparison →`, since nothing is written. A Blick a page
+asked for prints its lines, as [Expensive Blicks](#expensive-blicks) shows.
+
+The viewer lists every Blick from the start. The overview counts those not built yet (`14 of 20
+Blicks not built yet`), and "Changed since the baseline" fills in as they are built; the sidebar
+marks a Blick not built yet with a dashed circle and the one building with a spinner, and counts
+them at its foot (`20 Blicks · 14 not built yet`); a card of a Blick not built yet says so, or
+`Building…`. A Blick's page shows the title, description, plot type and unit at once. Opened on a
+cheap Blick not built yet, it asks for it, and the Blick is built next, once the build running
+ends, before the rest of the background (`Queued behind Steel trade`, then `Building… 0:01`).
+Opened on a cheap Blick built, it shows what was built under `Updating… 0:01` and asks for the Blick
+again: the transformation runs again on the run in memory, and the new table replaces the old one
+when it is there, compared with the baseline again (`Rebuilt in 180 ms at 12:03:10`). Opening the
+page, or reloading it, is the rebuild; a cheap Blick has no `Rebuild` button. Behind an expensive
+build, the page keeps what it shows under `Updating after Cement trade (0:42)`. The state is the
+server's: a reload, or a second tab, shows the same, and every tab learns within a second that a
+Blick was built; the footer names the session (`session started 2026-11-16 12:00 UTC`), not a
+build.
+
+The transformations run on one worker thread, not on the thread that called the loader, which
+matters for a run object bound to its thread, such as an embedded interpreter. A Blick a page asked
+for goes first: the cheap ones in the order asked, then the expensive ones in the order asked, then
+the background in the order `blicket list` shows the Blicks; a build running is never
+interrupted. The session keeps the tables in memory, and an entry's `data` and a comparison's
+`baseline_data` are `dev/tables/<sha256>.parquet`. While a cheap Blick builds, a query of the
+[Blick builder](#the-blick-builder) waits for it, and it goes before the next build, so that the
+builder answers while the background runs; blicket asks no run object to be thread-safe. While a
+run loads, a query is refused (`a run is loading; run the query again once it is loaded`), since
+the loader may take minutes, and replaces the dataset.
+
+`dev` takes `--against` and `--project` as `check` does and `--port`, `--host` and `--open` as
+`serve` does; it binds the port before loading the run, so a taken `--port` fails at once. `--out`
+is accepted and not used, which its help says, and a line on stderr when it is given. It exits 0
+when stopped with Ctrl-C, whatever the Blicks hold: flagged Blicks and Blicks that fail are in the
+terminal and the viewer, and a baseline that `--against` names but cannot be found is in the
+report. Only a session that cannot start exits 2, as `check` would: an invalid `[tool.blicket]`, a
+loader that raises, no viewer, a taken `--port`, no run given and no `runs` to pick one from. `-v`
+shows tracebacks, of a run picked in the viewer that cannot be loaded, of the builder's queries
+while the session runs, and of the Blicks the session builds. A project with a loader and no Blick
+yet is no error in `dev`: the report says `0 Blicks` and `no Blicks yet`, and the overview offers
+the builder, as the foot of the Blick list always does. The viewer knows it is served by `dev` from
+the header `Blicket-Dev: 1` on `manifest.json`, which `dev` answers from memory, and with a 404
+while it serves no run yet. `blicket build` and `blicket check` build every Blick, expensive or
+not, and `blicket check --push` puts a build into the store as a baseline.
 
 `blicket` without a command is `blicket dev`, and so is `blicket` followed by an option of `dev` or
 a run path: `blicket runs/2026-10-23` is `blicket dev runs/2026-10-23`, `blicket --port 8800` is
@@ -528,35 +578,142 @@ project says that `blicket --help` lists the commands.
 ### Picking the run in the viewer
 
 Started without a run, `dev` offers the project's run folders in the viewer, those that the globs
-of `runs` in `[tool.blicket]` match:
+of `runs` in `[tool.blicket]` match, and the project itself when they include `.`:
 
 ```toml
 [tool.blicket]
-runs = ["runs/*"]  # folders the run picker offers; default: none
+runs = [".", "runs/*"]  # what the run picker offers; default: nothing
 ```
 
 ```console
 $ blicket
-runs: 2 in runs/*
+runs: 3 in ., runs/*
 viewer: http://127.0.0.1:8765/#/   (Ctrl-C stops)
 pick a run in the viewer, or pass one: blicket RUN_PATH
 ```
 
 The globs are relative to the project root (`..` and `**` allowed) and match directories only,
 hidden ones left out; a link to a folder is listed under its own name, and a folder matched twice
-once. The viewer opens on the picker, which lists the folders newest change first, each with its
-name and how long ago it changed, its path as the tooltip. You tick one, or several for a
-loader that combines them into one run (`Load 2 runs as one`), and press Load: `dev` loads, builds
-and checks the run as it does one given on the command line, prints the report under the time and
-the paths picked, and the viewer starts afresh on the overview of the build. A run that cannot be
-loaded leaves the picker as it was, with the error under the list, which the terminal prints as
-well (`error: cannot load <paths>: ...`); you pick another, and a folder gone since the list
-came asks for a Refresh. The run is picked once per session; another one takes a restart. `runs`
-is read when `dev` starts, and the folders are looked for afresh whenever the picker lists them,
-so a model run that lands while `dev` waits shows on Refresh. Without `runs`, `blicket` without a
-run exits 2 with `error: no run to serve; pass one (blicket RUN_PATH), or set runs =
-["output/*"] in [tool.blicket] to pick one in the viewer`. A `runs` that matches no folder yet
-serves the picker all the same, empty, with Refresh.
+once. A `.`, or any glob that matches the project root, lists the project itself first, as "This
+project · computed from code": picked, the loader gets the project root as its one path, which a
+model checkout recognises (see [Expensive Blicks](#expensive-blicks)), and the terminal names it
+`this project`; `blicket dev .` loads it without the picker. The viewer opens on the picker, which
+lists the folders newest change first, each with its name and how long ago it changed, its path as
+the tooltip. You tick one, or several for a loader that combines them into one run (`Load 2 runs as
+one`); the project itself loads alone. Then you press Load: `dev` loads the run as it does one
+given on the command line, prints the report under the time and the paths picked (`12:10:02 loading
+runs/2026-11-15, picked in the viewer`), and the viewer starts afresh on the overview. A run that
+cannot be loaded leaves the picker as it was, with the error under the list, which the terminal
+prints as well (`error: cannot load <paths>: ...`); you pick another, and a folder gone since the
+list came asks for a Refresh. `runs` is read when `dev` starts, and the folders are looked for
+afresh whenever the picker lists them, so a model run that lands while `dev` waits shows on
+Refresh. Without `runs`, `blicket` without a run exits 2 with `error: no run to serve; pass one
+(blicket RUN_PATH), or set runs = ["output/*"] in [tool.blicket] to pick one in the viewer, or "."
+for the project itself`. A `runs` that matches no folder yet serves the picker all the same, empty,
+with Refresh.
+
+While a run is served, the header has `Pick another run` when the project sets `runs`, which opens
+the picker with the run served marked and a link back to the overview. Load then replaces it: the
+new run gets its own baseline, the session a new id, and every tab starts afresh on the overview,
+so that one session goes from a model checkout to a finished run and back. What the session built
+of the run before is dropped, so when that includes expensive Blicks, the viewer asks first
+(`Loading another run drops the 12 expensive Blicks built so far.`). A load waits for a cheap Blick
+that builds, and is refused while an expensive one builds (`Cement trade is building (12:03); load
+the run once it is built`), since a build cannot be interrupted; while it waits, the picker says
+`Waiting for Steel shares to build… 0:12`, and nothing else is built, nor asked for: a page that
+asks meanwhile is told `a run is loading; ask for the Blick again once it is loaded`. A load that
+fails leaves the run served as it was, its builds going on. Nothing of the run before is built or
+printed after the line `loading`: the worker finishes the build running, terminal lines included,
+and drops the rest.
+
+### Expensive Blicks
+
+Some Blicks take long to build, such as those of a checkout of a model whose every exported file is
+a call that takes seconds to minutes, all of them together hours. Such a Blick is *expensive*:
+`blicket dev` builds it when its page is opened in the viewer and when you ask again, never in the
+background. A Blick says so in its definition, or the loader says it for every Blick of the run it
+loads whose definition says nothing:
+
+```python
+# blicks/steel.py
+@bk.blick(title="Scrap shares", plot=bk.plots.line(x="year", y="value"), expensive=False)
+def scrap_shares(run):
+    return pl.read_csv(run.path / "static" / "scrap_shares.csv")  # always there
+
+
+# blicketconf.py
+def load_run(selection: bk.RunSelection) -> tuple[object, bk.RunInfo]:
+    run = Checkout(selection.path)  # computes nothing yet
+    fingerprint = commit_and_config(selection.path)  # cheap: no output is computed
+    info = bk.RunInfo(id="mrmfa", profile="h12", fingerprint=fingerprint, expensive=True)
+    return run, info
+```
+
+`expensive=True` on a Blick makes it expensive on any run, `expensive=False` cheap on any run, and
+without it the run decides: `RunInfo(expensive=True)` makes the Blicks expensive whose definition
+says nothing, so that one loader can make the Blicks of a checkout expensive and those of a
+finished run, which it loads too, cheap. Neither is part of a build: a Blick's `expensive` is not
+part of its definition, so it changes no manifest, id or comparison, and `RunInfo.expensive` is
+never written. The `fingerprint` of a run computed on demand cannot hash its outputs, which are not
+computed yet: make it something cheap that identifies its inputs, such as the model's commit and
+configuration. It is part of the id `blicket build` gives the run's build; a session finds its
+baseline by the run's profile and the commit of the Blicks, as `check` does. With `runs = [".",
+"output/*"]`, the picker offers the checkout beside the finished runs, and the loader tells them
+apart by the path it gets, the project root for the checkout.
+
+```console
+$ blicket dev .
+run mrmfa · profile h12 · blicks at 1c2d3e4 (dirty) · loaded in 1.1 s
+62 Blicks, each built when it is opened in the viewer (expensive)
+
+baseline 5d0c3f1e2a9b8c47 · run rev2.9.2_h12 · blicks at 0a6b858 · built 2026-11-10 09:14 UTC
+vs baseline: 1 removed (steel/old_trade)
+builder: off, dataset(run) returned None
+viewer: http://127.0.0.1:8765/#/   (Ctrl-C stops)
+12:01:05 building cement/trade
+12:01:47 cement/trade built in 42.1 s · value, 2.1% of scale (Region=CHA, Time=2019)
+12:03:07 building steel/production
+12:03:10 steel/production built in 3.2 s · unchanged
+12:04:02 building steel/scrap
+12:04:02 steel/scrap failed in 412 ms · transformation raised KeyError: 'st_scrap' (raised at blicketconf.py:75)   (-v for the traceback)
+12:06:15 building cement/trade
+12:06:57 cement/trade rebuilt in 41.8 s · unchanged · 1 warning: the table has no rows
+```
+
+A Blick whose definition is invalid is counted apart (`16 Blicks: 15 built when opened in the
+viewer (expensive) · 1 error`), since no build can mend it. Each build a page asked for gives two
+lines, both stamped with the local time of day: when it starts, `building <id>`, on stderr, so that
+it marks where the transformation's own output begins; and when it ends, on stdout, the Blick,
+`built`, `rebuilt` (built before in this session), `failed` or `skipped`, how long it took, why it
+failed or skipped, what the comparison with the baseline found (as `check` says it: `value` with
+the largest change and where, `schema`, `new`, or `unchanged`; nothing without a baseline), and its
+warnings, the first by its text. A Blick with several errors has the others on lines of their own
+below; `-v` adds the tracebacks.
+
+In the viewer, the overview says `An expensive Blick is built when you open it.` and how many
+Blicks are left, `62 of 62 Blicks not built yet`, with the Blick a page asked for that builds; a
+Blick whose definition is invalid is neither built nor left to build, and named so (`1 Blick has an
+invalid definition`). While nothing is pinned, "A first look" shows the first six Blicks not
+already under "Changed since the baseline", whatever their status; cards never ask for a build.
+Opened while no Blick a page asked for builds or waits, an expensive Blick's page asks for it at
+once: `Building… 0:42 · what the transformation prints is in the terminal`; the background does not
+count. Opened while another one builds, the page says `Cement trade is building (0:42).` with a
+button `Build next`, which queues it (`Queued behind Cement trade`), and the sidebar marks it with
+a clock; with the page left open, the Blick is built by itself once no Blick a page asked for
+builds or waits. Nothing else queues an expensive build, so clicking through the sidebar never
+lines up minutes of computation, and a build cannot be stopped. A Blick built shows as in any
+build: its chart, the comparison with the baseline and its badge in the sidebar; the page says how
+the build ended, `Built in 42.1 s`, and when, if it saw it end (`at 12:01:47`). A Blick that fails
+or skips the run is built all the same; one whose definition is invalid cannot be built, and its
+page says where to fix it. `Rebuild`, next to the pin, runs the transformation again on the run in
+memory, with the chart dimmed under `Rebuilding… 0:12` until the new one replaces it; it is also
+the retry of a Blick that failed. Pressed while the Blick builds, it asks for one more build after
+that one. The run object decides what is fresh: a run computed on demand answers each call from its
+source, or knows when what it kept is stale. Blick code is read when `dev` starts; an edit of a
+transformation takes a restart, after which a page left open builds its Blick again. While an
+expensive Blick builds, the [Blick builder](#the-blick-builder) refuses a query, `an expensive
+Blick is building; run the query again when it is built`, rather than wait minutes; a run of
+expensive Blicks usually has no dataset anyway.
 
 ## The Blick builder
 
@@ -620,7 +777,11 @@ Any object with three methods is a dataset, as `bk.Dataset` spells out:
 `dev` reads `quantities()` and `dimensions()` once, when it starts, and checks them: names unique,
 dimensions known, values of their dimension's type. A project without `dataset` has no builder,
 and the builder's page says what to add; a `dataset(run)` that raises, or returns something else
-than such an object, is a warning at start, and the builder is off for the session.
+than such an object, is a warning at start, and the builder is off for the session. `dataset(run)`
+returns `None` for a run that has none, such as a run of [expensive Blicks](#expensive-blicks),
+whose dimensions are known only once its tables are computed: the builder is off then, which is no
+warning, and the report says the fact (`builder: off, dataset(run) returned None`), so that a
+`dataset` that forgot its `return` is told apart.
 
 ## Examples
 

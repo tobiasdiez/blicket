@@ -27,8 +27,8 @@ data, which is not public (it lives on the PIK cluster).
 `runs = ["../../data_out/*_plastics_*"]` in `pyproject.toml` names that place for the run picker:
 `uv run blicket` alone, or `uv run blicket dev` without a run, opens the viewer on the plastics runs
 in `data_out/`, newest first, instead of loading one (see [The Blick builder](#the-blick-builder)).
-Tick one and press `Load`; the terminal prints the report of the check, and the viewer shows the
-build. A run that does not unpickle with the remind-mfa checked out is refused with the loader's
+Tick one and press `Load`; the terminal prints the start report, and the viewer shows the run,
+its Blicks built in the background. A run that does not unpickle with the remind-mfa checked out is refused with the loader's
 error under the list, and another can be picked. Runs kept elsewhere need `runs` changed to match.
 
 The example runs are of two generations: three of 2026-10-24, made at remind-mfa `a7c389a` on
@@ -242,14 +242,14 @@ starting at `collection_rate`, and its panels, when split, each have their own y
 
 ## The Blick builder
 
-`blicket dev` checks a run as `check` does and then serves it, keeping the run in memory for the
-Blick builder:
+`blicket dev` loads a run, finds its baseline as `check` does and serves it, keeping the run in
+memory for the Blick builder:
 
 ```console
 $ uv run blicket dev ../../data_out/2026-10-26--11-25-13_plastics_SSP2_h12
 ```
 
-The report ends with `builder: 112 quantities, 6 dimensions`, the size of the dataset that
+The report before the viewer's URL ends with `builder: 112 quantities, 6 dimensions`, the size of the dataset that
 `dataset(run)` in `blicketconf.py` makes of the run (the numbers depend on the remind-mfa version);
 "Build a Blick" on the overview opens the builder page, which lists those quantities: the future
 system's flows as `flows/<from> => <to>`, in t per year; each of its stocks as

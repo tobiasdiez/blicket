@@ -12,7 +12,7 @@ import pytest
 
 import blicket as bk
 from blicket import store
-from blicket.comparison import compare_builds, write
+from blicket.comparison import Baseline, compare_builds, write
 from blicket.errors import BlicketError
 from blicket.store import Store
 from tests.support import VALUES, commit_all, git, make_build_project, make_run
@@ -48,7 +48,7 @@ def files(directory: Path) -> dict[str, str]:
 def test_push_copies_the_manifest_tables_and_comparisons_with_the_umask_modes(
     built: bk.Build, tmp_path: Path, umask_022: None
 ) -> None:
-    write(compare_builds(built.path, built.path), built.path, built.path)
+    write(compare_builds(built.path, built.path), Baseline.read(built.path), built.path)
     (built.path / "compare" / ".tmp-1-abc").mkdir()  # a write in progress
     (built.path / "compare" / ".tmp-1-abc" / "comparison.json").write_text("{}")
     for path in built.path.rglob("*"):
@@ -81,7 +81,7 @@ def compared(tmp_path: Path) -> tuple[Path, Path]:
     root = make_build_project(tmp_path, {"blicks/a.py": VALUES})
     before = bk.build(root, [make_run(tmp_path / "a")]).path
     after = bk.build(root, [make_run(tmp_path / "b", "1 2 3.3")]).path
-    write(compare_builds(before, after), before, after)
+    write(compare_builds(before, after), Baseline.read(before), after)
     return before, after
 
 
@@ -115,7 +115,7 @@ def test_comparisons_written_after_the_first_push_stay_out(
     shutil.rmtree(after / "compare")
     the_store = Store(tmp_path / "store")
     first = the_store.push(after)
-    write(compare_builds(after, after), after, after)
+    write(compare_builds(after, after), Baseline.read(after), after)
     assert the_store.push(after).existed
     assert not (first.path / "compare").exists()
 

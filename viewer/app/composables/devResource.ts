@@ -1,38 +1,33 @@
-import { bodyOf, devFetch, failure } from '~/lib/dev'
+import { bodyOf, devFetch } from '~/lib/dev'
+import { share } from '~/lib/reload'
+import { failureState } from '~/lib/resource'
 
 /**
  * A resource of `blicket dev` at `path`, fetched as soon as `ready` turns true and again on
  * `reload`: its `data`, of the shape `is` checks, or why it is missing, `error`, and whether
  * because the server did not answer, `unreachable`. `loading` says that a fetch runs, `failures`
- * how many fetches in a row failed, `failedAt` when the last one did. The returned function
- * gives the refs, the watch on `ready` installed on its first call.
+ * how many fetches in a row failed, `failedAt` when the last one did. A `quiet` reload, as a poll
+ * makes it, leaves `loading` as it is. The data fetched last stays while a fetch fails, and an
+ * answer equal to it keeps it, so that nothing computed from it is computed again. The returned
+ * function gives the refs, the watch on `ready` installed on its first call.
  */
 export function devResource<T>(path: string, is: (body: unknown) => body is T, what: string, ready: () => boolean | undefined) {
   const data = shallowRef<T | null>(null)
-  const error = ref<string | null>(null)
-  const unreachable = ref(false)
   const loading = ref(false)
-  const failures = ref(0)
-  const failedAt = ref<Date | null>(null)
+  const { message: error, unreachable, failures, failedAt, fail, clear } = failureState()
   let scope: ReturnType<typeof effectScope> | null = null
 
-  async function reload(): Promise<void> {
-    loading.value = true
+  async function reload(quiet = false): Promise<void> {
+    if (!quiet) loading.value = true
     try {
-      data.value = await bodyOf(await devFetch(path, { cache: 'no-store' }), is, what)
-      error.value = null
-      unreachable.value = false
-      failures.value = 0
+      data.value = share(data.value, await bodyOf(await devFetch(path, { cache: 'no-store' }), is, what))
+      clear()
     }
     catch (cause) {
-      const why = failure(cause)
-      error.value = why.message
-      unreachable.value = why.unreachable
-      failures.value++
-      failedAt.value = new Date()
+      fail(cause)
     }
     finally {
-      loading.value = false
+      if (!quiet) loading.value = false
     }
   }
 

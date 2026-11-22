@@ -245,7 +245,10 @@ def blick(function: object = None, /, **options: Any) -> Any:
     """Declare the decorated function, which takes the run, as a Blick.
 
     The id defaults to ``<group>/<function name>`` and the title to the function name with
-    spaces; the docstring becomes the description. The function is returned unchanged.
+    spaces; the docstring becomes the description. ``expensive=True`` says that the Blick takes
+    long to build, so that ``blicket dev`` builds it when its page is opened in the viewer, and on
+    Rebuild, not in the background; ``expensive=False`` that it is cheap whatever the run says;
+    without it, the run decides (``RunInfo.expensive``). The function is returned unchanged.
     """
     if function is not None:
         raise DefinitionError("use @bk.blick(plot=...), with parentheses")
@@ -264,7 +267,9 @@ def register(*, transform: Transform | None = None, **options: Unpack[BlickOptio
     """Declare a Blick from a transformation, for families generated in a loop.
 
     ``id`` is required, because a lambda or a ``functools.partial`` has no usable name. The
-    title defaults to the last id segment with spaces.
+    title defaults to the last id segment with spaces. The other options are those of
+    ``bk.blick``: ``expensive=True``, for one, has ``blicket dev`` build the Blick when its page
+    is opened in the viewer, and on Rebuild, not in the background.
     """
     frame = _attributed_frame()
     _define(frame, _source(frame), options, transform, "transform")

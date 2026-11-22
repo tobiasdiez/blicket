@@ -1,8 +1,15 @@
 <script setup lang="ts">
+import { footerText } from '~/lib/jobs'
 import { INK } from '~/plots/theme'
 
-const { manifest, error, noRun } = useManifest()
+const { manifest, error, noRun, dev } = useManifest()
 const { open, toggle } = useSidebar()
+// A session of blicket dev changes while it runs: follow it, as every page does, once it serves a
+// run; a build directory asks nothing.
+useRefresh(() => dev.value && !noRun.value)
+// A project that sets runs offers to pick another run while one is served.
+const { runs } = useRuns()
+const picker = computed(() => dev.value && !noRun.value && !!runs.value?.patterns.length)
 const route = useRoute()
 const router = useRouter()
 
@@ -54,7 +61,10 @@ function skip() {
                 blicket
               </NuxtLink>
             </div>
-            <UColorModeButton class="ml-auto shrink-0 sm:order-last" />
+            <div class="ml-auto flex shrink-0 items-center gap-1 sm:order-last">
+              <UButton v-if="picker && route.path !== '/runs'" to="/runs" icon="i-lucide-folder-open" color="neutral" variant="ghost" size="sm" label="Pick another run" />
+              <UColorModeButton />
+            </div>
             <!-- Its own full-width row on a narrow page, so nothing is cut off. -->
             <dl v-if="manifest" class="order-last flex w-full min-w-0 flex-wrap gap-x-4 text-sm text-muted sm:order-none sm:w-auto">
               <div class="flex min-w-0 gap-1">
@@ -93,7 +103,7 @@ function skip() {
           </p>
         </main>
         <footer v-if="manifest" class="mx-auto w-full max-w-7xl px-4 pb-8 text-xs text-muted sm:px-6">
-          blicket {{ manifest.blicket }} · build {{ manifest.build.id }} · {{ manifest.created_at.slice(0, 16).replace('T', ' ') }} UTC
+          {{ footerText(manifest, dev) }}
         </footer>
       </div>
     </div>

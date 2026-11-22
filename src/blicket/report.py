@@ -1,13 +1,14 @@
 """The reports of the commands: what ``list``, ``build``, ``push``, ``diff`` and ``check``
-print, and the Markdown report of a comparison, as plain functions of what the commands
-computed."""
+print, what a session of ``dev`` prints, and the Markdown report of a comparison, as plain
+functions of what the commands computed."""
 
 import importlib.metadata
 import json
+import re
 import textwrap
 from collections import Counter, defaultdict
-from collections.abc import Sequence
-from datetime import UTC
+from collections.abc import Collection, Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, get_args
 
@@ -16,7 +17,7 @@ from pydantic import BaseModel
 from blicket.baseline import Resolution
 from blicket.builder import Build
 from blicket.comparison import COMPARE, BlickComparison, BuildRef, Comparison
-from blicket.errors import NOWHERE, Kind, Problem, Source, display_path
+from blicket.errors import NOWHERE, Kind, Problem, Source, display_path, first_line
 from blicket.manifest import Manifest, Repository
 from blicket.model import Blick, BlickEntry, Registry
 from blicket.schema import Flag
@@ -200,13 +201,31 @@ def _head(repository: Repository | None) -> str:
     return f"blicks at {repository.commit[:7]}{' (dirty)' if repository.dirty else ''}"
 
 
+def duration(seconds: float) -> str:
+    """How long a build took, as its line says it: ``412 ms`` under a second, ``42.1 s`` under a
+    minute, then ``3 min 25 s`` or, from an hour, ``1 h 2 min 5 s``; each as it is rounded, so
+    that 0.9996 s is ``1.0 s``, not ``1000 ms``."""
+    if round(seconds * 1000) < 1000:
+        return f"{seconds * 1000:.0f} ms"
+    if round(seconds, 1) < 60:
+        return f"{seconds:.1f} s"
+    whole = round(seconds)
+    hours, minutes, rest = whole // 3600, whole // 60 % 60, whole % 60
+    return f"{hours} h {minutes} min {rest} s" if hours else f"{minutes} min {rest} s"
+
+
+def _run_line(manifest: Manifest) -> str:
+    """The run, its profile, the commit of the Blicks and the loader's wall time."""
+    run, head = manifest.run, _head(manifest.repository)
+    milliseconds = manifest.build.loader_ms
+    loaded = f"{milliseconds:.0f} ms" if milliseconds < 1000 else f"{milliseconds / 1000:.1f} s"
+    return f"run {run.id} · profile {run.profile} · {head} · loaded in {loaded}"
+
+
 def render_build(result: Build, *, verbose: bool = False) -> str:
     """The text of ``blicket build``: the run, the counts, the build directory, the skipped
     Blicks with their reasons, then problems."""
     manifest = result.manifest
-    run, head = manifest.run, _head(manifest.repository)
-    milliseconds = manifest.build.loader_ms
-    loaded = f"{milliseconds:.0f} ms" if milliseconds < 1000 else f"{milliseconds / 1000:.1f} s"
     where = display_path(result.path, Path.cwd())
     existed = ""
     if result.existed:
@@ -214,25 +233,175 @@ def render_build(result: Build, *, verbose: bool = False) -> str:
         existed = f" (built before, {kept})"
     lines = [
         *_project_line(result.root),
-        f"run {run.id} · profile {run.profile} · {head} · loaded in {loaded}",
+        _run_line(manifest),
         _build_summary(manifest),
         f"build {manifest.build.id} → {where}{existed}",
     ]
+    skipped = _section("skipped", _skipped_blocks(manifest))
+    return "\n".join([*lines, *skipped, *_problem_sections(manifest, verbose)])
+
+
+def _problem_sections(manifest: Manifest, verbose: bool, root: Path | None = None) -> list[str]:
+    """The sections ``warnings`` and ``errors`` of a build's report: the problems of files and the
+    project, and of the Blicks, located relative to ``root``, when the manifest's sources are not
+    relative already."""
     warnings: list[_Block] = []
     errors: list[_Block] = []
     for problem in manifest.problems:
         blocks = errors if problem.severity == "error" else warnings
-        blocks.append((problem.source, _problem_lines(problem, None, verbose)))
+        blocks.append((problem.source, _problem_lines(problem, root, verbose)))
     for entry in manifest.blicks:
         for severity, blocks in (("error", errors), ("warning", warnings)):
             if problems := [p for p in entry.problems if p.severity == severity]:
-                blocks.append((entry.source, _blick_lines(entry, problems, None, verbose)))
-    sections = [
-        *_section("skipped", _skipped_blocks(manifest)),
-        *_section("warnings", warnings),
-        *_section("errors", errors),
-    ]
-    return "\n".join([*lines, *sections])
+                blocks.append((entry.source, _blick_lines(entry, problems, root, verbose)))
+    return [*_section("warnings", warnings), *_section("errors", errors)]
+
+
+def render_session_start(
+    manifest: Manifest,
+    root: Path,
+    resolution: Resolution,
+    baseline: BuildRef | None,
+    removed: Sequence[str] = (),
+    warnings: Sequence[str] = (),
+    *,
+    verbose: bool = False,
+) -> str:
+    """What a session of ``blicket dev`` prints when it starts, before it builds anything, in the
+    order of ``check``'s report: the run, how many Blicks there are and how they are built, the
+    problems of the definitions and files, then the warnings about the store, the baseline or why
+    there is none, and the baseline's Blicks that no Blick claims, ``removed``, which the
+    definitions alone tell."""
+    lines = [*_project_line(root), _run_line(manifest), _session_summary(manifest)]
+    lines += _problem_sections(manifest, verbose, root)
+    lines += ["", *_baseline_lines(resolution, baseline, warnings, manifest.run.profile)]
+    if removed:
+        lines.append(f"vs baseline: {len(removed)} removed ({_listing(removed, '')})")
+    return "\n".join(lines)
+
+
+_IN_THE_BACKGROUND = "built in the background"
+_WHEN_OPENED = "when opened in the viewer (expensive)"
+
+
+def _session_summary(manifest: Manifest) -> str:
+    """How many Blicks a session has and how it builds them: the cheap ones in the background,
+    the expensive ones when they are opened, as ``62 Blicks: 2 built in the background, 60 when
+    opened in the viewer (expensive)``; those whose definition is invalid, the only errors before
+    anything is built, are left out of both."""
+    total, invalid = len(manifest.blicks), manifest.statuses["error"]
+    expensive = sum(entry.expensive for entry in manifest.blicks)
+    cheap = total - invalid - expensive
+    head = _count(total, "Blick")
+    if total and (invalid or (cheap and expensive)):
+        parts = [f"{cheap} {_IN_THE_BACKGROUND}"] if cheap or not expensive else []
+        if expensive:
+            parts.append(
+                f"{expensive} {_WHEN_OPENED}" if parts else f"{expensive} built {_WHEN_OPENED}"
+            )
+        head += ": " + ", ".join(parts)
+    elif expensive:
+        each = "each built when it is" if expensive > 1 else "built when it is"
+        head += f", {each} opened in the viewer (expensive)"
+    elif cheap:
+        head += f", {_IN_THE_BACKGROUND}"
+    return " · ".join([head, *_troubles(manifest)])
+
+
+def render_session_report(
+    manifest: Manifest,
+    comparison: Comparison | None,
+    root: Path,
+    at: datetime,
+    buildable: Collection[str],
+    *,
+    verbose: bool = False,
+) -> str:
+    """What a session of ``blicket dev`` prints once the background has built every cheap Blick,
+    at the time ``at``: the rest of ``check``'s report, of the Blicks built so far, which the
+    start report did not say: the counts, the skipped Blicks with their reasons, the problems of
+    the Blicks built, those of ``buildable``, sources relative to ``root``, then the comparison's
+    counts, top movers, verdict and details; neither the problems of the files and of the
+    definitions, which the start report said, nor where a comparison went, since nothing is
+    written."""
+    lines = [f"{at:%H:%M:%S} {_build_summary(manifest)}"]
+    lines += _section("skipped", _skipped_blocks(manifest))
+    built = tuple(entry for entry in manifest.blicks if entry.id in buildable)
+    lines += _problem_sections(
+        manifest.model_copy(update={"blicks": built, "problems": ()}), verbose, root
+    )
+    if comparison is not None:
+        lines += ["", *_verdict_lines(comparison), *_detail_lines(comparison, manifest)]
+    return "\n".join(lines)
+
+
+_RAISED_AT = re.compile(r" \(raised at [^()]*\)$")
+
+
+def _message_head(message: str) -> str:
+    """The first line of a problem's message, with the place it was raised at, which ends the
+    message, also when that is on a later line."""
+    first, *rest = message.splitlines() or [""]
+    if rest and (raised := _RAISED_AT.search(rest[-1])) and not _RAISED_AT.search(first):
+        first += raised.group(0)
+    return first
+
+
+def render_session_build(
+    entry: BlickEntry,
+    compared: BlickComparison | None,
+    seconds: float,
+    at: datetime,
+    *,
+    rebuilt: bool = False,
+    verbose: bool = False,
+) -> str:
+    """The line a session of ``blicket dev`` prints when it has built a Blick, at the time
+    ``at``: the Blick, whether it built (``rebuilt`` when it was built before), failed or skipped
+    the run, in how long, why it failed or skipped, what the comparison with the baseline found,
+    and its warnings, as ``12:01:47 cement/trade built in 42.1 s · value, 2.1% of scale
+    (Region=CHA, Time=2019)``. A failure says where it was raised, and that ``-v`` shows the
+    traceback; further errors follow on lines of their own, and under ``verbose`` the
+    tracebacks."""
+    verb = {"error": "failed", "skipped": "skipped"}.get(
+        entry.status, "rebuilt" if rebuilt else "built"
+    )
+    parts = [f"{at:%H:%M:%S} {entry.name} {verb} in {duration(seconds)}"]
+    errors = [p for p in entry.problems if p.severity == "error"]
+    warnings = [p for p in entry.problems if p.severity == "warning"]
+    if errors:
+        parts.append(_message_head(errors[0].message))
+    elif entry.status == "skipped":
+        parts.append(first_line(entry.skipped or ""))
+    if compared is not None:
+        parts += _change_parts(compared, entry, failed=bool(errors))
+    if warnings:
+        first = _message_head(warnings[0].message) + (" …" if len(warnings) > 1 else "")
+        parts.append(f"{_count(len(warnings), 'warning')}: {first}")
+    hint = next((_hint(p, verbose) for p in entry.problems if _hint(p, verbose)), "")
+    lines = [" · ".join(parts) + hint]
+    lines += [f"    {_message_head(problem.message)}" for problem in errors[1:]]
+    for problem in entry.problems:
+        lines += _traceback_lines(problem, verbose)
+    return "\n".join(lines)
+
+
+def _change_parts(compared: BlickComparison, entry: BlickEntry, *, failed: bool) -> list[str]:
+    """What the comparison found of a Blick built, as parts of its line: its flags, ``value``
+    with the largest change and where, and ``error`` with why, but not for a Blick that failed,
+    whose line says why already; ``unchanged`` for a Blick that built and has no flag."""
+    change, parts = compared.change, []
+    for flag in ("value", "schema", "new", "removed", "error"):
+        if flag not in change.flags or (flag == "error" and failed):
+            continue
+        if flag == "value":
+            where = f" ({_where(change.where)})" if change.where else ""
+            parts.append(f"value, {change.percent} of scale{where}")
+        else:
+            parts.append(f"error: {compared.message}" if flag == "error" else flag)
+    if not change.flags and entry.status == "ok":
+        parts.append("unchanged")
+    return parts
 
 
 def _skipped_blocks(manifest: Manifest) -> list[_Block]:
@@ -254,14 +423,23 @@ def _skipped_blocks(manifest: Manifest) -> list[_Block]:
 
 
 def _build_summary(manifest: Manifest) -> str:
-    """``N Blicks: n built · n skipped · n errors``, file-level errors by kind, warnings,
-    incompleteness."""
+    """``N Blicks: n built · n skipped · n not built yet · n errors``, file-level errors by kind,
+    warnings, incompleteness; only the manifest of a session has Blicks not built yet."""
     statuses = manifest.statuses
     parts = [f"{_count(len(manifest.blicks), 'Blick')}: {statuses['ok']} built"]
     if statuses["skipped"]:
         parts.append(f"{statuses['skipped']} skipped")
-    if statuses["error"]:
-        parts.append(_count(statuses["error"], "error"))
+    if statuses["pending"]:
+        parts.append(f"{statuses['pending']} not built yet")
+    return " · ".join([*parts, *_troubles(manifest)])
+
+
+def _troubles(manifest: Manifest) -> list[str]:
+    """The Blicks in error, the file-level errors by kind, the warnings and whether the build is
+    incomplete, as parts of a summary line."""
+    parts: list[str] = []
+    if errors := manifest.statuses["error"]:
+        parts.append(_count(errors, "error"))
     file_errors = Counter(p.kind for p in manifest.problems if p.severity == "error")
     parts.extend(_count(n, f"{kind.replace('_', ' ')} error") for kind, n in file_errors.items())
     problems = [*manifest.problems, *(p for entry in manifest.blicks for p in entry.problems)]
@@ -269,7 +447,7 @@ def _build_summary(manifest: Manifest) -> str:
         parts.append(_count(warnings, "warning"))
     if manifest.build.incomplete:
         parts.append(_INCOMPLETE)
-    return " · ".join(parts)
+    return parts
 
 
 def render_push(pushed: Pushed) -> str:
@@ -326,35 +504,57 @@ def render_check(
     that did not build; errors only the comparison finds remain.
     """
     manifest = result.manifest
-    lines = [f"warning: {warning}" for warning in warnings]
-    if resolution.warning:
-        lines.append(f"warning: {resolution.warning}")
+    found = comparison.baseline if comparison is not None else None
+    lines = _baseline_lines(resolution, found, warnings, manifest.run.profile)
     details: list[str] = []
-    if comparison is None:
-        lines.append(render_no_baseline(resolution))
-    else:
-        found = comparison.baseline
-        created = found.created_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
-        parts = _build_parts(found, profile=found.profile != manifest.run.profile)
-        verdict = (
-            f"flagged: {comparison.flagged} of {_count(len(comparison.blicks), 'Blick')}"
-            if comparison.flagged
-            else "nothing flagged, but the build is incomplete"
-            if comparison.has_errors
-            else "nothing flagged"
-        )
+    if comparison is not None:
+        written = result.path / COMPARE / comparison.baseline.id
         lines += [
-            " · ".join([f"baseline {found.id}", *parts, f"built {created}"]),
-            _counts_line(comparison, "vs baseline"),
-            *_incomplete_lines(comparison),
-            *_mover_lines(comparison),
-            verdict,
-            f"comparison → {display_path(result.path / COMPARE / found.id, Path.cwd())}",
+            *_verdict_lines(comparison),
+            f"comparison → {display_path(written, Path.cwd())}",
         ]
         details = _detail_lines(comparison, manifest)
     if pushed is not None:
         lines.append(render_push(pushed))
     return render_build(result, verbose=verbose) + "\n\n" + "\n".join([*lines, *details])
+
+
+def _verdict_lines(comparison: Comparison) -> list[str]:
+    """What a comparison found, in short: the counts, why removed Blicks were not judged, the top
+    movers, and the verdict."""
+    verdict = (
+        f"flagged: {comparison.flagged} of {_count(len(comparison.blicks), 'Blick')}"
+        if comparison.flagged
+        else "nothing flagged, but the build is incomplete"
+        if comparison.has_errors
+        else "nothing flagged"
+    )
+    return [
+        _counts_line(comparison, "vs baseline"),
+        *_incomplete_lines(comparison),
+        *_mover_lines(comparison),
+        verdict,
+    ]
+
+
+def _baseline_lines(
+    resolution: Resolution, found: BuildRef | None, warnings: Sequence[str], profile: str
+) -> list[str]:
+    """The warnings about the store and the baseline's resolution, then the baseline found, or
+    why there is none."""
+    lines = [f"warning: {warning}" for warning in warnings]
+    if resolution.warning:
+        lines.append(f"warning: {resolution.warning}")
+    lines.append(_baseline_line(found, profile) if found else render_no_baseline(resolution))
+    return lines
+
+
+def _baseline_line(found: BuildRef, profile: str) -> str:
+    """The baseline: its id, run, its profile when it is not ``profile``, the commit, and when it
+    was built."""
+    created = found.created_at.astimezone(UTC).strftime("%Y-%m-%d %H:%M UTC")
+    parts = _build_parts(found, profile=found.profile != profile)
+    return " · ".join([f"baseline {found.id}", *parts, f"built {created}"])
 
 
 def _counts_line(comparison: Comparison, label: str) -> str:

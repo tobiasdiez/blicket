@@ -1,24 +1,32 @@
-"""``blicket dev``: the check it starts with, the session it serves, and how it starts and stops."""
+"""``blicket dev``: the report it starts with, the session it serves, and how it starts and
+stops."""
 
 import os
 import re
 import socket
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner, Result
 
-from blicket import cli, dev, manifest, serve
+from blicket import cli, dev, serve
+from blicket.jobs import OnDemandRun
 from blicket.query import Query
 from tests.support import (
     DATASET,
     LOADER,
+    ON_DEMAND_RAISES,
     VALUES,
     commit_all,
+    git,
     make_build_project,
     make_project,
     make_run,
+    normalised,
+    on_demand_project,
+    push_whole,
 )
 
 runner = CliRunner()
@@ -32,13 +40,21 @@ COUNTING = LOADER.replace(
 )
 
 
+def idle(server: serve.Server) -> None:
+    """Wait until the worker of the session of ``server`` has built the background of the run it
+    serves, if any, and printed its last line."""
+    if isinstance(server.session, dev.Session):
+        assert server.session.worker.wait_idle(10)
+
+
 @pytest.fixture
 def served(monkeypatch: pytest.MonkeyPatch) -> list[serve.Server]:
-    """The servers ``dev`` would serve, which stop at once as on Ctrl-C."""
+    """The servers ``dev`` would serve, which stop as on Ctrl-C once the background is built."""
     servers: list[serve.Server] = []
 
     def stop(server: serve.Server) -> None:
         servers.append(server)
+        idle(server)
         server.server_close()
 
     monkeypatch.setattr(serve, "run", stop)
@@ -95,41 +111,42 @@ def session(served: list[serve.Server]) -> dev.Session:
     return served[-1].session
 
 
-def serving(served: list[serve.Server]) -> dev.Serving:
+def serving(served: list[serve.Server]) -> OnDemandRun:
     """What the session of the server ``dev`` served last serves."""
     found = session(served).serving
-    assert found is not None
+    assert isinstance(found, OnDemandRun)
     return found
 
 
-def build_id(result: Result) -> str:
-    """The id of the build a ``dev`` report names."""
-    return result.stdout.splitlines()[2].split()[1]
+def builder_line(result: Result) -> str:
+    """The line of a ``dev`` report that says whether the builder is on."""
+    return next(line for line in result.stdout.splitlines() if line.startswith("builder: "))
 
 
-def test_dev_prints_the_check_and_the_viewer_and_stops_on_ctrl_c(
+def test_dev_prints_the_start_the_viewer_and_the_background_and_stops_on_ctrl_c(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     commit = project(tmp_path, monkeypatch)
 
     def interrupt(self: serve.Server) -> None:
+        idle(self)
         raise KeyboardInterrupt
 
     monkeypatch.setattr(serve.Server, "serve_forever", interrupt)
     result = dev_run("runs/a")
     assert result.exit_code == 0, result.output
-    lines = result.stdout.splitlines()
-    built = build_id(result)
-    assert lines[:-1] == [
+    lines = normalised(result.stdout)
+    assert lines[:5] == [
         f"run a · profile test · blicks at {commit} · loaded in 5 ms",
-        "1 Blick: 1 built",
-        f"build {built} → .blicket/build/{built}",
+        "1 Blick, built in the background",
         "",
         "baseline: none (no other pushed build of profile test)",
         "builder: 1 quantity, 1 dimension",
     ]
-    assert re.fullmatch(r"viewer: http://127\.0\.0\.1:\d+/#/   \(Ctrl-C stops\)", lines[-1])
-    assert Path(".blicket/build", built, "manifest.json").is_file()
+    assert re.fullmatch(r"viewer: http://127\.0\.0\.1:\d+/#/   \(Ctrl-C stops\)", lines[5])
+    assert lines[6:] == ["12:00:00 1 Blick: 1 built"]  # once the background is done
+    assert result.stderr == ""  # no line of a build in the background
+    assert not Path(".blicket").exists()  # nothing written
 
 
 def test_dev_loads_the_run_once_and_serves_its_dataset(
@@ -141,7 +158,7 @@ def test_dev_loads_the_run_once_and_serves_its_dataset(
     started = serving(served)
     assert started.dataset.contents is not None
     assert list(started.dataset.contents.quantities) == ["values"]
-    assert served[0].directory == started.served.build.path
+    assert served[0].directory == served[0].site  # the viewer's files only
     assert started.loaded.run == {"values": [1.0, 2.0, 3.0]}
 
 
@@ -159,22 +176,29 @@ def test_dev_binds_the_port_before_it_loads_the_run(
     assert not (tmp_path / "loads.txt").exists()
 
 
-def test_dev_leaves_the_store_alone_and_compares_with_the_pushed_baseline(
+def test_dev_writes_nothing_and_compares_with_the_pushed_baseline(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, served: list[serve.Server]
 ) -> None:
     project(tmp_path, monkeypatch)
     result = dev_run("runs/a")
-    assert not Path(".blicket/store").exists()  # nothing pushed
-    a = build_id(result)
-    assert invoke("push", f".blicket/build/{a}").exit_code == 0
+    assert not Path(".blicket").exists()  # no build, nothing pushed
+    pushed = invoke("check", "runs/a", "--push")
+    a = pushed.stdout.splitlines()[2].split()[1]
     result = dev_run("runs/b")
     assert result.exit_code == 0, result.output  # flagged, which dev does not exit for
-    b = build_id(result)
     assert f"baseline {a} · run a" in result.stdout
-    assert "vs baseline: 1 value" in result.stdout
-    assert Path(".blicket/build", b, "compare", a, "comparison.json").is_file()
-    assert serving(served).served.compared.comparison is not None
+    assert normalised(result.stdout)[-5:] == [  # once the background is done
+        "12:00:00 1 Blick: 1 built",
+        "",
+        "vs baseline: 1 value",
+        "top movers: a/values 9.1% of scale (year=2022)",
+        "flagged: 1 of 1 Blick",
+    ]
+    assert "comparison →" not in result.stdout  # nothing is written
+    assert serving(served).current().comparison is not None
     assert [path.name for path in Path(".blicket/store/builds").glob("[0-9a-f]*")] == [a]
+    assert sorted(path.name for path in Path(".blicket/build").iterdir()) == [a]  # check's
+    b = invoke("check", "runs/b").stdout.splitlines()[2].split()[1]
     named = dev_run("runs/b", "--against", f".blicket/build/{b}")
     assert f"baseline {b} · run b" in named.stdout
 
@@ -189,7 +213,7 @@ def test_dev_goes_on_without_the_baseline_against_names(
         "error: no baseline: nonsense is neither a build directory, a build in the store, nor a "
         "git ref"
     ) in result.stdout.splitlines()
-    assert serving(served).served.compared.comparison is None
+    assert serving(served).current().comparison is None
 
 
 @pytest.mark.parametrize(
@@ -209,14 +233,14 @@ def test_dev_starts_a_project_without_blicks(
     result = dev_run("runs/a")
     assert result.exit_code == 0, result.output
     lines = result.stdout.splitlines()
-    assert lines[1] == "0 Blicks: 0 built"
+    assert lines[1] == "0 Blicks"
     assert (
         "no Blicks yet (blicks/**/*.py defines none); write one as code, or build one from the run "
         "in the viewer"
     ) in lines
-    built = serving(served).served.build
-    assert (built.manifest.blicks, built.manifest.build.incomplete) == ((), False)
-    assert manifest.read(built.path).problems == ()
+    served_manifest = serving(served).current().manifest
+    assert (served_manifest.blicks, served_manifest.build.incomplete) == ((), False)
+    assert served_manifest.problems == ()
 
 
 def test_dev_warns_on_a_dataset_that_raises(
@@ -231,7 +255,9 @@ def test_dev_warns_on_a_dataset_that_raises(
     assert warning.startswith(
         "warning: dataset(run) in model_loader raised KeyError: 'flows' (raised at model_loader.py:"
     )
-    assert lines[-2] == "builder: off, dataset(run) failed; fix it and restart blicket dev"
+    assert builder_line(result) == (
+        "builder: off, dataset(run) failed; fix it and restart blicket dev"
+    )
     started = serving(served)
     assert started.dataset.contents is None
     assert started.dataset.reason == warning.removeprefix("warning: ")
@@ -246,7 +272,7 @@ def test_dev_without_a_dataset_says_the_builder_is_off(
     project(tmp_path, monkeypatch, LOADER)
     result = dev_run("runs/a")
     assert (result.exit_code, "warning" in result.stdout) == (0, False)
-    assert result.stdout.splitlines()[-2].startswith(
+    assert builder_line(result).startswith(
         "builder: off, no dataset(run) next to load_run in model_loader; add one"
     )
 
@@ -314,7 +340,7 @@ def test_dev_without_a_run_needs_runs_in_the_config(
     assert (result.exit_code, result.stdout, served) == (2, "", [])
     assert result.stderr == (
         'error: no run to serve; pass one (blicket RUN_PATH), or set runs = ["output/*"] in '
-        "[tool.blicket] to pick one in the viewer\n"
+        '[tool.blicket] to pick one in the viewer, or "." for the project itself\n'
     )
 
 
@@ -447,3 +473,127 @@ def test_find_runs(tmp_path: Path) -> None:
     assert dev.find_runs(root, []) == []
     (linked,) = dev.find_runs(root, ["../links/*"])  # named by the link, the folder resolved
     assert (linked.name, linked.path) == ("latest", (data / "new").resolve())
+
+
+# ---------------------------------------------------------------------------------------------
+# A session of the on-demand project: a line per Blick a page asked for
+
+
+def browse(*blicks: str) -> Callable[[serve.Server], None]:
+    """A stand-in for serving that waits until the background is built, then asks for ``blicks``
+    one at a time as the viewer would, waiting until each is built, and stops as on Ctrl-C."""
+
+    def run(server: serve.Server) -> None:
+        assert isinstance(server.session, dev.Session)
+        assert isinstance(server.session.serving, OnDemandRun)
+        assert server.session.worker.wait_idle(10)
+        for blick in blicks:
+            server.session.build(blick)
+            assert server.session.worker.wait_idle(10)
+        server.server_close()
+
+    return run
+
+
+def printed(result: Result) -> list[str]:
+    """The lines ``dev`` printed, with the times as 12:00:00, the durations as 5 ms and the
+    port as 8765."""
+    return normalised(re.sub(r"127\.0\.0\.1:\d+", "127.0.0.1:8765", result.stdout))
+
+
+INVALID = [
+    "",
+    "errors",
+    "  blicks/plastics.py:13  Blick plastics/invalid",
+    "    tolerance must be a positive number below 1, got 2.0",
+]
+
+
+def test_dev_builds_a_blick_a_page_asks_for_and_prints_a_line(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = on_demand_project(tmp_path)
+    monkeypatch.chdir(root)
+    commit = git(root, "rev-parse", "--short", "HEAD").strip()
+    monkeypatch.setattr(serve, "run", browse("steel/trade", "steel/scrap", "plastics/validation"))
+    result = dev_run("runs/b")
+    assert result.exit_code == 0, result.output
+    assert printed(result) == [
+        f"run b · profile test · blicks at {commit} · loaded in 5 ms",
+        "6 Blicks: 1 built in the background, 4 when opened in the viewer (expensive) · 1 error",
+        *INVALID,
+        "",
+        "baseline: none (no other pushed build of profile test)",
+        "builder: off, dataset(run) returned None",
+        "viewer: http://127.0.0.1:8765/#/   (Ctrl-C stops)",
+        "12:00:00 6 Blicks: 1 built · 4 not built yet · 1 error",  # the background, done
+        "12:00:00 steel/trade built in 5 ms",
+        "12:00:00 steel/scrap failed in 5 ms · transformation raised KeyError: 'scrap' (raised at "
+        f"blicketconf.py:{ON_DEMAND_RAISES})   (-v for the traceback)",
+        "12:00:00 plastics/validation skipped in 5 ms · the run has no validation.mif",
+    ]
+    assert normalised(result.stderr) == [
+        "12:00:00 building steel/trade",
+        "12:00:00 building steel/scrap",
+        "12:00:00 building plastics/validation",
+    ]
+    assert not Path(".blicket").exists()
+
+
+def test_dev_shows_the_traceback_of_a_failure_under_v(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(on_demand_project(tmp_path))
+    monkeypatch.setattr(serve, "run", browse("steel/scrap"))
+    lines = printed(dev_run("runs/b", "-v"))
+    at = lines.index(
+        "12:00:00 steel/scrap failed in 5 ms · transformation raised KeyError: 'scrap' (raised at "
+        f"blicketconf.py:{ON_DEMAND_RAISES})"
+    )
+    assert lines[at + 1] == "      Traceback (most recent call last):"
+    assert lines[-1] == "      KeyError: 'scrap'"
+
+
+def test_dev_names_its_baseline_and_compares_each_blick_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(on_demand_project(tmp_path))
+    a = push_whole()
+    monkeypatch.setattr(serve, "run", browse("steel/production", "steel/trade"))
+    lines = printed(dev_run("runs/b"))
+    assert any(line.startswith(f"baseline {a} · run a · blicks at ") for line in lines)
+    assert lines[-2:] == [
+        "12:00:00 steel/production built in 5 ms · value, 9.1% of scale (region=CN, year=2022)",
+        "12:00:00 steel/trade built in 5 ms · value, 9.1% of scale (year=2020)",
+    ]
+
+
+def test_dev_takes_out_and_says_that_it_does_not_use_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, served: list[serve.Server]
+) -> None:
+    project(tmp_path, monkeypatch)
+    result = dev_run("runs/a", "--out", str(tmp_path / "builds"))
+    assert result.exit_code == 0, result.output
+    assert result.stderr == "--out is not used: blicket dev writes no build directory\n"
+    assert not (tmp_path / "builds").exists()
+
+
+def test_dev_on_the_project_itself(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, served: list[serve.Server]
+) -> None:
+    monkeypatch.chdir(on_demand_project(tmp_path))
+    result = dev_run(".")
+    assert result.exit_code == 0, result.output
+    assert result.stdout.startswith("run checkout · profile test · ")
+    assert serving(served).current().manifest.run.paths == ["."]
+
+
+def test_a_dataset_of_none_turns_the_builder_off_without_a_warning(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, served: list[serve.Server]
+) -> None:
+    project(tmp_path, monkeypatch, LOADER + "\n\ndef dataset(run):\n    return None\n")
+    result = dev_run("runs/a")
+    assert (result.exit_code, "warning" in result.stdout) == (0, False)
+    assert builder_line(result) == "builder: off, dataset(run) returned None"
+    info = session(served).info()
+    assert (info.dataset, info.message, info.failed) == (False, "dataset(run) returned None", False)

@@ -1,0 +1,244 @@
+{
+  "spec": "0.2",
+  "blicket": "0.0.0",
+  "created_at": "2026-01-01T00:00:00Z",
+  "baseline": {
+    "id": "0000000000000000",
+    "run": "run",
+    "profile": "test",
+    "created_at": "2026-01-01T00:00:00Z",
+    "repository": null,
+    "incomplete": false
+  },
+  "current": {
+    "id": "0000000000000000",
+    "run": "run",
+    "profile": "test",
+    "created_at": "2026-01-01T00:00:00Z",
+    "repository": null,
+    "incomplete": false
+  },
+  "incomplete": [],
+  "blicks": [
+    {
+      "id": "a/same",
+      "name": "a/same",
+      "matched": null,
+      "change": {
+        "flags": [],
+        "magnitude": 0.0,
+        "columns_added": {},
+        "columns_removed": {},
+        "values_added": {},
+        "values_removed": {},
+        "where": null
+      },
+      "skipped": false,
+      "message": null,
+      "baseline_data": null,
+      "baseline_hash": null
+    },
+    {
+      "id": "a/moved",
+      "name": "a/moved",
+      "matched": null,
+      "change": {
+        "flags": [
+          "value"
+        ],
+        "magnitude": 0.09090909090909098,
+        "columns_added": {},
+        "columns_removed": {},
+        "values_added": {},
+        "values_removed": {},
+        "where": {
+          "year": 2022
+        }
+      },
+      "skipped": false,
+      "message": null,
+      "baseline_data": null,
+      "baseline_hash": null
+    },
+    {
+      "id": "a/tolerant",
+      "name": "a/tolerant",
+      "matched": null,
+      "change": {
+        "flags": [],
+        "magnitude": 0.09090909090909098,
+        "columns_added": {},
+        "columns_removed": {},
+        "values_added": {},
+        "values_removed": {},
+        "where": {
+          "year": 2022
+        }
+      },
+      "skipped": false,
+      "message": null,
+      "baseline_data": null,
+      "baseline_hash": null
+    },
+    {
+      "id": "a/widened",
+      "name": "a/widened",
+      "matched": null,
+      "change": {
+        "flags": [
+          "schema"
+        ],
+        "magnitude": 0.0,
+        "columns_added": {},
+        "columns_removed": {},
+        "values_added": {
+          "year": [
+            2023
+          ]
+        },
+        "values_removed": {},
+        "where": null
+      },
+      "skipped": false,
+      "message": null,
+      "baseline_data": null,
+      "baseline_hash": null
+    },
+    {
+      "id": "a/renamed",
+      "name": "a/renamed",
+      "matched": "a/old_name",
+      "change": {
+        "flags": [],
+        "magnitude": 0.0,
+        "columns_added": {},
+        "columns_removed": {},
+        "values_added": {},
+        "values_removed": {},
+        "where": null
+      },
+      "skipped": false,
+      "message": null,
+      "baseline_data": null,
+      "baseline_hash": null
+    },
+    {
+      "id": "a/skipped_now",
+      "name": "a/skipped_now",
+      "matched": null,
+      "change": {
+        "flags": [
+          "removed"
+        ],
+        "magnitude": null,
+        "columns_added": {},
+        "columns_removed": {},
+        "values_added": {},
+        "values_removed": {},
+        "where": null
+      },
+      "skipped": true,
+      "message": "skipped: the run has no trade module",
+      "baseline_data": null,
+      "baseline_hash": null
+    },
+    {
+      "id": "a/skipped_both",
+      "name": "a/skipped_both",
+      "matched": null,
+      "change": {
+        "flags": [],
+        "magnitude": null,
+        "columns_added": {},
+        "columns_removed": {},
+        "values_added": {},
+        "values_removed": {},
+        "where": null
+      },
+      "skipped": true,
+      "message": "skipped: the run has no trade module (skipped in the baseline: the run has no trade module)",
+      "baseline_data": null,
+      "baseline_hash": null
+    },
+    {
+      "id": "a/was_broken",
+      "name": "a/was_broken",
+      "matched": null,
+      "change": {
+        "flags": [
+          "new"
+        ],
+        "magnitude": null,
+        "columns_added": {},
+        "columns_removed": {},
+        "values_added": {},
+        "values_removed": {},
+        "where": null
+      },
+      "skipped": false,
+      "message": "did not build in the baseline",
+      "baseline_data": null,
+      "baseline_hash": null
+    },
+    {
+      "id": "a/broken_now",
+      "name": "a/broken_now",
+      "matched": null,
+      "change": {
+        "flags": [
+          "error"
+        ],
+        "magnitude": null,
+        "columns_added": {},
+        "columns_removed": {},
+        "values_added": {},
+        "values_removed": {},
+        "where": null
+      },
+      "skipped": false,
+      "message": "transformation raised KeyError: 'missing' (raised at blicks/a.py:57)",
+      "baseline_data": null,
+      "baseline_hash": null
+    },
+    {
+      "id": "a/fresh",
+      "name": "a/fresh",
+      "matched": null,
+      "change": {
+        "flags": [
+          "new"
+        ],
+        "magnitude": null,
+        "columns_added": {},
+        "columns_removed": {},
+        "values_added": {},
+        "values_removed": {},
+        "where": null
+      },
+      "skipped": false,
+      "message": null,
+      "baseline_data": null,
+      "baseline_hash": null
+    },
+    {
+      "id": "a/gone",
+      "name": "a/gone",
+      "matched": null,
+      "change": {
+        "flags": [
+          "removed"
+        ],
+        "magnitude": null,
+        "columns_added": {},
+        "columns_removed": {},
+        "values_added": {},
+        "values_removed": {},
+        "where": null
+      },
+      "skipped": false,
+      "message": null,
+      "baseline_data": null,
+      "baseline_hash": null
+    }
+  ]
+}

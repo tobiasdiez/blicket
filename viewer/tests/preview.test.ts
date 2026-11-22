@@ -75,12 +75,34 @@ describe('the overview\'s sections', () => {
     expect(sections([skipped('a')], [compared('a', [])], []).pinned).toEqual([])
   })
 
+  it('fill in the first Blicks of a session with an expensive Blick whatever their status and whatever changed', () => {
+    const pending = (name: string) => entry(name, { status: 'pending', pending: true, data: null, hash: null })
+    const session = [pending('a'), broken('b'), skipped('c'), entry('d'), pending('e')]
+    const changes = new Map([['d', compared('d', ['value'], 0.1)]])
+    const shown = previewSections(session, [...changes.values()], changes, [], 3, true)
+    expect([names(shown.changed!.cards), names(shown.pinned), shown.unpinned]).toEqual([['d'], ['a', 'b', 'c'], true])
+    // Not twice: a Blick under Changed is not in the first look.
+    const first = previewSections(session.slice(3), [...changes.values()], changes, [], 3, true)
+    expect([names(first.changed!.cards), names(first.pinned)]).toEqual([['d'], ['e']])
+    // Pinned Blicks still take the section's place.
+    expect(names(previewSections(session, [], new Map(), [session[4]!], 3, true).pinned)).toEqual(['e'])
+  })
+
   it('sum up the trouble of a build in a line, which skipped Blicks are not', () => {
     const problem = broken('e').problems[0]!
     const warning = { ...problem, severity: 'warning' as const }
     expect(troubles({ blicks: [broken('e'), skipped('t'), entries[0]!], build: { id: 'b', incomplete: true, loader_ms: 0 }, problems: [problem, problem, warning] }))
       .toBe('1 Blick failed to build · build incomplete · 2 errors in files or the project')
     expect(troubles({ blicks: [...entries, skipped('t')], build: { id: 'b', incomplete: false, loader_ms: 0 }, problems: [warning] })).toBe('')
+  })
+
+  it('name a Blick whose definition is invalid apart from one that failed to build, in a session of blicket dev', () => {
+    const invalid = { ...broken('i'), timing_ms: null }
+    const failed = { ...broken('f'), timing_ms: 400 }
+    const build = { id: 's', incomplete: false, loader_ms: 0 }
+    expect(troubles({ blicks: [invalid, failed], build, problems: [] }, true)).toBe('1 Blick has an invalid definition · 1 Blick failed to build')
+    expect(troubles({ blicks: [invalid, { ...invalid, name: 'j' }], build, problems: [] }, true)).toBe('2 Blicks have invalid definitions')
+    expect(troubles({ blicks: [invalid, failed], build, problems: [] })).toBe('2 Blicks failed to build') // a build, as before
   })
 
   it('say how many Blicks the run skipped, and when nothing is left to show', () => {

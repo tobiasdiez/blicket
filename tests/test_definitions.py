@@ -76,6 +76,7 @@ def test_every_option_is_checked_stored_and_named() -> None:
         "dims": ["year"],
         "measures": ["value"],
         "order": {"region": ["EUR"]},
+        "expensive": True,
     }
     assert samples.keys() == BlickOptions.__optional_keys__
     bk.register(transform=identity, **samples)
@@ -91,9 +92,24 @@ def test_every_option_is_checked_stored_and_named() -> None:
     }
 
 
-def test_options_are_the_definition_fields_plus_the_identity() -> None:
+def test_options_are_the_definition_fields_plus_the_identity_and_the_cost() -> None:
     identity = {"id", "aliases"}  # recorded on the Blick's entry, beside its definition
-    assert BlickOptions.__optional_keys__ == BlickDefinition.model_fields.keys() | identity
+    cost = {"expensive"}  # how blicket dev builds the Blick, not what it builds
+    assert BlickOptions.__optional_keys__ == BlickDefinition.model_fields.keys() | identity | cost
+
+
+@pytest.mark.parametrize("expensive", [True, False, None])
+def test_whether_a_blick_is_expensive_is_not_part_of_its_definition(
+    expensive: bool | None,
+) -> None:
+    bk.register(id="defs/plain", title="A", plot=LINE, transform=identity)
+    bk.register(id="defs/costly", title="A", plot=LINE, transform=identity, expensive=expensive)
+    blicks = assembled().blicks
+    assert blicks["defs/costly"].expensive is expensive  # None: the run decides
+    plain, costly = blicks["defs/plain"].definition(), blicks["defs/costly"].definition()
+    assert plain == costly
+    assert "expensive" not in costly.model_dump()
+    assert blicks["defs/costly"].entry().expensive is False  # only a session marks an entry
 
 
 def test_register_defaults_the_title_to_the_last_segment() -> None:
@@ -184,6 +200,8 @@ def test_reserved_function_name_asks_for_an_id() -> None:
         ({"title": ""}, "title must be a non-empty string"),
         ({"unit": 3}, "unit must be a non-empty string, got 3"),
         ({"independent_y": 1}, "independent_y must be True or False, got 1"),
+        ({"expensive": "yes"}, "expensive must be True or False, got 'yes'"),
+        ({"expensive": 1}, "expensive must be True or False, got 1"),
         ({"description": 3}, "description must be a string"),
         ({"plot": bk.plots.line}, "plot must be a plot spec"),
     ],

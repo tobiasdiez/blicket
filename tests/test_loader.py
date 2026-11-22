@@ -129,7 +129,7 @@ def test_selection_path_is_the_single_path(tmp_path: Path) -> None:
 @pytest.mark.parametrize("empty", ["id", "profile", "fingerprint"])
 def test_run_info_fields_are_not_empty(empty: str) -> None:
     with pytest.raises(ValidationError):
-        bk.RunInfo(**{"id": "r", "profile": "p", "fingerprint": "f", empty: ""})
+        bk.RunInfo.model_validate({"id": "r", "profile": "p", "fingerprint": "f", empty: ""})
 
 
 def test_fingerprint(tmp_path: Path) -> None:

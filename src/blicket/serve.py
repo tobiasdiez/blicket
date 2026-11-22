@@ -8,17 +8,32 @@ not listed. ``index.html``, ``manifest.json`` and the JSON files under ``compare
 ``check`` rewrites, are sent with ``Cache-Control: no-cache``; the viewer fetches tables by their
 content hash and its assets are named by their content.
 
-With a ``DevSession``, as ``blicket dev`` attaches one, each request is answered from the build
-the session serves when the request comes: ``manifest.json`` from the session, with the header
-``Blicket-Dev: 1`` that tells the viewer it is in dev mode, and the routes under ``dev/``:
-``info`` (the project root, whether a run is served and whether there is a dataset), ``dataset``
-(what the Blick builder offers), ``query`` (``POST``, a builder query, answered with its entry),
-``tables/<hex>.parquet`` (the tables of the last queries), ``runs`` (the run folders the project
-offers to pick) and ``run`` (``POST``, load one of them). While the session serves no run yet, the
-viewer's files are served alone, and ``manifest.json``, ``dataset``, ``query`` and the tables
-answer 404, ``manifest.json`` with the header all the same. A route that changes anything, or
-runs the project's code, answers only the viewer's own page. A route that fails answers 500 and
-the traceback goes to stderr.
+With a ``DevSession``, as ``blicket dev`` attaches one, nothing of a build directory is served: the
+viewer's files are served alone, and each request is answered from the state the session is in when
+the request comes. ``manifest.json`` comes from the session, with the header ``Blicket-Dev: 1``
+that tells the viewer it is in dev mode, and so do ``compare/index.json``, empty without a
+baseline, and the comparison with the baseline; each carries the header ``Blicket-Revision`` naming
+the revision it is of, so that a client tells whether what it read is of the revision that
+``dev/info`` says. The routes under ``dev/``: ``info`` (the project root, whether there is a
+dataset, the session's id, which a restart and the load of another run change, the revision, the
+Blick building and the Blicks a page asked for that wait, and why the worker that builds them
+stopped, if it did), ``dataset`` (what the Blick builder offers), ``query`` (``POST``, a builder
+query, answered with its entry, after the cheap build that holds the session's lock, if one does;
+409 while an expensive one builds or a run loads, to be asked again then), ``tables/<hex>.parquet``
+(the tables of the last queries, and of the session its Blicks' and their baseline's; one that a
+rebuild replaced stays for ``jobs.KEPT`` revisions more; 404 for a table not kept, or never built),
+``runs`` (the run folders the project offers to pick, the project itself first when ``runs`` has
+``.``), ``run`` (``POST``, load one of them in place of the run served, after the cheap build that
+holds the lock, if one does; 409 while an expensive one builds or another run loads, and once the
+worker stopped) and ``build`` (``POST``, ``{"id": ..., "rebuild": false}``, build a Blick, answered
+at once with its state, ``queued``, ``building`` or ``done``; a client that waits for the build
+waits until the Blick has left the jobs of ``info``; 404 for a Blick the session cannot build, 409
+while a run loads and once the worker stopped). While the session serves no run yet,
+``manifest.json``, ``compare/index.json``, ``dataset``, ``query``, ``build`` and the tables answer
+404, ``manifest.json`` and ``compare/index.json`` with the header all the same. Another method on
+the path of a route answers 405 with the methods it has. A route that changes anything, or runs the
+project's code, answers only the viewer's own page. A route that fails answers 500 and the
+traceback goes to stderr.
 """
 
 import errno
@@ -37,14 +52,14 @@ from http import HTTPStatus
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 from io import BytesIO
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict, ValidationError
+from pydantic import BaseModel, ConfigDict, StrictBool, ValidationError
 
 from blicket import viewer
-from blicket.comparison import COMPARE
-from blicket.errors import BlicketError, DatasetError, LoadRefused, issue_field
-from blicket.manifest import MANIFEST
+from blicket.comparison import COMPARE, COMPARISON, INDEX, Comparison
+from blicket.errors import BlicketError, DatasetError, NoSuchBlick, Refused, issue_field
+from blicket.manifest import MANIFEST, Manifest
 from blicket.query import TABLES, Options, Query
 
 DEFAULT_HOST = "127.0.0.1"
@@ -54,19 +69,64 @@ DEV_HEADER = "Blicket-Dev"
 NO_RUN = "no run served yet"
 _NO_CACHE = frozenset({"/", "/index.html", f"/{MANIFEST}"})
 _TABLE = re.compile(rf"/{TABLES}/([0-9a-f]{{64}})\.parquet")
+_COMPARISON = re.compile(rf"/{COMPARE}/([^/]+)/{COMPARISON}")
 _MAX_BODY = 1 << 20  # bytes of a request's body
 _BODY_TIMEOUT = 30  # seconds a client may stay silent while it sends a body it announced
 # Whence a request that changes something may come: the viewer's own page, or the address bar.
 _SITES = frozenset({"same-origin", "none"})
-# The failures of a dev session that the access log leaves out, by path and status.
+REVISION_HEADER = "Blicket-Revision"
+# The failures of a dev session that the access log leaves out, by path and status: those the
+# viewer meets in its course, or the session reports itself.
 _SAID = frozenset(
-    {(f"/{MANIFEST}", HTTPStatus.NOT_FOUND), ("/dev/run", HTTPStatus.UNPROCESSABLE_ENTITY)}
+    {
+        (f"/{MANIFEST}", HTTPStatus.NOT_FOUND),
+        (f"/{COMPARE}/{INDEX}", HTTPStatus.NOT_FOUND),
+        ("/dev/run", HTTPStatus.UNPROCESSABLE_ENTITY),
+        ("/dev/run", HTTPStatus.CONFLICT),
+        ("/dev/query", HTTPStatus.CONFLICT),
+    }
 )
+_GONE = (
+    "no table of this hash: it was never built, or is no longer kept; read manifest.json again, "
+    "or run the builder's query again"
+)
+_BUILD_SHAPE = 'send {"id": "<blick id>", "rebuild": false}'
+
+# What ``dev/build`` says of the Blick asked for: it waits, it builds, or it is done, built,
+# failed or skipped, and nothing was asked of it.
+type BuildState = Literal["queued", "building", "done"]
+
+
+class Job(BaseModel):
+    """A Blick that builds, or that a page asked for and waits to, as ``dev/info`` lists it.
+
+    ``asked`` says that a page asked for it; a Blick that the background builds is not, and the
+    Blicks that wait in the background are not listed. A Blick queued or building is still
+    ``pending`` in the manifest until it is built, and is listed twice while it builds and a
+    rebuild of it waits. ``since`` is when a running job started, and when a queued one was asked
+    for; ``seconds`` is how long it has run or waited when ``dev/info`` answered, which a client
+    counts on from, whatever its clock says.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    id: str
+    state: Literal["building", "queued"]
+    asked: bool
+    since: datetime
+    seconds: float
 
 
 class Info(BaseModel):
     """What ``dev/info`` says: the project root, whether the project has a dataset, why not, and
-    whether because ``dataset(run)`` failed."""
+    whether because ``dataset(run)`` failed; ``session`` names the session, so that a client
+    learns of a restart.
+
+    ``revision`` rises whenever the manifest or the comparison changed, and ``jobs`` are the
+    Blick building and the Blicks a page asked for that wait, in the order they are built.
+    ``stopped`` says why the worker that builds them stopped, if it did, which only a bug makes it
+    do; ``dev/build`` then answers 409.
+    """
 
     model_config = ConfigDict(frozen=True)
 
@@ -74,21 +134,30 @@ class Info(BaseModel):
     dataset: bool
     message: str | None = None
     failed: bool = False
+    session: str = ""
+    revision: int = 0
+    jobs: tuple[Job, ...] = ()
+    stopped: str | None = None
 
 
 class RunFolder(BaseModel):
-    """A run folder to pick: its path, resolved, its name, and when it last changed."""
+    """A run folder to pick: its path, resolved, its name, and when it last changed; or, with
+    ``project``, the project itself, named ``This project``, whose run is computed from its code,
+    which a folder's time does not tell, so ``modified`` is ``None``. ``served`` says that the run
+    served now was loaded from it."""
 
     model_config = ConfigDict(frozen=True)
 
     path: Path
     name: str
-    modified: datetime
+    modified: datetime | None
+    project: bool = False
+    served: bool = False
 
 
 class RunList(BaseModel):
     """What ``dev/runs`` says: the globs of ``runs`` in ``[tool.blicket]`` and the folders they
-    match, newest first."""
+    match, the project itself first, then newest first."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -105,25 +174,56 @@ class RunRequest(BaseModel):
     paths: list[str]
 
 
-class Served(Protocol):
-    """The build a dev session serves, as it was when a request came: one request reads one
-    build, whatever the session does meanwhile."""
+class BuildRequest(BaseModel):
+    """What ``dev/build`` is asked: the id of a Blick to build, and whether to build it once more
+    when it is built or building, ``true`` or ``false``."""
 
-    @property
-    def directory(self) -> Path:
-        """The build directory."""
-        ...
+    model_config = ConfigDict(frozen=True, extra="forbid")
 
-    def manifest(self) -> bytes:
-        """The manifest of the build, as JSON."""
-        ...
+    id: str
+    rebuild: StrictBool = False
+
+
+@dataclass(frozen=True)
+class Served:
+    """What a dev session serves, as it was when a request came: one request reads one state,
+    whatever the session does meanwhile.
+
+    ``manifest`` and ``comparison``, the comparison with the baseline, ``None`` without one, are
+    answered from memory, the manifest's sources relative to the project ``root``. ``tables``
+    are Parquet bytes by their sha256 in hex, as ``dev/tables/<hex>.parquet`` serves them: those
+    of the session's Blicks and of the baseline it draws them against, and those of the last
+    snapshots before. ``revision`` counts the snapshots of the session.
+    """
+
+    manifest: Manifest
+    root: Path
+    comparison: Comparison | None = None
+    tables: Mapping[str, bytes] = field(default_factory=dict)
+    revision: int = 0
+
+    def manifest_json(self) -> bytes:
+        """The manifest as JSON, its sources relative to the project root."""
+        text = self.manifest.model_dump_json(indent=2, context={"root": self.root})
+        return text.encode() + b"\n"
+
+    def index_json(self) -> bytes:
+        """``compare/index.json``: the baseline's id, if there is one."""
+        found = [self.comparison.baseline.id] if self.comparison is not None else []
+        return (json.dumps(found) + "\n").encode()
+
+    def comparison_json(self, baseline: str) -> bytes | None:
+        """The comparison with the baseline ``baseline`` as JSON; ``None`` for another."""
+        if self.comparison is None or self.comparison.baseline.id != baseline:
+            return None
+        return self.comparison.model_dump_json(indent=2).encode() + b"\n"
 
 
 class DevSession(Protocol):
-    """What ``blicket dev`` serves besides the files of a build directory."""
+    """What ``blicket dev`` serves besides the viewer's files."""
 
     def current(self) -> Served | None:
-        """The build served now; ``None`` while no run is served yet."""
+        """What the session serves now; ``None`` while no run is served yet."""
         ...
 
     def info(self) -> Info:
@@ -135,11 +235,21 @@ class DevSession(Protocol):
         ...
 
     def query(self, query: Query) -> bytes:
-        """The entry of a builder query as JSON; raises ``DatasetError`` without a dataset."""
+        """The entry of a builder query as JSON, after the cheap build that holds the session's
+        lock, if one does; raises ``DatasetError`` without a dataset, and ``Refused`` while an
+        expensive Blick builds or a run loads, which the query would wait for."""
         ...
 
     def table(self, digest: str) -> bytes | None:
-        """The Parquet bytes of a query's table by their sha256, if still kept."""
+        """The Parquet bytes of a query's table, or of a Blick of the session or of its baseline,
+        by their sha256, if still kept."""
+        ...
+
+    def build(self, blick: str, rebuild: bool) -> BuildState:
+        """Ask for the Blick ``blick`` to be built, once more with ``rebuild``; its state,
+        ``queued``, ``building``, or ``done`` when there is nothing to do. Raises ``NoSuchBlick``
+        for an id the session cannot build and while no run is served, and ``Refused`` while a
+        run loads and once the worker that builds stopped."""
         ...
 
     def runs(self) -> RunList:
@@ -147,17 +257,19 @@ class DevSession(Protocol):
         ...
 
     def load(self, paths: list[str]) -> str:
-        """Load the run at ``paths``, build and check it, and serve it; the run's id. The caller
-        checks that ``runs`` lists the paths. Raises ``LoadRefused`` while another load runs and
-        once a run is served, and another ``BlicketError`` when the loader, the build or the
-        baseline fails, which the session reports in the terminal itself."""
+        """Load the run at ``paths`` and serve it in place of the run served, if any, after the
+        cheap build that holds the session's lock, if one does; the run's id. The caller checks
+        that ``runs`` lists the paths. Raises ``LoadRefused`` while another load runs or an
+        expensive Blick builds, and once the worker stopped; and another ``BlicketError`` when the
+        loader or the baseline fails, which the session reports in the terminal itself, and
+        which leaves the run served as it was."""
         ...
 
 
 class Server(ThreadingHTTPServer):
-    """The HTTP server of a build directory: ``directory`` for ``blicket serve``, or the one the
-    ``session`` of ``blicket dev`` serves, which is attached once the server is bound. ``site``
-    is the installed viewer."""
+    """The HTTP server of a build directory, ``directory``, for ``blicket serve``, or of the
+    ``session`` of ``blicket dev``, which is attached once the server is bound. ``site`` is the
+    installed viewer."""
 
     def __init__(self, address: tuple[str, int], site: Path, directory: Path | None = None) -> None:
         self.site = site.resolve()
@@ -177,10 +289,9 @@ class Server(ThreadingHTTPServer):
 
     @property
     def directory(self) -> Path:
-        """The build directory served now; the viewer's while a session serves no run yet."""
+        """The build directory served; the viewer's for a session, which has none."""
         if self.session is not None:
-            served = self.session.current()
-            return served.directory if served is not None else self.site
+            return self.site
         if self._directory is None:
             raise BlicketError("the server has no build directory and no session")
         return self._directory
@@ -199,14 +310,20 @@ class _Response:
     headers: Mapping[str, str] = field(default_factory=dict)
 
 
-def _json(status: HTTPStatus, data: Any, cache: str = "no-store") -> _Response:
-    """A JSON response of ``data``: JSON bytes, a pydantic model, or JSON data."""
+def _json(
+    status: HTTPStatus,
+    data: Any,
+    cache: str = "no-store",
+    headers: Mapping[str, str] | None = None,
+) -> _Response:
+    """A JSON response of ``data``: JSON bytes, a pydantic model, or JSON data, with ``headers``
+    besides ``Cache-Control``."""
     if isinstance(data, bytes):
         body = data
     else:
         text = data.model_dump_json() if isinstance(data, BaseModel) else json.dumps(data)
         body = text.encode()
-    return _Response(status, body, headers={"Cache-Control": cache})
+    return _Response(status, body, headers={"Cache-Control": cache, **(headers or {})})
 
 
 class _Refusal(Exception):
@@ -217,22 +334,37 @@ class _Refusal(Exception):
         self.status = status
 
 
-def _parsed[M: BaseModel](model: type[M], body: bytes, what: str) -> M:
-    """``body`` as ``model``; refused with 400 and the first problem, by its field, otherwise."""
+def _parsed[M: BaseModel](model: type[M], body: bytes, what: str, shape: str = "") -> M:
+    """``body`` as ``model``; refused with 400 and the first problem, by its field, otherwise,
+    followed by ``shape``, which says what to send."""
     try:
         return model.model_validate_json(body)
     except ValidationError as error:
         issue = error.errors()[0]
         where = issue_field(issue)
         message = f"not {what}: {where + ': ' if where else ''}{issue['msg']}"
-        raise _Refusal(HTTPStatus.BAD_REQUEST, message) from error
+        raise _Refusal(
+            HTTPStatus.BAD_REQUEST, f"{message}; {shape}" if shape else message
+        ) from error
+
+
+def _from_memory(handler: _Handler, body: Callable[[Served], bytes]) -> _Response:
+    """What the session serves now, as ``body`` makes it of it, with the revision it is of; while
+    it serves no run yet, a 404 that says so, still in dev mode, which the viewer reads from the
+    header. No-cache, as ``end_headers`` says."""
+    if (served := handler.served) is None:
+        message = json.dumps({"message": NO_RUN}).encode()
+        return _Response(HTTPStatus.NOT_FOUND, message, headers={DEV_HEADER: "1"})
+    headers = {DEV_HEADER: "1", REVISION_HEADER: str(served.revision)}
+    return _Response(HTTPStatus.OK, body(served), headers=headers)
 
 
 def _manifest(handler: _Handler, session: DevSession) -> _Response:
-    if handler.served is None:  # still in dev mode, which the viewer reads from the header
-        body = json.dumps({"message": NO_RUN}).encode()
-        return _Response(HTTPStatus.NOT_FOUND, body, headers={DEV_HEADER: "1"})
-    return _Response(HTTPStatus.OK, handler.served.manifest(), headers={DEV_HEADER: "1"})
+    return _from_memory(handler, Served.manifest_json)
+
+
+def _index(handler: _Handler, session: DevSession) -> _Response:
+    return _from_memory(handler, Served.index_json)
 
 
 def _info(handler: _Handler, session: DevSession) -> _Response:
@@ -249,6 +381,12 @@ def _query(handler: _Handler, session: DevSession) -> _Response:
     return _json(HTTPStatus.OK, session.query(query))
 
 
+def _build(handler: _Handler, session: DevSession) -> _Response:
+    handler.same_origin()
+    asked = _parsed(BuildRequest, handler.json_body(), "a Blick to build", _BUILD_SHAPE)
+    return _json(HTTPStatus.OK, {"state": session.build(asked.id, asked.rebuild)})
+
+
 def _runs(handler: _Handler, session: DevSession) -> _Response:
     return _json(HTTPStatus.OK, session.runs())
 
@@ -261,15 +399,17 @@ def _run(handler: _Handler, session: DevSession) -> _Response:
     listed = {str(folder.path) for folder in session.runs().runs}
     for path in paths:
         if path not in listed:
-            if Path(path).exists():
+            if not Path(path).is_absolute():
+                message = f"{path} is relative; send the absolute paths that dev/runs lists"
+            elif Path(path).exists():
                 message = f"{path} is not a folder that runs in [tool.blicket] matches"
             else:
                 message = f"{Path(path).name} no longer exists; refresh the list"
             raise _Refusal(HTTPStatus.BAD_REQUEST, message)
     try:
         run = session.load(paths)
-    except LoadRefused as error:
-        raise _Refusal(HTTPStatus.CONFLICT, str(error)) from error
+    except Refused:
+        raise
     except BlicketError as error:
         raise _Refusal(HTTPStatus.UNPROCESSABLE_ENTITY, str(error)) from error
     return _json(HTTPStatus.OK, {"id": run})
@@ -279,11 +419,13 @@ type _Route = Callable[[_Handler, DevSession], _Response]
 
 _ROUTES: dict[tuple[str, str], _Route] = {
     ("GET", f"/{MANIFEST}"): _manifest,
+    ("GET", f"/{COMPARE}/{INDEX}"): _index,
     ("GET", "/dev/info"): _info,
     ("GET", "/dev/dataset"): _dataset,
     ("POST", "/dev/query"): _query,
     ("GET", "/dev/runs"): _runs,
     ("POST", "/dev/run"): _run,
+    ("POST", "/dev/build"): _build,
 }
 # The methods of each path with a route, for the Allow header of a 405.
 _METHODS: dict[str, list[str]] = {
@@ -292,8 +434,8 @@ _METHODS: dict[str, list[str]] = {
 
 
 class _Handler(SimpleHTTPRequestHandler):
-    """Serves the server's build directory, looking each path up in its viewer first, and the
-    routes of a dev session.
+    """Serves the server's build directory, looking each path up in its viewer first, or the
+    viewer and the routes of a dev session.
 
     A request that is not a ``GET`` or ``HEAD``, or that carries a body, closes the connection
     unless a route reads its body in full: an unread body would be read as the next request. An
@@ -325,8 +467,8 @@ class _Handler(SimpleHTTPRequestHandler):
         super().send_header(keyword, value)
 
     def parse_request(self) -> bool:
-        """Read the request's headers, then take what it is answered from: the session, and the
-        build it serves at this moment."""
+        """Read the request's headers, then take what it is answered from: the session, and what
+        it serves at this moment, or the build directory."""
         if not super().parse_request():
             return False
         self.keep_alive = not self.close_connection
@@ -336,7 +478,7 @@ class _Handler(SimpleHTTPRequestHandler):
             self.close_connection = True
         self.session = self.owner.session
         self.served = self.session.current() if self.session is not None else None
-        self.root = self.served.directory if self.served is not None else self.owner.directory
+        self.root = self.owner.directory
         self.directory = str(self.root)
         return True
 
@@ -361,20 +503,30 @@ class _Handler(SimpleHTTPRequestHandler):
         try:
             if (route := _ROUTES.get((method, path))) is not None:
                 return route(self, session)
+            if method == "GET" and (matched := _COMPARISON.fullmatch(path)):
+                served, baseline = self.served, matched[1]
+                if served is None or (body := served.comparison_json(baseline)) is None:
+                    return _json(
+                        HTTPStatus.NOT_FOUND, {"message": f"no comparison with {baseline}"}
+                    )
+                revision = {REVISION_HEADER: str(served.revision)}  # no-cache, as end_headers says
+                return _Response(HTTPStatus.OK, body, headers=revision)
             if (allowed := _METHODS.get(path)) is not None:
-                response = _json(HTTPStatus.METHOD_NOT_ALLOWED, {"message": f"{method} {path}"})
-                return _Response(
-                    response.status, response.body, headers={"Allow": ", ".join(allowed)}
-                )
+                message, methods = {"message": f"{method} {path}"}, {"Allow": ", ".join(allowed)}
+                return _json(HTTPStatus.METHOD_NOT_ALLOWED, message, headers=methods)
             if method == "GET" and (matched := _TABLE.fullmatch(path)):
                 if (table := session.table(matched[1])) is None:
-                    return _json(HTTPStatus.NOT_FOUND, {"message": "no such table in this session"})
+                    return _json(HTTPStatus.NOT_FOUND, {"message": _GONE})
                 immutable = {"Cache-Control": "max-age=31536000, immutable"}
                 return _Response(HTTPStatus.OK, table, "application/vnd.apache.parquet", immutable)
             if path == "/dev" or path.startswith("/dev/"):
                 return _json(HTTPStatus.NOT_FOUND, {"message": f"no route {method} {path}"})
         except _Refusal as refusal:
             return _json(refusal.status, {"message": str(refusal)})
+        except Refused as error:  # what the session cannot do in the state it is in
+            return _json(HTTPStatus.CONFLICT, {"message": str(error)})
+        except NoSuchBlick as error:
+            return _json(HTTPStatus.NOT_FOUND, {"message": str(error)})
         except DatasetError as error:
             return _json(HTTPStatus.NOT_FOUND, {"message": str(error)}, cache="no-cache")
         except TimeoutError, ConnectionError:
@@ -463,6 +615,24 @@ class _Handler(SimpleHTTPRequestHandler):
             return
         self.wfile.write(self._respond(response).getvalue())
 
+    def _other(self, method: str) -> None:
+        """A method no route has: a path of a dev session's routes answers 405 with the methods
+        it has, any other path under ``dev/`` 404, as JSON; elsewhere the method is not
+        implemented."""
+        if (response := self._route(method)) is None:
+            self.send_error(HTTPStatus.NOT_IMPLEMENTED, f"Unsupported method ({method!r})")
+            return
+        self.wfile.write(self._respond(response).getvalue())
+
+    def do_PUT(self) -> None:
+        self._other("PUT")
+
+    def do_DELETE(self) -> None:
+        self._other("DELETE")
+
+    def do_PATCH(self) -> None:
+        self._other("PATCH")
+
     def list_directory(self, path: str | os.PathLike[str]) -> None:
         self.send_error(HTTPStatus.NOT_FOUND, "File not found")
 
@@ -476,8 +646,10 @@ class _Handler(SimpleHTTPRequestHandler):
 
     def log_request(self, code: int | str = "-", size: int | str = "-") -> None:
         """Log failed requests only, but those of a dev session that say nothing new: the 404 of
-        ``manifest.json`` while no run is served, which the viewer asks for on every page load
-        then, and the 422 of a run that cannot be loaded, which the session reports itself."""
+        ``manifest.json`` and ``compare/index.json`` while no run is served, which the viewer asks
+        for on every page load then, the 422 of a run that cannot be loaded, which the session
+        reports itself, and the 409 of a query or a load refused while an expensive Blick builds
+        or a run loads."""
         expected = self.session is not None and (self.path, code) in _SAID
         if isinstance(code, int) and code >= HTTPStatus.BAD_REQUEST and not expected:
             super().log_request(code, size)

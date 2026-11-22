@@ -15,8 +15,8 @@ from blicket.schema import Control, ControlKind, TableSchema
 type Transform = Callable[[Any], Any]
 
 # What became of a Blick in a build: it built a table, its transformation skipped the run, or it
-# failed.
-type Status = Literal["ok", "skipped", "error"]
+# failed; or, in the manifest of a session of blicket dev, it is not built yet.
+type Status = Literal["ok", "skipped", "error", "pending"]
 
 
 def _inside_the_build(path: str) -> str:
@@ -87,8 +87,13 @@ class BlickEntry(BaseModel):
     ``controls`` are what the viewer offers for it: the plot type's controls with the requests of
     ``definition.controls`` and ``definition.defaults`` applied. ``skipped`` is the reason a
     transformation gave when it skipped the run with ``bk.Skip``; an entry with a reason has no
-    table, no controls and no problems. ``status`` is ``skipped`` when ``skipped`` is set, else
-    ``error`` when a problem is an error, else ``ok``.
+    table, no controls and no problems. ``pending`` says that the Blick is not built yet, which
+    only the manifest of a session of ``blicket dev`` says; such an entry has no table, controls,
+    problems or reason either. ``expensive`` says that the session builds the Blick when its
+    page is opened in the viewer, and on Rebuild, not in the background, which only the manifest
+    of a session says either; both are left out of the dump when false. ``status`` is
+    ``pending`` when ``pending`` is set, else ``skipped`` when ``skipped`` is set, else ``error``
+    when a problem is an error, else ``ok``.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -108,10 +113,14 @@ class BlickEntry(BaseModel):
     timing_ms: float | None = None
     skipped: str | None = None
     problems: tuple[Problem, ...] = ()
+    pending: bool = Field(default=False, exclude_if=lambda pending: not pending)
+    expensive: bool = Field(default=False, exclude_if=lambda expensive: not expensive)
 
     @computed_field
     @property
     def status(self) -> Status:
+        if self.pending:
+            return "pending"
         if self.skipped is not None:
             return "skipped"
         return "error" if any(p.severity == "error" for p in self.problems) else "ok"
@@ -123,6 +132,13 @@ class BlickEntry(BaseModel):
             any(part is not None for part in table) or self.controls or self.problems
         ):
             raise ValueError("a skipped Blick has no table, controls or problems")
+        if self.pending and (
+            any(part is not None for part in table)
+            or self.controls
+            or self.problems
+            or self.skipped is not None
+        ):
+            raise ValueError("a pending Blick has no table, controls, problems or reason")
         return self
 
     @property
@@ -139,7 +155,10 @@ class Blick:
     """A named view on a model run: a transformation of the run and how to plot its table.
 
     ``tags`` are the Blick's own tags; its group has tags of its own. ``module`` is ``None`` for
-    Blicks that do not come from a module.
+    Blicks that do not come from a module. ``expensive`` says that the Blick takes long to build,
+    so that ``blicket dev`` builds it when its page is opened in the viewer, and on Rebuild,
+    ``False`` that it is cheap on any run, and ``None`` that the run decides
+    (``RunInfo.expensive``); it is not part of the Blick's definition.
     """
 
     id: str
@@ -157,12 +176,14 @@ class Blick:
     dims: tuple[str, ...] | None = None
     measures: tuple[str, ...] | None = None
     order: Mapping[str, tuple[Any, ...]] = field(default_factory=dict)
+    expensive: bool | None = None
     transform: Transform
     module: str | None = None
     source: Source | None = None
 
     def definition(self) -> BlickDefinition:
-        """Everything that defines the Blick except its transformation."""
+        """Everything that defines the Blick except its transformation and whether it is
+        expensive, which changes how ``blicket dev`` builds it, not what it builds."""
         return BlickDefinition(
             title=self.title,
             description=self.description,
@@ -216,7 +237,7 @@ class Blick:
     ) -> BlickEntry:
         """The Blick as a report records it, with what a build made of it, if anything: its
         table's schema ``columns`` and the controls derived for it, or the reason it ``skipped``
-        the run."""
+        the run. What only the manifest of a session says of it, ``jobs.stamped`` adds."""
         return BlickEntry(
             id=self.id,
             name=self.id,

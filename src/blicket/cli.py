@@ -11,7 +11,10 @@ an invalid ``[tool.blicket]``, a failing loader, a build that cannot be written)
 ``error: ...`` line on stderr instead, with the project's traceback under ``-v``; an unexpected
 exception is an ``error:`` line, the traceback under ``-v``, and a line asking for a bug report.
 What project code prints goes to stderr too, as does the line of ``serve`` and ``dev`` that
-the default port is taken and which one they listen on instead.
+the default port is taken and which one they listen on instead. ``dev`` prints a line on stdout
+for each Blick a page asked for once it is built, and one on stderr when it starts to build it;
+once the background has built every cheap Blick, it prints the counts, problems and comparison of
+``check``'s report on stdout.
 """
 
 import importlib.metadata
@@ -152,6 +155,14 @@ OutOption = Annotated[
     typer.Option(
         "--out",
         help="Where build directories go (default: .blicket/build in the project).",
+        show_default=False,
+    ),
+]
+DevOutOption = Annotated[
+    Path | None,
+    typer.Option(
+        "--out",
+        help="Not used: blicket dev writes no build directory; blicket build and check do.",
         show_default=False,
     ),
 ]
@@ -398,21 +409,30 @@ def dev_command(
     host: HostOption = serve.DEFAULT_HOST,
     open_browser: OpenOption = False,
     project: ProjectOption = None,
-    out: OutOption = None,
+    out: DevOutOption = None,
     verbose: VerboseOption = False,
 ) -> None:
-    """Check a run given or picked in the viewer and serve it with the Blick builder; Ctrl-C stops.
+    """Serve a run given or picked in the viewer, building its Blicks on demand; Ctrl-C stops.
 
-    Builds the run and compares it with its baseline as blicket check
-    does, without pushing, then keeps the run in memory: "Build a Blick"
-    in the viewer charts any quantity of the dataset that dataset(run) in
-    the loader's module returns.
+    Loads the run, finds its baseline as blicket check does and serves at
+    once, keeping the run in memory; nothing is written or pushed. The
+    Blicks are built one at a time and compared with the baseline as they
+    are built: a cheap Blick in the background and again whenever its page
+    is opened, an expensive one (bk.blick(expensive=True), or every Blick
+    of a run whose loader says expensive=True in its RunInfo) when its page
+    is opened and on Rebuild. A Blick a page asked for goes first; a line
+    on stderr says that it starts to build ("12:01:05 building
+    cement/trade"), and a line on stdout how it ended; once the background
+    is done, the counts, problems and comparison of check's report follow.
+    "Build a Blick" in the viewer charts any quantity of the dataset that
+    dataset(run) in the loader's module returns.
 
     Without RUN_PATH, serve a run picker: the viewer lists the folders the
-    globs in runs in \\[tool.blicket] match, newest first; without runs,
-    exit 2.
+    globs in runs in \\[tool.blicket] match, newest first, and the project
+    itself first when runs has "."; without runs, exit 2. The picker loads
+    another run in place of the one served.
 
-    Exit codes: 0 when stopped with Ctrl-C, whatever the build holds or a
+    Exit codes: 0 when stopped with Ctrl-C, whatever the Blicks hold or a
     run picked in the viewer did; 2 when the session cannot start, without
     RUN_PATH also when runs is not set.
     """
@@ -429,6 +449,7 @@ def dev_command(
     typer.echo(f"viewer: {server.url}#/   (Ctrl-C stops)")
     if session.current() is None:
         typer.echo("pick a run in the viewer, or pass one: blicket RUN_PATH")
+    session.begin()
     if open_browser:
         webbrowser.open(server.url)
     serve.run(server)

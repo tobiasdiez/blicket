@@ -20,6 +20,7 @@ py.install_sources(
   'src/blicket/dev.py',
   'src/blicket/discovery.py',
   'src/blicket/errors.py',
+  'src/blicket/jobs.py',
   'src/blicket/loader.py',
   'src/blicket/manifest.py',
   'src/blicket/model.py',

@@ -52,6 +52,7 @@ class BlickOptions(TypedDict, total=False):
     dims: Iterable[str]
     measures: Iterable[str]
     order: Mapping[str, Iterable[Any]]
+    expensive: bool | None
 
 
 @dataclass(frozen=True)
@@ -72,6 +73,7 @@ class CheckedOptions:
     dims: tuple[str, ...] | None = None
     measures: tuple[str, ...] | None = None
     order: Mapping[str, tuple[Any, ...]] = field(default_factory=dict)
+    expensive: bool | None = None
 
 
 def valid_segment(text: str) -> bool:
@@ -207,9 +209,9 @@ def _plot(value: object) -> PlotSpec:
     return value
 
 
-def _flag(value: object) -> bool:
+def _flag(value: object, what: str) -> bool:
     if not isinstance(value, bool):
-        raise _Invalid(f"independent_y must be True or False, got {_shown(value)}")
+        raise _Invalid(f"{what} must be True or False, got {_shown(value)}")
     return value
 
 
@@ -266,7 +268,7 @@ _CHECKS: dict[str, Callable[[object], Any]] = {
     "description": _description,
     "unit": lambda value: _title(value, "unit"),
     "plot": _plot,
-    "independent_y": _flag,
+    "independent_y": lambda value: _flag(value, "independent_y"),
     "controls": _controls,
     "defaults": lambda value: dict(_json_mapping(value, "defaults", "column to value")),
     "tolerance": _tolerance,
@@ -275,6 +277,7 @@ _CHECKS: dict[str, Callable[[object], Any]] = {
     "dims": lambda value: _strings(value, "dims"),
     "measures": lambda value: _strings(value, "measures"),
     "order": _order,
+    "expensive": lambda value: _flag(value, "expensive"),
 }
 
 

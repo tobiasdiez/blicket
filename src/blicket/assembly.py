@@ -131,6 +131,7 @@ def _build(entry: _Entry) -> Blick:
         dims=options.dims,
         measures=options.measures,
         order=options.order,
+        expensive=options.expensive,
         transform=transform,
         module=entry.module,
         source=definition.source,

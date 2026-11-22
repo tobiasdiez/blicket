@@ -4,6 +4,8 @@ import json
 import os
 import shutil
 import tempfile
+from collections.abc import Callable
+from datetime import UTC, datetime
 from pathlib import Path
 
 import polars as pl
@@ -12,11 +14,18 @@ from pydantic import ValidationError
 
 import blicket as bk
 from blicket import manifest
-from blicket.comparison import BlickComparison, compare_builds, write
+from blicket.comparison import (
+    Baseline,
+    BlickComparison,
+    assemble,
+    compare_blick,
+    compare_builds,
+    write,
+)
 from blicket.errors import BlicketError, Problem, Source
 from blicket.model import BlickEntry, PlotDefinition
 from blicket.schema import Flag
-from tests.support import VALUES, make_build_project, make_run
+from tests.support import PROJECTS, VALUES, make_build_project, make_run
 
 SCALED = """\
 import polars as pl
@@ -364,7 +373,8 @@ def written(tmp_path: Path) -> tuple[Path, Path, bk.Comparison]:
         "@bk.blick(plot=LINE)\ndef big(", '@bk.blick(plot=LINE, aliases=["a/big"])\ndef bigger('
     )
     baseline, current = builds(tmp_path, SCALED, after)
-    return baseline, current, write(compare_builds(baseline, current), baseline, current)
+    compared = compare_builds(baseline, current)
+    return baseline, current, write(compared, Baseline.read(baseline), current)
 
 
 def test_write_copies_the_baseline_tables_of_changed_blicks(tmp_path: Path) -> None:
@@ -400,7 +410,7 @@ def test_a_second_write_replaces_the_directory(tmp_path: Path) -> None:
     baseline, current, comparison = written(tmp_path)
     directory = current / "compare" / comparison.baseline.id
     (directory / "stray.txt").write_text("stray")
-    write(comparison, baseline, current)
+    write(comparison, Baseline.read(baseline), current)
     assert not (directory / "stray.txt").exists()
 
 
@@ -412,7 +422,7 @@ def test_the_index_lists_the_comparisons_by_modification_time(tmp_path: Path) ->
     (compare / "notes").mkdir()  # not named by a build id
     (compare / "notes" / "comparison.json").write_text("{}")
     other = comparison.baseline.model_copy(update={"id": "0123456789abcdef"})
-    write(comparison.model_copy(update={"baseline": other}), baseline, current)
+    write(comparison.model_copy(update={"baseline": other}), Baseline.read(baseline), current)
     assert json.loads((compare / "index.json").read_text()) == [
         "0123456789abcdef",
         comparison.baseline.id,
@@ -425,7 +435,7 @@ def test_write_refuses_an_id_that_is_no_build_id(tmp_path: Path, side: str) -> N
     comparison = compare_builds(baseline, current)
     crafted = getattr(comparison, side).model_copy(update={"id": ".."})
     with pytest.raises(BlicketError, match=r" has an invalid build id '\.\.'$"):
-        write(comparison.model_copy(update={side: crafted}), baseline, current)
+        write(comparison.model_copy(update={side: crafted}), Baseline.read(baseline), current)
     assert not (current / "compare").exists()
     assert (current / "manifest.json").is_file()
 
@@ -433,3 +443,59 @@ def test_write_refuses_an_id_that_is_no_build_id(tmp_path: Path, side: str) -> N
 def test_a_baseline_table_path_stays_in_the_build_directory() -> None:
     with pytest.raises(ValidationError, match="must be a path inside the build directory"):
         BlickComparison(id="a/x", name="a/x", change=bk.Change(), baseline_data="../x.parquet")
+
+
+# The comparison of one Blick, which a session of blicket dev uses as it builds its Blicks, and
+# compare_builds, which uses it for every Blick.
+
+SCENARIO = PROJECTS / "comparison"
+MOMENT = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def normalized(compared: bk.Comparison) -> str:
+    """The comparison as JSON, as ``diff --json`` prints it, with what differs from one test run
+    to the next fixed: the times, the version of blicket, the ids and repositories of the
+    builds."""
+    refs = {
+        side: getattr(compared, side).model_copy(
+            update={"id": "0" * 16, "created_at": MOMENT, "repository": None}
+        )
+        for side in ("baseline", "current")
+    }
+    fixed = {"created_at": MOMENT, "blicket": "0.0.0", **refs}
+    return compared.model_copy(update=fixed).model_dump_json(indent=2) + "\n"
+
+
+def test_the_comparison_of_two_builds_is_the_one_blicket_made_before(tmp_path: Path) -> None:
+    before, after = ((SCENARIO / name).read_text() for name in ("before.py", "after.py"))
+    compared = compare_builds(*builds(tmp_path, before, after))
+    assert normalized(compared) == (SCENARIO / "expected.json").read_text()
+    assert flags(compared) == [
+        ("a/same", []),
+        ("a/moved", ["value"]),
+        ("a/tolerant", []),
+        ("a/widened", ["schema"]),
+        ("a/renamed", []),
+        ("a/skipped_now", ["removed"]),
+        ("a/skipped_both", []),
+        ("a/was_broken", ["new"]),
+        ("a/broken_now", ["error"]),
+        ("a/fresh", ["new"]),
+        ("a/gone", ["removed"]),
+    ]
+
+
+def test_blick_by_blick_the_comparison_is_that_of_the_builds(tmp_path: Path) -> None:
+    before, after = ((SCENARIO / name).read_text() for name in ("before.py", "after.py"))
+    baseline, current = builds(tmp_path, before, after)
+    built = manifest.read(current)
+    tables = {e.data: pl.read_parquet(current / e.data) for e in built.blicks if e.data}
+    before = Baseline.read(baseline)
+
+    def read(data: str | None) -> Callable[[], pl.DataFrame] | None:
+        return (lambda: tables[data]) if data is not None else None
+
+    blicks = [compare_blick(entry, before, 1e-5, read(entry.data)) for entry in built.blicks]
+    one_by_one = assemble(before, built, blicks)
+    whole = compare_builds(baseline, current)
+    assert one_by_one.model_copy(update={"created_at": whole.created_at}) == whole

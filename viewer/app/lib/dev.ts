@@ -11,26 +11,61 @@ export class Unreachable extends Error {
 }
 
 /**
+ * A Blick that builds, or that a page asked for and waits to, `Job` in src/blicket/serve.py:
+ * whether a page asked for it, not the background, whose Blicks that wait are not listed; since
+ * when, in ISO 8601, and for how many seconds, when `dev/info` answered, which the viewer counts
+ * on from, whatever its clock says. A Blick that builds while a rebuild of it waits is listed
+ * twice.
+ */
+export interface Job {
+  id: string
+  state: 'building' | 'queued'
+  asked: boolean
+  since: string
+  seconds: number
+}
+
+/**
  * What `dev/info` says, `Info` in src/blicket/serve.py: the project root, and whether the project
- * has a dataset, why not, and whether because `dataset(run)` failed.
+ * has a dataset, why not, and whether because `dataset(run)` failed; `session` names the session,
+ * which a restart of `blicket dev` and the load of another run change. `revision` rises whenever
+ * the manifest or the comparison changed, `jobs` are the Blick building and the Blicks a page
+ * asked for that wait, in the order they are built, and `stopped` why the worker that builds them
+ * stopped, if it did.
  */
 export interface DevInfo {
   root: string
   dataset: boolean
   message: string | null
   failed: boolean
+  session: string
+  revision: number
+  jobs: Job[]
+  stopped: string | null
 }
 
-/** A run folder to pick, `RunFolder` in src/blicket/serve.py: its path, name and last change, in ISO 8601. */
+/**
+ * What `dev/build` says of the Blick asked for: it waits, it builds, or it is done, and nothing was
+ * to do. A client that waits for the build waits until the Blick has left the jobs of `dev/info`.
+ */
+export type BuildAnswer = 'queued' | 'building' | 'done'
+
+/**
+ * A run folder to pick, `RunFolder` in src/blicket/serve.py: its path, name and last change, in
+ * ISO 8601; or, `project`, the project itself, whose run is computed from its code, without a
+ * time. `served` says that the run served was loaded from it.
+ */
 export interface RunFolder {
   path: string
   name: string
-  modified: string
+  modified: string | null
+  project: boolean
+  served: boolean
 }
 
 /**
  * What `dev/runs` says, `RunList` in src/blicket/serve.py: the globs of `runs` in `[tool.blicket]`
- * and the folders they match, newest first.
+ * and the folders they match, the project itself first, then newest first.
  */
 export interface RunList {
   patterns: string[]
@@ -39,9 +74,27 @@ export interface RunList {
 
 const isObject = (body: unknown): body is Record<string, unknown> => typeof body === 'object' && body !== null
 
+const isJob = (job: unknown): job is Job => isObject(job) && typeof job.id === 'string' && (job.state === 'building' || job.state === 'queued')
+  && typeof job.asked === 'boolean' && typeof job.since === 'string' && typeof job.seconds === 'number'
+
 /** Whether a body is what `dev/info` answers. */
 export function isInfo(body: unknown): body is DevInfo {
-  return isObject(body) && typeof body.root === 'string' && typeof body.dataset === 'boolean'
+  return isObject(body) && typeof body.root === 'string' && typeof body.dataset === 'boolean' && typeof body.session === 'string'
+    && typeof body.revision === 'number' && Array.isArray(body.jobs) && body.jobs.every(isJob)
+}
+
+/** Whether a body is what `dev/build` answers. */
+export function isBuildAnswer(body: unknown): body is { state: BuildAnswer } {
+  return isObject(body) && (body.state === 'queued' || body.state === 'building' || body.state === 'done')
+}
+
+/**
+ * The revision of a session that an answer of `blicket dev` is of, as its header
+ * `Blicket-Revision` names it: one, or none for an answer that names none.
+ */
+export function revisionsOf(response: Response): number[] {
+  const named = response.headers.get('Blicket-Revision')
+  return named === null ? [] : [Number(named)]
 }
 
 /** Whether an answer comes from `blicket dev`, which marks `manifest.json` with a header. */
@@ -57,7 +110,8 @@ export function isNoRun(response: Response): boolean {
   return response.status === 404 && isDevAnswer(response)
 }
 
-const isRunFolder = (run: unknown): run is RunFolder => isObject(run) && typeof run.path === 'string' && typeof run.name === 'string' && typeof run.modified === 'string'
+const isRunFolder = (run: unknown): run is RunFolder => isObject(run) && typeof run.path === 'string' && typeof run.name === 'string'
+  && (typeof run.modified === 'string' || run.modified === null) && typeof run.project === 'boolean' && typeof run.served === 'boolean'
 
 /** Whether a body is what `dev/runs` answers. */
 export function isRunList(body: unknown): body is RunList {
@@ -109,28 +163,36 @@ export async function bodyOf<T>(response: Response, is: (body: unknown) => body 
   return body
 }
 
-/** The entry `dev/query` answers to `request`. */
-export async function postQuery(request: BuilderRequest, signal?: AbortSignal): Promise<BlickEntry> {
-  const response = await devFetch('./dev/query', {
+/** The answer of `blicket dev` to a POST of `body` as JSON to `path`. */
+function postJson(path: string, body: unknown, signal?: AbortSignal): Promise<Response> {
+  return devFetch(`./${path}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(request),
+    body: JSON.stringify(body),
     signal,
   })
-  return bodyOf(response, isEntry, 'dev/query')
+}
+
+/** The entry `dev/query` answers to `request`. */
+export async function postQuery(request: BuilderRequest, signal?: AbortSignal): Promise<BlickEntry> {
+  return bodyOf(await postJson('dev/query', request, signal), isEntry, 'dev/query')
 }
 
 /**
- * Load the run of the folders `paths`, which `dev/runs` lists, as one run; its id once
- * `blicket dev` serves it. The answer comes when the loader, the build and the check are done.
+ * Load the run of the folders `paths`, which `dev/runs` lists, as one run, in place of the run
+ * served, if any; its id once `blicket dev` serves it. The answer comes when the loader is done
+ * and the baseline found, after a cheap Blick that builds is built.
  */
 export async function postRun(paths: string[]): Promise<string> {
-  const response = await devFetch('./dev/run', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ paths }),
-  })
-  return (await bodyOf(response, isLoaded, 'dev/run')).id
+  return (await bodyOf(await postJson('dev/run', { paths }), isLoaded, 'dev/run')).id
+}
+
+/**
+ * Ask `blicket dev` to build the Blick `id`, once more with `rebuild`; what it says of the Blick.
+ * The answer comes at once: the build runs on its own, and `dev/info` follows it.
+ */
+export async function postBuild(id: string, rebuild = false): Promise<BuildAnswer> {
+  return (await bodyOf(await postJson('dev/build', { id, rebuild }), isBuildAnswer, 'dev/build')).state
 }
 
 /** Why a request failed, as the page says it, and whether because the server did not answer. */

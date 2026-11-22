@@ -11,7 +11,6 @@ import socket
 import threading
 from collections.abc import Generator
 from contextlib import contextmanager
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,8 +21,20 @@ from typer.testing import CliRunner, Result
 
 from blicket import builder, cli, dev, serve, viewer
 from blicket.errors import BlicketError
+from blicket.jobs import OnDemandRun
 from blicket.query import Query
-from tests.support import DATASET, LOADER, VALUES, make_build_project, make_run, make_viewer
+from tests.support import (
+    CHEAP,
+    DATASET,
+    LOADER,
+    VALUES,
+    WITH_DATASET,
+    make_build_project,
+    make_run,
+    make_viewer,
+    on_demand_project,
+    push_whole,
+)
 
 YEARS = [2020, 2021, 2022]  # of VALUES
 
@@ -280,7 +291,8 @@ def dev_serving(tmp_path: Path, loader: str = LOADER + DATASET) -> Generator[ser
 
 @contextmanager
 def serving_session(started: dev.Session) -> Generator[serve.Server]:
-    """Serve the session ``started`` on a free port in a thread."""
+    """Serve the session ``started`` on a free port in a thread, its background not begun; at the
+    end, once the run it serves then, if its worker began, has nothing left to build."""
     server = serve.make_server(port=0)
     server.session = started
     thread = threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.05})
@@ -288,6 +300,8 @@ def serving_session(started: dev.Session) -> Generator[serve.Server]:
     try:
         yield server
     finally:
+        if started.worker._thread is not None:
+            started.worker.wait_idle(10)
         server.shutdown()
         server.server_close()
         thread.join()
@@ -340,40 +354,50 @@ def post(server: serve.Server, query: object, changed: dict[str, str] | None = N
 
 
 QUERY = {"quantities": ["values"], "plot": "line", "mapping": {"x": "year"}}
+# What dev/info says of the builds of a session that builds nothing yet.
+IDLE = {"revision": 0, "jobs": [], "stopped": None}
 
 
 def test_dev_serves_the_manifest_from_memory_with_the_dev_header(tmp_path: Path) -> None:
     with dev_serving(tmp_path) as server:
-        (server.directory / "manifest.json").write_text("{}")  # what is on disk is not served
+        assert server.directory == server.site  # the viewer's files, and no build directory
         response, body = fetch(server, "/manifest.json")
         assert (response.status, response.headers["Blicket-Dev"]) == (200, "1")
-        assert response.headers["Cache-Control"] == "no-cache"
+        assert (response.headers["Cache-Control"], response.headers["Blicket-Revision"]) == (
+            "no-cache",
+            "0",
+        )
         manifest = json.loads(body)
-        assert manifest["build"]["id"] == server.directory.name
+        assert manifest["build"]["id"] == the_session(server).id  # the session's, not a build's
         assert manifest["blicks"][0]["source"]["file"] == "blicks/a.py"  # relative to the root
-    with serving(server.directory) as plain:
+        assert manifest["blicks"][0]["status"] == "pending"
+        assert fetch(server, "/blicks/a/values.parquet")[0].status == 404
+    with serving(make_build(tmp_path / "build")) as plain:
         response, body = fetch(plain, "/manifest.json")
-        assert (body, response.headers["Blicket-Dev"]) == (b"{}", None)
+        assert (response.headers["Blicket-Dev"], response.headers["Blicket-Revision"]) == (
+            None,
+            None,
+        )
         assert fetch(plain, "/dev/info")[0].status == 404
 
 
-def test_each_request_reads_the_build_served_when_it_comes(tmp_path: Path) -> None:
+def test_each_request_reads_the_state_served_when_it_comes(tmp_path: Path) -> None:
     with dev_serving(tmp_path) as server:
-        other = make_build(tmp_path / "other")
-        (other / "only-here.txt").write_text("here")
         current = the_session(server)
         connection = http.client.HTTPConnection(*address(server))
         try:
-            connection.request("GET", "/only-here.txt")
-            first = connection.getresponse()
-            first.read()
-            was = current.serving
-            assert was is not None
-            moved = dev.Current(replace(was.served.build, path=other), was.served.compared)
-            current.serving = replace(was, served=moved)
-            connection.request("GET", "/only-here.txt")  # the same connection, kept alive
+            connection.request("GET", "/manifest.json")
+            first = json.loads(connection.getresponse().read())
+            current.begin()  # the background builds the one Blick
+            assert current.worker.wait_idle(10)
+            connection.request("GET", "/manifest.json")  # the same connection, kept alive
             second = connection.getresponse()
-            assert (first.status, second.status, second.read()) == (404, 200, b"here")
+            assert second.headers["Blicket-Revision"] == "1"
+            statuses = (
+                first["blicks"][0]["status"],
+                json.loads(second.read())["blicks"][0]["status"],
+            )
+            assert statuses == ("pending", "ok")
         finally:
             connection.close()
 
@@ -387,6 +411,8 @@ def test_dev_info_and_dataset(tmp_path: Path) -> None:
             "dataset": True,
             "message": None,
             "failed": False,
+            "session": the_session(server).id,
+            **IDLE,
         }
         response, body = fetch(server, "/dev/dataset")
         assert response.headers["Cache-Control"] == "no-cache"
@@ -591,6 +617,22 @@ def test_an_unread_body_is_never_read_as_a_request(
         assert received.count(b"\r\nConnection: close\r\n") == 1  # a static answer says so too
 
 
+@pytest.mark.parametrize("method", ["PUT", "DELETE", "PATCH"])
+def test_other_methods_on_the_dev_routes(tmp_path: Path, method: str) -> None:
+    with dev_serving(tmp_path) as server:
+        response, body = fetch(server, "/dev/build", method)
+        assert (response.status, response.headers["Allow"]) == (405, "POST")
+        assert json.loads(body) == {"message": f"{method} /dev/build"}
+        response, body = fetch(server, "/manifest.json", method)
+        assert (response.status, response.headers["Allow"]) == (405, "GET")
+        response, body = fetch(server, "/dev/nothing", method)
+        assert (response.status, json.loads(body)) == (
+            404,
+            {"message": f"no route {method} /dev/nothing"},
+        )
+        assert fetch(server, "/elsewhere", method)[0].status == 501
+
+
 def test_head_of_the_dev_routes(tmp_path: Path) -> None:
     with dev_serving(tmp_path) as server:
         response, body = fetch(server, "/dev/query", "HEAD")
@@ -655,15 +697,18 @@ def test_without_a_run_dev_serves_the_viewer_alone(tmp_path: Path) -> None:
     with picking(tmp_path) as server:
         assert fetch(server, "/")[1] == b"<html>viewer</html>"
         assert fetch(server, "/runs/a/values.txt")[0].status == 404  # nothing of the project
-        response, body = fetch(server, "/manifest.json")
-        assert (response.status, response.headers["Blicket-Dev"]) == (404, "1")
-        assert response.headers["Cache-Control"] == "no-cache"
-        assert json.loads(body) == NO_RUN
+        for path in ("/manifest.json", "/compare/index.json"):
+            response, body = fetch(server, path)
+            assert (response.status, response.headers["Blicket-Dev"]) == (404, "1")
+            assert response.headers["Cache-Control"] == "no-cache"
+            assert json.loads(body) == NO_RUN
         assert json.loads(fetch(server, "/dev/info")[1]) == {
             "root": str(tmp_path / "project"),
             "dataset": False,
             "message": "no run served yet",
             "failed": False,
+            "session": the_session(server).id,
+            **IDLE,
         }
         response, body = fetch(server, "/dev/dataset")
         assert (response.status, json.loads(body)) == (404, NO_RUN)
@@ -684,7 +729,13 @@ def test_dev_runs_lists_the_folders_runs_matches_newest_first(tmp_path: Path) ->
         assert json.loads(body) == {
             "patterns": ["runs/*"],
             "runs": [
-                {"path": run_path(server, name), "name": name, "modified": when[name]}
+                {
+                    "path": run_path(server, name),
+                    "name": name,
+                    "modified": when[name],
+                    "project": False,
+                    "served": False,
+                }
                 for name in ("bad", "b", "a")
             ],
         }
@@ -693,31 +744,52 @@ def test_dev_runs_lists_the_folders_runs_matches_newest_first(tmp_path: Path) ->
         assert names == ["c", "bad", "b", "a"]
 
 
-def test_dev_run_loads_the_run_picked_and_serves_its_build(
+def test_dev_run_loads_the_run_picked_and_serves_it(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     with picking(tmp_path) as server:
         assert fetch(server, "/manifest.json")[0].status == 404
+        before = the_session(server).id
         assert pick(server, "b") == (200, {"id": "b"})
+        loaded = the_session(server).serving
+        assert isinstance(loaded, OnDemandRun)
+        assert the_session(server).worker.wait_idle(10)  # the background, begun after the report
         lines = capsys.readouterr().out.splitlines()
         assert re.fullmatch(r"\d\d:\d\d:\d\d loading runs/b, picked in the viewer", lines[0])
-        assert any(line.startswith("run b · profile test · ") for line in lines)
-        assert lines[-1] == "builder: 1 quantity, 1 dimension"
+        assert lines[1] == f"project: {the_session(server).root}"
+        assert lines[2].startswith("run b · profile test · ")
+        assert lines[3] == "1 Blick, built in the background · 1 warning"  # not in git
+        assert "builder: 1 quantity, 1 dimension" in lines
+        report = next(i for i, line in enumerate(lines) if line.startswith("builder: ")) + 1
+        assert re.fullmatch(r"\d\d:\d\d:\d\d 1 Blick: 1 built · 1 warning", lines[report])
         response, body = fetch(server, "/manifest.json")
         assert (response.status, response.headers["Blicket-Dev"]) == (200, "1")
         run = json.loads(body)["run"]
         assert (run["id"], run["paths"]) == ("b", ["runs/b"])
-        loaded = the_session(server).serving
-        assert loaded is not None
+        assert info(server)["session"] == the_session(server).id != before
         assert loaded.prepared.shown == ("runs/b",)  # the session keeps what the run needed
         assert fetch(server, "/dev/dataset")[0].status == 200
         assert post(server, QUERY)[0] == 200
-        assert pick(server, "a") == (
-            409,
-            {
-                "message": "a run is served already; reload the viewer, or restart blicket dev to "
-                "pick another"
-            },
+
+
+def test_dev_run_loads_another_run_in_place_of_the_one_served(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with picking(tmp_path) as server:
+        assert pick(server, "b") == (200, {"id": "b"})
+        first = the_session(server).serving
+        assert first is not None
+        assert the_session(server).worker.wait_idle(10)
+        built = json.loads(fetch(server, "/manifest.json")[1])["blicks"][0]
+        served = info(server)["session"]
+        assert pick(server, "a") == (200, {"id": "a"})
+        assert info(server)["session"] != served  # the viewer starts afresh
+        manifest = json.loads(fetch(server, "/manifest.json")[1])
+        assert manifest["run"]["id"] == "a"
+        assert manifest["build"]["id"] == info(server)["session"]
+        assert fetch(server, f"/{built['data']}")[0].status == 404  # the run before is dropped
+        assert re.search(
+            r"\d\d:\d\d:\d\d loading runs/a, picked in the viewer", capsys.readouterr().out
         )
 
 
@@ -757,6 +829,12 @@ def test_several_runs_picked_are_one_run_for_the_loader(tmp_path: Path) -> None:
     [
         ({"paths": []}, {}, 400, "no run path given; pick a run"),
         ({"paths": ["/"]}, {}, 400, "/ is not a folder that runs in [tool.blicket] matches"),
+        (
+            {"paths": ["runs/b"]},
+            {},
+            400,
+            "runs/b is relative; send the absolute paths that dev/runs lists",
+        ),
         ({"paths": "runs/a"}, {}, 400, "not a run to load: paths: Input should be a valid array"),
         ({"paths": [1]}, {}, 400, "not a run to load: paths.0: Input should be a valid string"),
         ({}, {}, 400, "not a run to load: paths: Field required"),
@@ -827,3 +905,372 @@ def test_run_needs_a_directory_or_a_session() -> None:
 def test_own_host(monkeypatch: pytest.MonkeyPatch, bound: str, host: str, own: bool) -> None:
     monkeypatch.setattr(socket, "gethostname", lambda: "mybox")
     assert serve._own_host(host, (bound, 8765)) is own
+
+
+# ---------------------------------------------------------------------------------------------
+# blicket dev on the on-demand project: dev/build, and everything answered from memory
+
+TRADE, PRODUCTION, SHARES = "steel/trade", "steel/production", "steel/shares"
+
+
+@contextmanager
+def on_demand_serving(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, baseline: bool = False
+) -> Generator[serve.Server]:
+    """Serve a session on the run b of a copy of the on-demand project, as the working
+    directory, compared with a build of run a pushed before when ``baseline``."""
+    root = on_demand_project(tmp_path)
+    monkeypatch.chdir(root)
+    if baseline:
+        push_whole()
+    with serving_session(dev.start(root, [Path("runs/b")])[0]) as server:
+        yield server
+
+
+def on_demand(server: serve.Server) -> OnDemandRun:
+    found = the_session(server).serving
+    assert isinstance(found, OnDemandRun)
+    return found
+
+
+def post_build(server: serve.Server, body: object, changed: dict[str, str] | None = None) -> Any:
+    """POST ``body`` to ``dev/build`` as the viewer's page does, with the headers ``changed``
+    (``""`` drops one); return the status and the JSON."""
+    data = json.dumps(body).encode()
+    sent = {**viewer_headers(server, data), **(changed or {})}
+    return request(server, "/dev/build", data, {k: v for k, v in sent.items() if v})
+
+
+def info(server: serve.Server) -> Any:
+    return json.loads(fetch(server, "/dev/info")[1])
+
+
+def test_dev_build_builds_a_blick_a_page_asks_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with on_demand_serving(tmp_path, monkeypatch) as server:
+        said = info(server)
+        assert (said["revision"], said["jobs"]) == (0, [])
+        assert said["session"] == the_session(server).id
+        gate = on_demand(server).loaded.run.hold("trade")
+        building = {"state": "building"}
+        assert post_build(server, {"id": TRADE}) == (200, building)
+        assert post_build(server, {"id": PRODUCTION}) == (200, {"state": "queued"})
+        rebuild = {"id": TRADE, "rebuild": True}
+        assert post_build(server, rebuild) == (200, {"state": "queued"})
+        jobs = info(server)["jobs"]
+        assert [(job["id"], job["state"], job["asked"]) for job in jobs] == [
+            (TRADE, "building", True),
+            (PRODUCTION, "queued", True),
+            (TRADE, "queued", True),
+        ]  # the background, steel/shares, is not listed
+        assert re.fullmatch(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(\.\d+)?Z", jobs[0]["since"])
+        assert all(job["seconds"] >= 0 for job in jobs)
+        gate.open()
+        assert the_session(server).worker.wait_idle(10)
+        assert (info(server)["revision"], info(server)["jobs"]) == (4, [])
+        assert post_build(server, {"id": TRADE}) == (200, {"state": "done"})
+        response, _ = fetch(server, "/manifest.json")
+        assert response.headers["Blicket-Revision"] == "4"
+
+
+def test_dev_info_lists_a_build_of_the_background_as_not_asked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(CHEAP, "1")
+    with on_demand_serving(tmp_path, monkeypatch) as server:
+        gate = on_demand(server).loaded.run.hold("production")
+        the_session(server).begin()
+        assert gate.reached.wait(10)
+        jobs = info(server)["jobs"]
+        assert [(job["id"], job["state"], job["asked"]) for job in jobs] == [
+            (PRODUCTION, "building", False)  # and the rest of the background is not listed
+        ]
+        assert post_build(server, {"id": SHARES}) == (200, {"state": "queued"})  # moved first
+        assert [(job["id"], job["asked"]) for job in info(server)["jobs"]] == [
+            (PRODUCTION, False),
+            (SHARES, True),
+        ]
+        gate.open()
+
+
+SHAPE = '; send {"id": "<blick id>", "rebuild": false}'
+
+
+@pytest.mark.parametrize(
+    ("body", "headers", "status", "message"),
+    [
+        (
+            {"id": "steel/none"},
+            {},
+            404,
+            "no Blick 'steel/none' to build: the ids are those of the Blicks in manifest.json",
+        ),
+        ({"id": "plastics/invalid"}, {}, 404, "no Blick 'plastics/invalid' to build: its defin"),
+        ({"id": 1}, {}, 400, f"not a Blick to build: id: Input should be a valid string{SHAPE}"),
+        ({}, {}, 400, f"not a Blick to build: id: Field required{SHAPE}"),
+        ({"id": TRADE, "now": True}, {}, 400, "not a Blick to build: now: Extra inputs"),
+        ({"id": TRADE, "rebuild": "yes"}, {}, 400, "not a Blick to build: rebuild: Input should"),
+        ({"id": TRADE, "rebuild": 1}, {}, 400, "not a Blick to build: rebuild: Input should"),
+        ({"id": TRADE, "rebuild": "true"}, {}, 400, "not a Blick to build: rebuild: Input should"),
+        ({"id": TRADE}, {"Sec-Fetch-Site": "cross-site"}, 403, "a request comes from the viewer"),
+        ({"id": TRADE}, {"Host": "attacker.example:80"}, 403, "the Host header names another"),
+    ],
+)
+def test_dev_build_refuses(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    body: object,
+    headers: dict[str, str],
+    status: int,
+    message: str,
+) -> None:
+    with on_demand_serving(tmp_path, monkeypatch) as server:
+        answered, said = post_build(server, body, headers)
+        assert (answered, said["message"][: len(message)]) == (status, message)
+        assert the_session(server).worker.status().jobs == ()
+
+
+def test_dev_build_answers_409_once_the_worker_stopped_and_404_without_a_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with dev_serving(tmp_path) as server:
+        run = the_session(server).serving
+        assert run is not None
+
+        def broken(built: object) -> None:
+            raise RuntimeError("a bug")
+
+        monkeypatch.setattr(run, "publish", broken)
+        assert post_build(server, {"id": "a/values"}) == (200, {"state": "building"})
+        assert the_session(server).worker.wait_idle(10)
+        assert info(server)["stopped"] == "RuntimeError: a bug"
+        assert post_build(server, {"id": "a/values", "rebuild": True}) == (
+            409,
+            {
+                "message": "the worker that builds the Blicks stopped (RuntimeError: a bug); "
+                "restart blicket dev"
+            },
+        )
+    (tmp_path / "picking").mkdir()
+    with picking(tmp_path / "picking") as server:
+        assert post_build(server, {"id": "a/values"}) == (
+            404,
+            {"message": "no run served yet; pick one in the viewer"},
+        )
+
+
+def test_a_session_answers_from_memory_and_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with on_demand_serving(tmp_path, monkeypatch, baseline=True) as server:
+        written = sorted(p.name for p in Path(".blicket/build").iterdir())  # the baseline's
+        response, body = fetch(server, "/manifest.json")
+        assert (response.status, response.headers["Blicket-Dev"]) == (200, "1")
+        statuses = {e["id"]: e["status"] for e in json.loads(body)["blicks"]}
+        assert statuses[TRADE] == "pending"
+        response, body = fetch(server, "/compare/index.json")
+        assert response.headers.get_all("Cache-Control") == ["no-cache"]
+        (baseline,) = json.loads(body)
+        path = f"/compare/{baseline}/comparison.json"
+        names = [b["name"] for b in json.loads(fetch(server, path)[1])["blicks"]]
+        assert names == ["plastics/invalid"]  # the pending Blicks are not in it
+        assert post_build(server, {"id": TRADE})[0] == 200
+        assert the_session(server).worker.wait_idle(10)
+        response, body = fetch(server, path)
+        assert response.headers.get_all("Cache-Control") == ["no-cache"]
+        (trade,) = [b for b in json.loads(body)["blicks"] if b["name"] == TRADE]
+        assert trade["change"]["flags"] == ["value"]
+        blicks = json.loads(fetch(server, "/manifest.json")[1])["blicks"]
+        entry = next(e for e in blicks if e["id"] == TRADE)
+        served = [(entry["data"], entry["hash"]), (trade["baseline_data"], trade["baseline_hash"])]
+        for table, digest in served:
+            response, data = fetch(server, f"/{table}?{digest}")
+            assert response.status == 200
+            assert response.headers["Cache-Control"] == "max-age=31536000, immutable"
+            assert f"parquet-sha256:{hashlib.sha256(data).hexdigest()}" == digest
+        assert fetch(server, f"/compare/{baseline}/blicks/steel/trade.parquet")[0].status == 404
+        assert fetch(server, "/compare/0123456789abcdef/comparison.json")[0].status == 404
+        assert (  # steel/trade, then steel/shares in the background
+            fetch(server, f"/compare/{baseline}/comparison.json")[0].headers["Blicket-Revision"]
+            == "2"
+        )
+        assert sorted(p.name for p in Path(".blicket/build").iterdir()) == written
+        response, body = fetch(server, f"/dev/tables/{'0' * 64}.parquet")
+        assert (response.status, json.loads(body)) == (
+            404,
+            {
+                "message": "no table of this hash: it was never built, or is no longer kept; read "
+                "manifest.json again, or run the builder's query again"
+            },
+        )
+
+
+TRADE_QUERY = {"quantities": ["trade"], "plot": "line", "mapping": {"x": "year"}}
+
+
+def test_dev_query_answers_409_while_an_expensive_blick_builds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setenv(WITH_DATASET, "1")
+    with on_demand_serving(tmp_path, monkeypatch) as server:
+        gate = on_demand(server).loaded.run.hold("production")
+        assert post_build(server, {"id": PRODUCTION}) == (200, {"state": "building"})
+        assert gate.reached.wait(10)
+        assert post(server, TRADE_QUERY) == (
+            409,
+            {"message": "an expensive Blick is building; run the query again when it is built"},
+        )
+        gate.open()
+        assert the_session(server).worker.wait_idle(10)
+        assert post(server, TRADE_QUERY)[0] == 200
+    assert "/dev/query" not in capsys.readouterr().err  # an expected answer, not logged
+
+
+def test_dev_query_waits_for_a_cheap_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(WITH_DATASET, "1")
+    monkeypatch.setenv(CHEAP, "1")
+    with on_demand_serving(tmp_path, monkeypatch) as server:
+        gate = on_demand(server).loaded.run.hold("production")
+        the_session(server).begin()
+        assert gate.reached.wait(10)
+        answers: list[Any] = []
+        asking = threading.Thread(target=lambda: answers.append(post(server, TRADE_QUERY)))
+        asking.start()
+        asking.join(0.2)
+        assert answers == []  # it waits for the cheap build
+        gate.open()
+        asking.join(10)
+        assert answers[0][0] == 200
+        assert answers[0][1]["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------------------------
+# The run picker with the project itself, and a load while a run is served
+
+
+def test_dev_runs_lists_the_project_itself_first(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = on_demand_project(tmp_path)
+    monkeypatch.chdir(root)
+    with serving_session(dev.start(root, [])[0]) as server:
+        listed = json.loads(fetch(server, "/dev/runs")[1])
+        assert listed["patterns"] == [".", "runs/*"]
+        assert listed["runs"][0] == {
+            "path": str(root),
+            "name": "This project",
+            "modified": None,
+            "project": True,
+            "served": False,
+        }
+        assert {(run["name"], run["project"]) for run in listed["runs"][1:]} == {
+            ("a", False),
+            ("b", False),
+        }
+        assert post_run(server, {"paths": [str(root)]}) == (200, {"id": "checkout"})
+        manifest = json.loads(fetch(server, "/manifest.json")[1])
+        assert manifest["run"]["paths"] == ["."]
+        listed = json.loads(fetch(server, "/dev/runs")[1])["runs"]
+        assert (listed[0]["name"], listed[0]["served"]) == ("This project", True)
+        assert not any(run["served"] for run in listed[1:])
+
+
+def test_dev_run_answers_409_once_the_worker_stopped(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with on_demand_serving(tmp_path, monkeypatch) as server:
+        run = on_demand(server)
+
+        def broken(built: object) -> None:
+            raise RuntimeError("a bug")
+
+        monkeypatch.setattr(run, "publish", broken)
+        assert post_build(server, {"id": TRADE}) == (200, {"state": "building"})
+        assert the_session(server).worker.wait_idle(10)
+        assert post_run(server, {"paths": [str(Path.cwd() / "runs" / "a")]}) == (
+            409,
+            {
+                "message": "the worker that builds the Blicks stopped (RuntimeError: a bug); "
+                "restart blicket dev"
+            },
+        )
+
+
+def test_dev_build_answers_409_while_a_run_loads(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with on_demand_serving(tmp_path, monkeypatch) as server:
+        entered, release = threading.Event(), threading.Event()
+        load = builder.load
+
+        def slow(prepared: builder.Prepared) -> builder.LoadedRun:
+            entered.set()
+            release.wait(10)
+            return load(prepared)
+
+        monkeypatch.setattr(builder, "load", slow)
+        a = str(Path.cwd() / "runs" / "a")
+        loading = threading.Thread(target=lambda: post_run(server, {"paths": [a]}))
+        loading.start()
+        try:
+            assert entered.wait(10)
+            assert post_build(server, {"id": TRADE}) == (
+                409,
+                {"message": "a run is loading; ask for the Blick again once it is loaded"},
+            )
+        finally:
+            release.set()
+            loading.join(10)
+
+
+def test_dev_run_waits_for_a_cheap_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(CHEAP, "1")
+    with on_demand_serving(tmp_path, monkeypatch) as server:
+        gate = on_demand(server).loaded.run.hold("production")
+        the_session(server).begin()
+        assert gate.reached.wait(10)
+        answers: list[Any] = []
+        a = str(Path.cwd() / "runs" / "a")
+        loading = threading.Thread(target=lambda: answers.append(post_run(server, {"paths": [a]})))
+        loading.start()
+        loading.join(0.2)
+        assert answers == []  # it waits for the cheap build
+        gate.open()
+        loading.join(10)
+        assert answers == [(200, {"id": "a"})]
+
+
+def test_dev_run_is_refused_while_an_expensive_blick_builds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with on_demand_serving(tmp_path, monkeypatch) as server:
+        gate = on_demand(server).loaded.run.hold("production")
+        served = info(server)["session"]
+        assert post_build(server, {"id": PRODUCTION}) == (200, {"state": "building"})
+        assert gate.reached.wait(10)
+        status, body = post_run(server, {"paths": [str(Path.cwd() / "runs" / "a")]})
+        assert status == 409
+        assert re.fullmatch(
+            r"Steel production is building \(0:0\d\); load the run once it is built",
+            body["message"],
+        )
+        assert info(server)["session"] == served
+        gate.open()
+    assert "/dev/run" not in capsys.readouterr().err  # an expected answer, not logged
+
+
+def test_a_run_that_cannot_be_loaded_leaves_the_run_served(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    with on_demand_serving(tmp_path, monkeypatch) as server:
+        (Path.cwd() / "runs" / "broken").mkdir()  # without values.txt: the loader raises
+        served = info(server)["session"]
+        status, body = post_run(server, {"paths": [str(Path.cwd() / "runs" / "broken")]})
+        assert status == 422
+        assert body["message"].startswith("loader blicketconf:load_run raised FileNotFoundError")
+        assert info(server)["session"] == served
+        assert json.loads(fetch(server, "/manifest.json")[1])["run"]["id"] == "b"
+        assert post_build(server, {"id": TRADE}) == (200, {"state": "building"})  # it goes on
+        assert the_session(server).worker.wait_idle(10)
+        assert "error: cannot load runs/broken: " in capsys.readouterr().err

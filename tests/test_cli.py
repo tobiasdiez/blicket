@@ -240,6 +240,24 @@ def test_help_and_version() -> None:
     assert "Without RUN_PATH, serve a run picker:" in dev.stdout
 
 
+def test_the_help_of_dev_says_how_it_builds_the_blicks() -> None:
+    result = runner.invoke(cli.app, ["dev", "--help"], terminal_width=200)
+    text = " ".join(re.sub("[│╭╮╰╯─]", " ", result.stdout).split())
+    assert "Serve a run given or picked in the viewer, building its Blicks on demand" in text
+    assert (
+        "a cheap Blick in the background and again whenever its page is opened, an expensive "
+        "one (bk.blick(expensive=True), or every Blick of a run whose loader says expensive=True "
+        "in its RunInfo) when its page is opened and on Rebuild"
+    ) in text
+    assert "Not used: blicket dev writes no build directory; blicket build and check do." in text
+    assert (
+        'a line on stderr says that it starts to build ("12:01:05 building cement/trade"), and a '
+        "line on stdout how it ended; once the background is done, the counts, problems and "
+        "comparison of check's report follow"
+    ) in text
+    assert 'and the project itself first when runs has "."' in text
+
+
 def usage_error(*args: str) -> str:
     """What ``blicket`` says on a usage error, wide enough that click's box keeps it on one
     line: typer sizes the box from ``COLUMNS``, which ``terminal_width`` does not set. Without
@@ -363,6 +381,8 @@ def test_a_rebuild_prints_its_own_load_time(
     lines = invoke("build", "runs/a").stdout.splitlines()
     assert lines[0].endswith("· loaded in 2.5 s")
     assert lines[2].endswith("(built before, left as it was)")
+    monkeypatch.setattr(loader, "load", lambda *args: (*load(*args)[:2], 75_000.0))
+    assert invoke("build", "runs/a").stdout.splitlines()[0].endswith("· loaded in 75.0 s")
     assert manifest.read(Path(".blicket/build", build_id)).build.loader_ms == stored
 
 

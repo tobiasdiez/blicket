@@ -9,15 +9,17 @@ import jsonschema
 import polars as pl
 import pytest
 from pydantic import ValidationError
+from typer.testing import CliRunner
 
 import blicket as bk
-from blicket import loader, manifest, viewer
+from blicket import cli, loader, manifest, viewer
 from blicket.builder import Build, NothingToBuild
 from blicket.errors import BlicketError
 from blicket.manifest import Manifest
 from blicket.model import PlotDefinition
 from blicket.schema import Control, Dimension, Measure, TableSchema
 from tests.support import (
+    CHEAP,
     SKIPPING_VALUES,
     VALUES,
     commit_all,
@@ -25,6 +27,7 @@ from tests.support import (
     line_of,
     make_build_project,
     make_run,
+    on_demand_project,
     one_blick,
 )
 
@@ -237,6 +240,36 @@ def test_the_status_is_skipped_with_a_reason_else_error_with_an_error_else_ok() 
 def test_a_skipped_blick_has_no_table_controls_or_problems(fields: dict[str, Any]) -> None:
     with pytest.raises(ValidationError, match="a skipped Blick has no table, controls or problems"):
         bk.BlickEntry(id="a/x", name="a/x", group="a", skipped="no trade", **fields)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"data": "blicks/a/x.parquet"},
+        {"rows": 0},
+        {"controls": (Control(dimension="year", kind="filter", default=None),)},
+        {"problems": (ERROR,)},
+        {"skipped": "no trade"},
+    ],
+    ids=["data", "rows", "controls", "error", "skipped"],
+)
+def test_a_pending_blick_has_no_table_controls_problems_or_reason(fields: dict[str, Any]) -> None:
+    with pytest.raises(ValidationError, match="a pending Blick has no table, controls, problems"):
+        bk.BlickEntry(id="a/x", name="a/x", group="a", pending=True, **fields)
+    entry = bk.BlickEntry(id="a/x", name="a/x", group="a", pending=True)
+    assert (entry.status, entry.model_dump()["pending"]) == ("pending", True)
+    assert "pending" not in bk.BlickEntry(id="a/x", name="a/x", group="a").model_dump()
+
+
+def test_only_a_build_gives_an_entry_its_time(project: Path) -> None:
+    """The viewer tells a Blick whose definition is invalid, which no build changes, from one
+    whose build failed by the time a build gives an entry: an entry of a definition has none."""
+    definitions = {"invalid_definition", "duplicate_id", "alias_collision"}
+    built = bk.build(project, ["runs/a"]).manifest
+    assert any(entry.timing_ms is None for entry in built.blicks)
+    for entry in built.blicks:
+        invalid = any(problem.kind in definitions for problem in entry.problems)
+        assert (entry.timing_ms is None) == invalid, entry.name
 
 
 def test_failed_definitions_are_entries(project: Path) -> None:
@@ -466,6 +499,32 @@ def test_manifest_holds_no_absolute_path(project: Path, tmp_path: Path) -> None:
         for problem in entry["problems"]:
             problem["traceback"] = None  # tracebacks are text, which the rule does not cover
     assert str(tmp_path) not in json.dumps(data)
+
+
+def test_a_manifest_records_nothing_of_a_run_of_expensive_blicks(project: Path) -> None:
+    run = {"id": "a", "fingerprint": "f", "paths": ["runs/a"]}
+    assert "expensive" not in json.loads(manifest.Run.model_validate(run).model_dump_json())
+    assert "expensive" not in manifest.Run.model_json_schema()["properties"]
+    with pytest.raises(ValidationError, match="expensive"):
+        manifest.Run.model_validate({**run, "expensive": True})
+    info = bk.RunInfo(id="a", fingerprint="f", expensive=True)
+    copied = info.model_copy(update={"id": "b"})
+    assert (copied.expensive, "expensive" in info.model_dump()) == (True, False)
+    assert bk.RunInfo(id="a", fingerprint="f").expensive is False  # the default: cheap Blicks
+    for loose in ("yes", 1):
+        with pytest.raises(ValidationError, match="expensive"):
+            bk.RunInfo(id="a", fingerprint="f", expensive=loose)  # ty: ignore[invalid-argument-type]
+
+
+def test_a_manifest_entry_says_expensive_only_when_it_is(project: Path) -> None:
+    built = bk.build(project, ["runs/a"])
+    assert all(not entry.expensive for entry in built.manifest.blicks)
+    text = (built.path / "manifest.json").read_text()
+    assert '"expensive"' not in text
+    entry = built.manifest.blicks[0].model_copy(update={"expensive": True})
+    assert json.loads(entry.model_dump_json())["expensive"] is True
+    schema = Manifest.model_json_schema(mode="serialization")
+    assert "expensive" in schema["$defs"]["BlickEntry"]["properties"]
 
 
 def test_manifest_validates_against_its_schema_and_round_trips(project: Path) -> None:
@@ -719,3 +778,42 @@ def test_the_scales_are_part_of_the_build_id(tmp_path: Path) -> None:
     stocks = root / "blicks" / "stocks.py"
     stocks.write_text(stocks.read_text().replace(', x_scale="log"', ""))
     assert bk.build(root, [run]).manifest.build.id != first
+
+
+def test_a_run_of_expensive_blicks_is_built_whole_as_the_same_run_with_cheap_ones(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = on_demand_project(tmp_path)
+    monkeypatch.chdir(root)
+    expensive = bk.build(root, ["runs/b"])
+    assert {e.id: e.status for e in expensive.manifest.blicks} == {
+        "plastics/validation": "skipped",
+        "plastics/invalid": "error",
+        "steel/production": "ok",
+        "steel/trade": "ok",
+        "steel/scrap": "error",
+        "steel/shares": "ok",
+    }
+    text = (expensive.path / "manifest.json").read_text()
+    assert '"expensive"' not in text
+    assert '"pending"' not in text
+    monkeypatch.setenv(CHEAP, "1")
+    cheap = bk.build(root, ["runs/b"])
+    assert (cheap.path, cheap.existed) == (expensive.path, True)  # the same id
+
+    def content(built: Build) -> Any:
+        """The manifest without its times."""
+        data = json.loads(built.manifest.model_dump_json(exclude={"created_at"}))
+        data["build"].pop("loader_ms")
+        for entry in data["blicks"]:
+            entry.pop("timing_ms")
+        return data
+
+    assert content(expensive) == content(cheap)
+    runner = CliRunner()
+    monkeypatch.delenv(CHEAP)
+    for command in ("build", "check"):
+        result = runner.invoke(cli.app, [command, "runs/b"])
+        assert result.exit_code == 2  # steel/scrap fails
+        assert result.stdout.splitlines()[1] == "6 Blicks: 3 built · 1 skipped · 2 errors"
+        assert result.stdout.splitlines()[2].startswith(f"build {expensive.path.name} → ")

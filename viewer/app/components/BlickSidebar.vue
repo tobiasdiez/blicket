@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import type { NavigationMenuItem } from '@nuxt/ui'
 import type { Badge } from '~/lib/comparison'
+import { pendingCount, type BuildMark } from '~/lib/jobs'
 import { byStatus } from '~/lib/manifest'
 import { changedCount, initiallyOpen, noMatch, sidebarGroups } from '~/lib/sidebar'
 
@@ -9,6 +10,7 @@ const { manifest, dev } = useManifest()
 const { blicks, loading } = useComparison()
 const { pinned } = usePins()
 const { open, closeDrawer } = useSidebar()
+const { marks, lost } = useJobs()
 const current = useBlickId()
 
 // The search, the filter and the groups left open live as long as the sidebar, which is mounted
@@ -24,12 +26,13 @@ const opened = ref<string[]>([])
 const filtered = ref<string[]>([])
 
 const pinnedNames = computed(() => new Set(pinned.value.map(entry => entry.name)))
-const groups = computed(() => (manifest.value ? sidebarGroups(manifest.value, blicks.value, pinnedNames.value, search.value, changedOnly.value) : []))
+const groups = computed(() => (manifest.value ? sidebarGroups(manifest.value, blicks.value, pinnedNames.value, search.value, changedOnly.value, marks.value) : []))
 const changed = computed(() => (manifest.value ? changedCount(manifest.value, blicks.value) : 0))
 const filtering = computed(() => search.value.trim() !== '' || changedOnly.value)
 const total = computed(() => manifest.value?.blicks.length ?? 0)
 const matching = computed(() => groups.value.reduce((sum, group) => sum + group.entries.length, 0))
 const statuses = computed(() => byStatus(manifest.value?.blicks ?? []))
+const notBuilt = computed(() => pendingCount(manifest.value?.blicks ?? []))
 
 // Without a flagged Blick the toggle is gone, and so is its filter.
 watch(changed, (count) => {
@@ -56,6 +59,12 @@ interface BlickItem extends NavigationMenuItem {
   flag: Badge | null
   /** A Blick skipped for the run that no comparison flags: its label is in italics. */
   muted: boolean
+  /** A Blick of a session not built yet: its label is muted, unless its page is shown. */
+  pending: boolean
+  /** Whether the Blick's page is the one shown. */
+  current: boolean
+  /** Whether that Blick builds, with a spinner, or waits to. */
+  build: BuildMark | null
   pinned: boolean
 }
 
@@ -69,6 +78,9 @@ const items = computed<NavigationMenuItem[]>(() => groups.value.map(group => ({
     slot: 'blick',
     flag: shown.badge,
     muted: shown.muted,
+    pending: shown.pending,
+    current: shown.entry.id === current.value,
+    build: shown.build,
     pinned: shown.pinned,
   })),
 })))
@@ -170,9 +182,12 @@ function focusOnOpen(event: Event) {
         }"
       >
         <template #blick-label="{ item }: { item: BlickItem }">
-          <span :class="{ italic: item.muted }">{{ item.label }}</span><span v-if="item.muted" class="sr-only"> (skipped)</span>
+          <span :class="{ 'italic': item.muted, 'text-muted': item.pending && !item.current }">{{ item.label }}</span><span v-if="item.muted" class="sr-only"> (skipped)</span><span v-else-if="item.build" class="sr-only"> ({{ item.build }})</span><span v-else-if="item.pending" class="sr-only"> (not built yet)</span>
         </template>
         <template #blick-trailing="{ item }: { item: BlickItem }">
+          <UIcon v-if="item.build === 'building'" name="i-lucide-loader-circle" class="size-4 shrink-0 text-muted" :class="{ 'animate-spin': !lost }" aria-hidden="true" />
+          <UIcon v-else-if="item.build === 'queued'" name="i-lucide-clock" class="size-4 shrink-0 text-muted" aria-hidden="true" />
+          <UIcon v-else-if="item.pending" name="i-lucide-circle-dashed" class="size-3.5 shrink-0 text-muted" aria-hidden="true" />
           <FlagBadge v-if="item.flag" :badge="item.flag" size="sm" inline />
           <PinMark v-if="item.pinned" />
         </template>
@@ -185,7 +200,7 @@ function focusOnOpen(event: Event) {
 
     <template #footer>
       <p v-if="manifest">
-        <template v-if="filtering">{{ matching }} of </template>{{ total }} Blicks<span v-if="statuses.error.length"> · {{ statuses.error.length }}&nbsp;with&nbsp;errors</span><span v-if="statuses.skipped.length"> · {{ statuses.skipped.length }}&nbsp;skipped</span><span v-if="manifest.build.incomplete"> · incomplete, a module failed to import</span>
+        <template v-if="filtering">{{ matching }} of </template>{{ total }} Blicks<span v-if="statuses.error.length"> · {{ statuses.error.length }}&nbsp;with&nbsp;errors</span><span v-if="statuses.skipped.length"> · {{ statuses.skipped.length }}&nbsp;skipped</span><span v-if="notBuilt"> · {{ notBuilt }}</span><span v-if="manifest.build.incomplete"> · incomplete, a module failed to import</span>
       </p>
       <UButton v-if="dev" to="/builder" icon="i-lucide-wand-sparkles" label="Build a Blick" color="neutral" variant="outline" size="sm" />
     </template>

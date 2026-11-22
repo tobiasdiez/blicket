@@ -7,7 +7,8 @@ stdlib server, Nuxt's dev proxy and the inotify watch count. Second task of mile
 [m2-1-blick-builder.md](m2-1-blick-builder.md), which brings `blicket dev` (a check without
 `--push`, then the server with the run in memory and the dev endpoints) and the dev marker. Where
 this plan changes the architecture, it says so; the architecture gets the amendments when the task
-lands.
+lands. [on-demand-blicks.md](on-demand-blicks.md), planned since, changes it in the places that
+"Changed by on-demand Blicks" lists.
 
 ## Goal
 
@@ -308,6 +309,55 @@ comparison); reloading model code in place; reloading when a non-Python file a t
 changes; server-sent events; pushing dev builds; the overview's revamp, the plot type chips, the
 header's "Blick code" label and the "World" panel from the backlog; colours per dimension value;
 end-to-end browser tests; scatter and table (M2.3).
+
+## Changed by on-demand Blicks (2026-11-16)
+
+[on-demand-blicks.md](on-demand-blicks.md), planned before this task, changes it in these places.
+There a Blick is cheap or expensive, every session of `blicket dev` builds on demand (the cheap
+Blicks in the background and again at each visit, the expensive ones when opened and on
+`Rebuild`), and the run picker offers the project itself, a model checkout, when `runs` lists
+`.`, and switches runs while one is served. A run change is thereby one of two things: the
+checkout changing under the session, or a finished run in a folder written again.
+
+- **A change never throws away what the session built** (decided by Tobias, 2026-11-15). Flow 2's
+  restart on a run change and flow 1's rebuild of every Blick would lose the expensive Blicks
+  built so far, minutes each. Instead the session keeps every table, says what changed (`the run
+  changed at 12:04`, in the terminal and in the dev indicator), marks the expensive Blicks built
+  before the change (`Built before the change at 12:04`), which keep their chart and offer
+  `Rebuild`, and queues the cheap ones in the background again.
+- **What `Rebuild` needs depends on the run.** On a checkout, the run path being the project
+  root, the run object computes from its source, so a rebuild on the same object sees the change.
+  A produced run was read when it was loaded (remind-mfa unpickles `model.pickle`), so the offer
+  there is "Reload run": the restart, now asked for rather than automatic, after which the cheap
+  Blicks build again and the expensive ones wait to be opened.
+- **A code change under the project root is code, also when the run path is the project root.**
+  "A code change" leaves out paths under a run path, which for `blicket dev` on a checkout is
+  every path; the rule applies only to a run path that does not contain the project root. The run
+  poller leaves out hidden folders and what the session's own builds write into the run path,
+  which would otherwise mark every other Blick after each build.
+- **A code reload is a job of the session's worker**, which the on-demand session already has: one
+  daemon thread builds the Blicks one at a time (the cheap ones a page asked for, then the
+  expensive ones a page asked for, then the background) and holds the session's lock (`RunLock`,
+  which also makes the builder's queries wait for a cheap build and refuses them during an
+  expensive one) while project code runs. A rediscovery cannot run beside a transformation, so a
+  code reload waits for the build running, minutes behind an expensive one, and the indicator says
+  so (`reload waiting for Cement trade`). After it, the cheap Blicks build again in the background
+  and the expensive ones built before are marked, as for a run change.
+- **The mutation signal stays quiet for expensive Blicks and on a checkout**, whose tables change
+  between two builds when the model code changes, which the watcher does not see.
+- **`blicket dev` makes no builds**, where this plan and the architecture say that each dev
+  rebuild is a build with an id: no directory to switch to or remove, nothing to push; the
+  session's manifest carries an id that names the session. `dev/info` is the one polling channel.
+  It has `session`, which a restart changes; `revision`, which rises whenever the manifest or the
+  comparison changed; `jobs`, the Blick building and the Blicks a page asked for, each with its
+  state, `asked`, `since` and `seconds`; and `stopped`, why the session's worker stopped, which
+  only a bug makes it do. This plan's `status`, `detail` and `at` come beside them: `stopped` is
+  not folded into them, since it is about the worker, which the session's `status` (`watching`,
+  `building`, `broken`) is not, and `jobs` keeps "build" for what has an id. The viewer reads the
+  manifest and the comparison again without a flicker when the revision or the session changes
+  (`useRefresh`, the `fetch` of `useManifest` and `useComparison`, `useTable` by path and hash,
+  `BlickChart` by value), in every session of `blicket dev`, which "The viewer's refresh" asks
+  for.
 
 ## Open questions and decisions for Tobias
 

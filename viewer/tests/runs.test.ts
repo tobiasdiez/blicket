@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
-import { ago, keepListed, loadLabel, namesOf, runsSetting } from '../app/lib/runs'
+import type { BlickEntry } from '../app/lib/manifest'
+import { ago, dropQuestion, expensiveBuilt, keepListed, loadLabel, namesOf, runsSetting, ticked, whenText } from '../app/lib/runs'
 
 const now = new Date('2026-11-03T12:00:00Z')
+const blick = (expensive: boolean, status: string) => ({ expensive, status }) as unknown as BlickEntry
 
 describe('the run picker', () => {
   it('says how long ago a run changed, in the largest whole unit', () => {
@@ -21,7 +23,7 @@ describe('the run picker', () => {
     expect(runsSetting(['output/*', 'archive/"old"/*'])).toBe('runs = ["output/*", "archive/\\"old\\"/*"]')
   })
 
-  const runs = ['c', 'b', 'a'].map(name => ({ path: `/data/${name}`, name, modified: '2026-10-26T10:25:13Z' }))
+  const runs = ['c', 'b', 'a'].map(name => ({ path: `/data/${name}`, name, modified: '2026-10-26T10:25:13Z', project: false, served: false }))
 
   it('names the runs of a load in the order of the list', () => {
     expect(namesOf(['/data/a', '/data/c'], runs)).toBe('c, a')
@@ -31,5 +33,24 @@ describe('the run picker', () => {
   it('keeps the ticks of the folders a new list still has', () => {
     expect(keepListed(['/data/a', '/data/gone', '/data/c'], runs)).toEqual(['/data/a', '/data/c'])
     expect(keepListed([], runs)).toEqual([])
+  })
+
+  it('says that the project itself is computed from code, where a folder says when it changed', () => {
+    expect(whenText({ path: '/p', name: 'This project', modified: null, project: true, served: false }, now)).toBe('computed from code')
+    expect(whenText(runs[0]!, now)).toBe('8 days ago')
+  })
+
+  it('loads the project itself alone: ticking it unticks the folders, and ticking a folder unticks it', () => {
+    const listed = [{ path: '/p', name: 'This project', modified: null, project: true, served: false }, ...runs]
+    expect(ticked(['/data/a', '/data/c'], '/p', true, listed)).toEqual(['/p'])
+    expect(ticked(['/p'], '/data/a', true, listed)).toEqual(['/data/a'])
+    expect(ticked(['/data/a'], '/data/c', true, listed)).toEqual(['/data/a', '/data/c'])
+    expect(ticked(['/data/a', '/data/c'], '/data/a', false, listed)).toEqual(['/data/c'])
+  })
+
+  it('asks before a load drops the expensive Blicks built so far, and counts only those', () => {
+    expect(expensiveBuilt([blick(true, 'ok'), blick(true, 'error'), blick(true, 'pending'), blick(false, 'ok')])).toBe(2)
+    expect(dropQuestion(12)).toBe('Loading another run drops the 12 expensive Blicks built so far.')
+    expect(dropQuestion(1)).toBe('Loading another run drops the expensive Blick built so far.')
   })
 })

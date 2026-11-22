@@ -50,8 +50,8 @@ quick start fetches those four files, 38 to 40 MB per folder.
 `runs = ["../../data_out/remind/*"]` in `pyproject.toml` names that place for the run picker:
 `uv run blicket` alone, or `uv run blicket dev` without folders, opens the viewer on the eight
 folders of `data_out/remind/` instead of loading a set ([The Blick builder](#the-blick-builder)).
-Tick the four of one week and press `Load 4 runs as one`; the terminal prints the report of the
-check, and the viewer shows the build. Two folders of one scenario, such as the NPi runs of both
+Tick the four of one week and press `Load 4 runs as one`; the terminal prints the start report,
+and the viewer shows the set, its Blicks built in the background. Two folders of one scenario, such as the NPi runs of both
 weeks, are refused by the loader, and the picker says so under the list. Runs kept elsewhere need
 `runs` changed to match.
 
@@ -250,14 +250,14 @@ them apart.
 
 ## The Blick builder
 
-`blicket dev` checks a set as `check` does and then serves it, keeping the run in memory for the
-Blick builder:
+`blicket dev` loads a set, finds its baseline as `check` does and serves it, keeping the run in
+memory for the Blick builder:
 
 ```console
 $ uv run blicket dev ../../data_out/remind/*2026-10-2[34]*
 ```
 
-The report ends with `builder: 7760 quantities, 3 dimensions`: `dataset(run)` in `blicketconf.py`
+The report before the viewer's URL ends with `builder: 7760 quantities, 3 dimensions`: `dataset(run)` in `blicketconf.py`
 offers every variable of the mifs, named as the mif names it, with its unit, grouped by its
 first segment (`Emi`, `FE`, `Price`, ...); `GDP|PPP`, the one variable in two units, is two
 quantities, `GDP|PPP [billion US$2017/yr]` and `GDP|PPP [billion constant 2017 Int$PPP]`. None of

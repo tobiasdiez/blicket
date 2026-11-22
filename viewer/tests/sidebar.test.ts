@@ -73,6 +73,20 @@ describe('the sidebar', () => {
     expect(initiallyOpen(sidebarGroups(first, changes, new Set(), '', false), ['cement'])).toEqual(['cement', 'drivers', 'flows', 'stocks'])
   })
 
+  it('marks a Blick of a session not built yet, which is not skipped, and the one building', () => {
+    const session = { groups: [group('steel', 'Steel')], blicks: ['steel/production', 'steel/trade', 'steel/scrap'].map(name => entry(name, name, { status: 'pending', pending: true })) }
+    const builds = new Map([['steel/trade', 'building'], ['steel/scrap', 'queued']] as const)
+    const shownSession = sidebarGroups(session, none, new Set(), '', false, builds)
+    expect(shownSession[0]!.entries.map(e => [e.entry.name, e.pending, e.muted, e.build])).toEqual([
+      ['steel/production', true, false, null],
+      ['steel/trade', true, false, 'building'],
+      ['steel/scrap', true, false, 'queued'],
+    ])
+    // A group of Blicks not built yet holds something to look at: it starts open.
+    expect(initiallyOpen(shownSession)).toEqual(['steel'])
+    expect(sidebarGroups(manifest, none, new Set(), '', false)[1]!.entries.every(e => !e.pending && e.build === null)).toBe(true)
+  })
+
   it('finds a skipped Blick by the word skipped and by its reason', () => {
     expect(shown('skipped')).toEqual([['flows', ['flows/trade']]])
     expect(shown('cement run')).toEqual([['flows', ['flows/trade']]])

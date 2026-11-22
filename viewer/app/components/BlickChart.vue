@@ -87,7 +87,9 @@ watch(width, (current) => {
 })
 
 onMounted(schedule)
-watch(() => [props.rows, props.baseline, props.splits, props.y, props.type, props.mapping, props.scales, props.unit, props.compact, theme.value], async () => {
+// Redrawn when the rows or what the chart is drawn as change: a manifest read again shares what
+// did not change, so the same definition is the same objects.
+watch([() => props.rows, () => props.baseline, () => props.splits, () => props.y, () => props.type, () => props.mapping, () => props.scales, () => props.unit, () => props.compact, theme], async () => {
   failure.value = null
   await nextTick()
   schedule()

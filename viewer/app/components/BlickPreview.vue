@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { blickBadge, type BlickComparison } from '~/lib/comparison'
 import { yAxisOf } from '~/lib/controls'
+import { pendingText } from '~/lib/jobs'
 import { firstLine, type BlickEntry } from '~/lib/manifest'
 import { firstProblem, previewCaption, previewLink, previewState } from '~/lib/preview'
 import { drawsBaseline, PLOT_TYPES } from '~/plots'
@@ -9,18 +10,23 @@ import { drawsBaseline, PLOT_TYPES } from '~/plots'
 // and a caption. `change` is the Blick in the comparison shown, if any. With `pinnable` the card
 // has the button that pins or unpins the Blick, and says when it was clicked (`toggle`); without
 // it a pin marks a pinned Blick. `loading` says whether the card waits for the rows it asked for,
-// which the overview announces once for all its cards.
+// which the overview announces once for all its cards. A card of a session's Blick not built yet
+// says so, or that it builds or waits; a card asks for no build.
 const props = defineProps<{ entry: BlickEntry, change: BlickComparison | null, pinnable?: boolean }>()
 const emit = defineEmits<{ toggle: [], loading: [loading: boolean] }>()
 
 const { isPinned } = usePins()
+const { marks } = useJobs()
+const pending = computed(() => (props.entry.status === 'pending' ? pendingText(marks.value.get(props.entry.id ?? '')) : null))
 
+// The chart is drawn from `shown`, the entry whose rows are there, which is the entry given but
+// while a rebuilt Blick's new rows are fetched.
 const definition = computed(() => props.entry.definition)
 const title = computed(() => definition.value?.title ?? props.entry.name)
-const defaultY = computed(() => yAxisOf(definition.value))
-const preview = computed(() => previewState(props.entry, props.change, defaultY.value))
+const defaultY = computed(() => yAxisOf(shown.value?.definition ?? null))
+const preview = computed(() => (shown.value ? previewState(shown.value, props.change, defaultY.value) : null))
 const link = computed(() => previewLink(props.entry, preview.value, defaultY.value))
-const caption = computed(() => previewCaption(props.entry, preview.value, props.change, drawsBaseline(definition.value?.plot.type ?? '')))
+const caption = computed(() => previewCaption(shown.value ?? props.entry, preview.value, props.change, drawsBaseline(definition.value?.plot.type ?? '')))
 const badge = computed(() => blickBadge(props.entry, props.change))
 const pinned = computed(() => !!props.entry.id && isPinned(props.entry.id))
 const problem = computed(() => firstProblem(props.entry))
@@ -48,13 +54,13 @@ onBeforeUnmount(() => observer?.disconnect())
 
 // The chart waits for the baseline's rows, so it is drawn once; a baseline that cannot be read is
 // left out.
-const { error, shown, baselineWaiting, chartProps, undrawn, fileName } = useBlickChart(
+const { shownEntry: shown, error, shown: rows, baselineWaiting, chartProps, undrawn, fileName } = useBlickChart(
   () => props.entry,
   () => preview.value?.state ?? null,
   () => props.change,
   { load: () => seen.value && drawable.value },
 )
-const waiting = computed(() => !shown.value || baselineWaiting.value)
+const waiting = computed(() => !rows.value || baselineWaiting.value)
 const loading = computed(() => seen.value && drawable.value && props.entry.status === 'ok' && !error.value && waiting.value)
 watch(loading, value => emit('loading', value), { immediate: true })
 onBeforeUnmount(() => emit('loading', false))
@@ -82,7 +88,10 @@ const SILENT = { 'aria-hidden': 'true', 'role': undefined, 'aria-label': undefin
       </div>
       <PinMark v-else-if="pinned" />
     </div>
-    <ProblemList v-if="entry.status === 'error'" :problems="problem ? [problem] : []" />
+    <p v-if="pending" class="text-sm text-muted" :class="{ 'animate-pulse': pending !== 'Not built yet' }">
+      {{ pending }}
+    </p>
+    <ProblemList v-else-if="entry.status === 'error'" :problems="problem ? [problem] : []" />
     <div v-else-if="entry.status === 'skipped'" class="text-sm text-muted">
       <p class="font-medium">
         Skipped for this run
@@ -96,7 +105,7 @@ const SILENT = { 'aria-hidden': 'true', 'role': undefined, 'aria-label': undefin
     </p>
     <UAlert v-else-if="error" color="error" variant="subtle" title="The table cannot be read" :description="error" :ui="{ description: 'wrap-anywhere' }" />
     <USkeleton v-else-if="waiting" class="h-51 w-full" v-bind="SILENT" />
-    <p v-else-if="!shown?.length" class="text-sm text-muted">
+    <p v-else-if="!rows?.length" class="text-sm text-muted">
       No rows for this selection.
     </p>
     <p v-else-if="undrawn" class="text-sm text-muted">

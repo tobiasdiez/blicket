@@ -24,6 +24,7 @@ class Kind:
     TABLE = "table"
     REPOSITORY = "repository"
     QUERY = "query"
+    BUILD = "build"
 
 
 class DefinitionError(ValueError):
@@ -73,15 +74,38 @@ class LoaderError(BlicketError):
     """The project's loader cannot be imported, raised, or returned no ``(run, RunInfo)``."""
 
 
-class LoadRefused(BlicketError):
-    """A ``blicket dev`` session cannot load a run now: another load runs, or a run is served."""
+class Refused(BlicketError):
+    """A ``blicket dev`` session cannot do what it is asked in the state it is in, which
+    ``dev``'s routes answer with 409: an expensive Blick is building, which a builder query would
+    wait for; the worker that builds the Blicks stopped."""
+
+
+class LoadRefused(Refused):
+    """A ``blicket dev`` session cannot load a run now: another load runs, or an expensive Blick
+    is building."""
 
 
 class DatasetError(BlicketError):
     """``dataset(run)`` raised, or what it returned does not follow the dataset protocol."""
 
 
+class NoSuchBlick(BlicketError):
+    """A ``blicket dev`` session has no Blick of the id asked for that it can build."""
+
+
 MISSING = "the Blicks in this file are missing"
+
+
+def first_line(text: str) -> str:
+    """The first line of ``text``, without a carriage return; empty for an empty text."""
+    return next(iter(text.splitlines()), "")
+
+
+def raised(error: BaseException) -> str:
+    """What ``error`` is, as a message says what was raised: ``KeyError: 'st_scrap'``, or its
+    name alone when it says nothing, as ``KeyboardInterrupt`` usually does."""
+    said = str(error)
+    return f"{type(error).__name__}: {said}" if said else type(error).__name__
 
 
 def issue_field(issue: Mapping[str, Any]) -> str:

@@ -1,7 +1,8 @@
 import type { BuilderRequest } from '~/lib/builder'
-import { failure, postQuery } from '~/lib/dev'
+import { postQuery } from '~/lib/dev'
 import { latest } from '~/lib/latest'
 import type { BlickEntry } from '~/lib/manifest'
+import { failureState } from '~/lib/resource'
 import { fetchTable, type Row } from '~/lib/table'
 
 // How long the builder waits after a change before it asks, so that a burst of changes is one
@@ -31,10 +32,7 @@ export function useQuery(request: MaybeRefOrGetter<BuilderRequest | null>) {
   const rows = shallowRef<Row[] | null>(null)
   const shown = shallowRef<BuilderRequest | null>(null)
   const failed = shallowRef<BlickEntry | null>(null)
-  const error = ref<string | null>(null)
-  const unreachable = ref(false)
-  const failures = ref(0)
-  const failedAt = ref<Date | null>(null)
+  const { message: error, unreachable, failures, failedAt, fail, clear } = failureState()
   const pending = ref(false)
   const slow = ref(false)
   const stale = computed(() => slow.value || failed.value !== null || error.value !== null)
@@ -55,17 +53,11 @@ export function useQuery(request: MaybeRefOrGetter<BuilderRequest | null>) {
     pending.value = false
     slow.value = false
     if ('error' in outcome) {
-      const why = failure(outcome.error)
-      error.value = why.message
-      unreachable.value = why.unreachable
+      fail(outcome.error)
       failed.value = null // the refusal shown before is not the latest answer
-      failures.value++
-      failedAt.value = new Date()
       return
     }
-    error.value = null
-    unreachable.value = false
-    failures.value = 0
+    clear()
     const answer = outcome.value
     if (answer.rows) {
       entry.value = answer.entry
@@ -88,9 +80,7 @@ export function useQuery(request: MaybeRefOrGetter<BuilderRequest | null>) {
       rows.value = null
       shown.value = null
       failed.value = null
-      error.value = null
-      unreachable.value = false
-      failures.value = 0
+      clear()
       pending.value = false
       return
     }

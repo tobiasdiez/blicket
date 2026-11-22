@@ -7,7 +7,11 @@ paths outside the project, messages and tracebacks may contain paths of the mach
 on. The name ``compare`` inside a build directory is reserved. A Blick's ``status`` is ``ok`` when
 it built a table, ``error`` when it failed, and ``skipped`` when its transformation raised
 ``bk.Skip`` to say that the Blick does not apply to the run, which is no failure; the entry then
-holds the reason and no table.
+holds the reason and no table. ``pending`` says that a Blick is defined and not built yet: only
+the manifest that a session of ``blicket dev`` answers has such entries, never a build directory,
+and only it marks an entry ``expensive``. That manifest, which comes with the header
+``Blicket-Dev: 1``, describes a session, not a build: its id names the session and its
+``created_at`` is when the session started, and nothing writes or pushes it.
 
 The build id is content-addressed over the whole manifest except what ``NOT_IN_ID`` leaves out:
 timestamps and timings, the blicket version, tracebacks, the run's id, paths and model checkout,
@@ -28,7 +32,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, ValidationError
 
 from blicket.errors import BlicketError, Problem
 from blicket.model import BlickEntry, Group, Status
@@ -62,14 +66,8 @@ NOT_IN_ID: dict[str, Any] = {
 }
 
 
-class RunInfo(BaseModel):
-    """What the loader says about the run it loaded.
-
-    ``id`` names the run. ``profile`` names the run configuration, such as "baseline" or
-    "policy", so that each has its own baseline. ``fingerprint`` identifies the input files, see
-    ``bk.fingerprint``. ``commit``, ``branch`` and ``dirty`` describe the model's checkout when
-    the loader knows it; blicket records the Blick repository itself.
-    """
+class _RunFields(BaseModel):
+    """What a manifest records of a run, as the loader says it."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -79,6 +77,26 @@ class RunInfo(BaseModel):
     commit: str | None = None
     branch: str | None = None
     dirty: bool | None = None
+
+
+class RunInfo(_RunFields):
+    """What the loader says about the run it loaded.
+
+    ``id`` names the run. ``profile`` names the run configuration, such as "baseline" or
+    "policy", so that each has its own baseline. ``fingerprint`` identifies the input files, see
+    ``bk.fingerprint``. ``commit``, ``branch`` and ``dirty`` describe the model's checkout when
+    the loader knows it; blicket records the Blick repository itself.
+
+    ``expensive``, ``True`` or ``False``, says that every Blick of the run whose definition says
+    nothing of it is expensive: ``blicket dev`` builds such a Blick when its page is opened in the
+    viewer, and on Rebuild, and the others in the background; ``build`` and ``check`` build every
+    Blick either way. It tells blicket how to serve the run and is never written: a manifest, its
+    id and ``--json`` output are those of the same run without it, and the manifest's ``Run`` has
+    no such field. It is not part of a dump either, so ``RunInfo(**info.model_dump())`` loses it;
+    ``info.model_copy(update=...)`` keeps it.
+    """
+
+    expensive: StrictBool = Field(default=False, exclude=True)
 
 
 class BuildInfo(BaseModel):
@@ -99,9 +117,9 @@ class BuildConfig(BaseModel):
     tolerance: float
 
 
-class Run(RunInfo):
-    """The ``RunInfo`` from the loader and the run paths: relative to the project inside it,
-    absolute outside it."""
+class Run(_RunFields):
+    """The ``RunInfo`` from the loader, but ``expensive``, and the run paths: relative to the
+    project inside it, absolute outside it."""
 
     paths: list[str]
 

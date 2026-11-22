@@ -10,26 +10,37 @@ in the current build, it is ``removed`` when the baseline has a table for it, an
 flag and counts as skipped, not as unchanged, since nothing was compared; skipped in the baseline
 only, it is ``new``.
 
+``compare_builds`` compares two build directories, ``compare`` a build directory with a
+``Baseline`` read before; ``compare_blick`` compares one Blick and ``assemble`` puts the
+comparisons of Blicks together with the removed ones, which a session of ``blicket dev`` uses as
+its Blicks are built. ``place_baseline`` decides which baseline table a Blick flagged ``value`` or
+``schema`` is drawn against, and names it where the caller puts it.
+
 ``write`` puts a comparison into the current build directory, under ``compare/<baseline id>/``:
 ``comparison.json`` and the baseline tables of the Blicks flagged ``value`` or ``schema`` as
 ``blicks/<current id>.parquet``. ``compare/index.json`` lists the baseline ids of the comparisons
 there, since a directory cannot be listed over HTTP; nothing in blicket reads it.
 """
 
+import functools
+import hashlib
 import importlib.metadata
+import io
 import json
 import os
 import secrets
 import shutil
 from collections import Counter
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from pathlib import Path
 
 import polars as pl
 from pydantic import BaseModel, ConfigDict
 
-from blicket import manifest
-from blicket.errors import BlicketError, Kind, os_reason
+from blicket import manifest, tables
+from blicket.errors import BlicketError, Kind, first_line, os_reason
 from blicket.manifest import Manifest, Repository
 from blicket.model import BlickEntry, BuildPath
 from blicket.plots import builtin
@@ -135,6 +146,88 @@ class Comparison(BaseModel):
         return sorted(flagged, key=lambda b: (-float(f"{b.change.magnitude or 0:.2g}"), b.name))[:n]
 
 
+@dataclass(frozen=True)
+class Baseline:
+    """A baseline build as a comparison reads it: its directory, its manifest, and its Blicks by
+    id, of the Blicks that share an id, which only failed ones do, the one with a table.
+
+    ``kept`` holds the Parquet bytes of the tables read, by their path in the manifest, when the
+    baseline keeps them (see ``keeping``), ``None`` when it reads each table from its file."""
+
+    directory: Path
+    manifest: Manifest
+    by_id: Mapping[str, BlickEntry]
+    kept: dict[str, bytes] | None = None
+
+    @classmethod
+    def read(cls, directory: Path) -> Baseline:
+        """The baseline build in ``directory``; raises ``BlicketError`` when its manifest cannot
+        be read."""
+        return cls.of(directory, manifest.read(directory))
+
+    @classmethod
+    def of(cls, directory: Path, built: Manifest) -> Baseline:
+        """The baseline build in ``directory`` with the manifest ``built``."""
+        by_id: dict[str, BlickEntry] = {}
+        for entry in built.blicks:
+            # Only Blicks that failed share an id; one with a table is the one to compare with.
+            if entry.id is not None and (entry.id not in by_id or entry.data is not None):
+                by_id[entry.id] = entry
+        return cls(directory, built, by_id)
+
+    def keeping(self) -> Baseline:
+        """This baseline, keeping the bytes of each table it reads, checked against their hash in
+        its manifest, as a session that serves them does: each file is read once, and
+        ``content`` gives the bytes that ``table`` read."""
+        return replace(self, kept={})
+
+    def table(self, data: str) -> pl.DataFrame:
+        """The baseline's table at ``data``; raises ``BlicketError`` when it cannot be read, or,
+        when the baseline keeps its tables, does not match its hash."""
+        if self.kept is None:
+            return _table(self.directory, data)
+        try:
+            return pl.read_parquet(io.BytesIO(self._content(data)))
+        except pl.exceptions.PolarsError as error:
+            raise BlicketError(
+                f"cannot read {data} in {self.directory}: {error}{_DAMAGED}"
+            ) from error
+
+    def content(self, entry: BlickEntry) -> bytes:
+        """The Parquet bytes of the table of the baseline Blick ``entry``, checked against its
+        hash in the baseline's manifest; raises ``BlicketError`` when it has no table, the file
+        cannot be read, or its bytes do not match the hash."""
+        if entry.data is None or entry.hash is None:
+            build = self.manifest.build.id
+            raise BlicketError(f"{entry.name} has no table in the baseline {build}")
+        return self._content(entry.data)
+
+    def _content(self, data: str) -> bytes:
+        """The bytes of the table at ``data``, read once when the baseline keeps them, and checked
+        against the hash that the manifest gives that path."""
+        if self.kept is not None and (known := self.kept.get(data)) is not None:
+            return known
+        try:
+            content = (self.directory / data).read_bytes()
+        except OSError as error:
+            raise BlicketError(
+                f"cannot read {data} in {self.directory}: {os_reason(error)}{_DAMAGED}"
+            ) from error
+        hashed = next((e.hash for e in self.manifest.blicks if e.data == data), None)
+        if tables.content_hash(hashlib.sha256(content).hexdigest()) != hashed:
+            raise BlicketError(
+                f"{data} in {self.directory} does not match its hash in the baseline's manifest"
+                f"{_DAMAGED}"
+            )
+        if self.kept is not None:
+            self.kept[data] = content
+        return content
+
+
+# What to do about a baseline whose files are missing or damaged.
+_DAMAGED = "; the baseline is damaged: push it again, or name another with --against"
+
+
 def compare_builds(baseline: Path, current: Path) -> Comparison:
     """Compare the build in the directory ``current`` with the one in ``baseline``.
 
@@ -147,113 +240,155 @@ def compare_builds(baseline: Path, current: Path) -> Comparison:
     that this blicket does not know, or whose ``diff`` rejects the tables, makes the Blick
     ``error``. Raises ``BlicketError`` when a manifest or a table cannot be read.
     """
-    before, after = manifest.read(baseline), manifest.read(current)
-    by_id: dict[str, BlickEntry] = {}
-    for entry in before.blicks:
-        # Only Blicks that failed share an id; one with a table is the one to compare with.
-        if entry.id is not None and (entry.id not in by_id or entry.data is not None):
-            by_id[entry.id] = entry
-    claimed: set[str] = set()
-    blicks: list[BlickComparison] = []
-    for entry in after.blicks:
-        names = [name for name in (entry.id, *entry.aliases) if name is not None]
-        claimed.update(names)
-        found = [by_id[name] for name in names if name in by_id]
-        counterpart = next((e for e in found if e.data is not None), found[0] if found else None)
-        table = counterpart.data if counterpart else None
-        matched = counterpart.id if counterpart and counterpart.id != entry.id else None
-        if entry.status == "skipped":
-            message = _absence(entry)
-            if table is not None:
-                blicks.append(_flagged(entry, "removed", message, skipped=True, matched=matched))
-                continue
-            there = (
-                _absence(counterpart, "in the baseline") if counterpart else "not in the baseline"
-            )
-            blicks.append(
-                BlickComparison(
-                    id=entry.id,
-                    name=entry.name,
-                    change=Change(),
-                    skipped=True,
-                    message=f"{message} ({there})",
-                )
-            )
-            continue
-        if entry.id is None or entry.definition is None or entry.data is None:
-            blicks.append(_flagged(entry, "error", _cause(entry)))
-            continue
-        if table is None:
-            message = _absence(counterpart, "in the baseline") if counterpart else None
-            blicks.append(_flagged(entry, "new", message))
-            continue
-        plot = entry.definition.plot
-        try:
-            change = builtin(plot.type).diff(
-                _table(baseline, table),
-                _table(current, entry.data),
-                plot.mapping,
-                entry.panels,
-            )
-        except (ValueError, TypeError) as error:  # DefinitionError for an unknown plot type
-            blicks.append(_flagged(entry, "error", str(error)))
-            continue
-        tolerance = entry.definition.tolerance
-        if tolerance is None:
-            tolerance = after.config.tolerance
-        if change.magnitude is not None and change.magnitude > tolerance:
-            change = change.model_copy(update={"flags": change.flags | {"value"}})
-        blicks.append(BlickComparison(id=entry.id, name=entry.name, matched=matched, change=change))
-    incomplete = _incomplete(after)
-    if not incomplete:
-        blicks.extend(
-            _flagged(entry, "removed")
-            for entry in before.blicks
-            if entry.data is not None and entry.id not in claimed
+    return compare(Baseline.read(baseline), current)
+
+
+def compare(baseline: Baseline, current: Path) -> Comparison:
+    """Compare the build in the directory ``current`` with ``baseline``, as ``compare_builds``
+    does. Raises ``BlicketError`` when the manifest or a table cannot be read."""
+    after = manifest.read(current)
+    tolerance = after.config.tolerance
+    blicks = [
+        compare_blick(entry, baseline, tolerance, _reader(current, entry.data))
+        for entry in after.blicks
+    ]
+    return assemble(baseline, after, blicks)
+
+
+def _reader(directory: Path, data: str | None) -> Callable[[], pl.DataFrame] | None:
+    """What reads the table at ``data`` in ``directory``, when there is one."""
+    return functools.partial(_table, directory, data) if data is not None else None
+
+
+def compare_blick(
+    entry: BlickEntry,
+    baseline: Baseline,
+    tolerance: float,
+    read: Callable[[], pl.DataFrame] | None,
+) -> BlickComparison:
+    """Compare the current Blick ``entry`` with its counterpart in ``baseline``, as
+    ``compare_builds`` does; ``read`` gives the entry's table, ``None`` when it has none, and
+    ``tolerance`` is the current build's, for a Blick without one of its own. Raises
+    ``BlicketError`` when a table cannot be read."""
+    names = [name for name in (entry.id, *entry.aliases) if name is not None]
+    found = [baseline.by_id[name] for name in names if name in baseline.by_id]
+    counterpart = next((e for e in found if e.data is not None), found[0] if found else None)
+    table = counterpart.data if counterpart else None
+    matched = counterpart.id if counterpart and counterpart.id != entry.id else None
+    if entry.status == "skipped":
+        message = _absence(entry)
+        if table is not None:
+            return flagged(entry, "removed", message, skipped=True, matched=matched)
+        there = _absence(counterpart, "in the baseline") if counterpart else "not in the baseline"
+        return BlickComparison(
+            id=entry.id,
+            name=entry.name,
+            change=Change(),
+            skipped=True,
+            message=f"{message} ({there})",
         )
+    if entry.id is None or entry.definition is None or entry.data is None or read is None:
+        return flagged(entry, "error", _cause(entry))
+    if table is None:
+        message = _absence(counterpart, "in the baseline") if counterpart else None
+        return flagged(entry, "new", message)
+    plot = entry.definition.plot
+    try:
+        change = builtin(plot.type).diff(baseline.table(table), read(), plot.mapping, entry.panels)
+    except (ValueError, TypeError) as error:  # DefinitionError for an unknown plot type
+        return flagged(entry, "error", str(error))
+    if entry.definition.tolerance is not None:
+        tolerance = entry.definition.tolerance
+    if change.magnitude is not None and change.magnitude > tolerance:
+        change = change.model_copy(update={"flags": change.flags | {"value"}})
+    return BlickComparison(id=entry.id, name=entry.name, matched=matched, change=change)
+
+
+def assemble(
+    baseline: Baseline, current: Manifest, blicks: Sequence[BlickComparison]
+) -> Comparison:
+    """The comparison of the build ``current`` with ``baseline``: the comparisons of its Blicks,
+    ``blicks``, then the baseline Blicks with a table that no Blick of ``current`` claims by its
+    id or aliases, whatever its status, as removed, unless ``current`` is incomplete."""
+    incomplete = _incomplete(current)
+    removed: list[BlickComparison] = []
+    if not incomplete:
+        claimed = {
+            name
+            for entry in current.blicks
+            for name in (entry.id, *entry.aliases)
+            if name is not None
+        }
+        removed = [
+            flagged(entry, "removed")
+            for entry in baseline.manifest.blicks
+            if entry.data is not None and entry.id not in claimed
+        ]
     return Comparison(
-        spec=after.spec,
+        spec=current.spec,
         blicket=importlib.metadata.version("blicket"),
         created_at=datetime.now(UTC),
-        baseline=_reference(before),
-        current=_reference(after),
+        baseline=reference(baseline.manifest),
+        current=reference(current),
         incomplete=incomplete,
-        blicks=tuple(blicks),
+        blicks=(*blicks, *removed),
     )
 
 
-def write(comparison: Comparison, baseline: Path, current: Path) -> Comparison:
-    """Write ``comparison`` of the build directory ``current`` with the one in ``baseline`` into
+def place_baseline(
+    blick: BlickComparison,
+    baseline: Baseline,
+    place: Callable[[BlickComparison, BlickEntry], str],
+) -> tuple[BlickComparison, BlickEntry | None]:
+    """``blick`` with the baseline table it is drawn against, when it is flagged ``value`` or
+    ``schema``: the table of the baseline Blick it was compared with, its ``baseline_data`` named
+    by ``place``, given the Blick and that baseline Blick, its ``baseline_hash`` the table's hash
+    in the baseline's manifest; and that baseline Blick, so that the caller can copy or keep its
+    table. Any other Blick comes back as it is, without a baseline Blick."""
+    counterpart = baseline.by_id.get(blick.matched or blick.id or "")
+    if not blick.change.flags & {"value", "schema"} or counterpart is None:
+        return blick, None
+    if counterpart.data is None or blick.id is None:
+        return blick, None
+    update = {"baseline_data": place(blick, counterpart), "baseline_hash": counterpart.hash}
+    return blick.model_copy(update=update), counterpart
+
+
+def write(comparison: Comparison, baseline: Baseline, current: Path) -> Comparison:
+    """Write ``comparison`` of the build directory ``current`` with ``baseline`` into
     ``current/compare/<baseline id>/`` and return it as written, with ``baseline_data`` and
-    ``baseline_hash`` set for the copied tables.
+    ``baseline_hash`` set for the copied tables, as ``place_baseline`` sets them.
 
     The directory is assembled next to its destination and replaces what an earlier write put
     there. ``compare/index.json`` is then regenerated from the directories in ``compare/`` that
     hold a ``comparison.json``, ordered by that file's modification time, the newest last.
-    Raises ``BlicketError`` when a build id of the comparison is not shaped like one, the baseline
-    manifest cannot be read, or writing fails.
+    Raises ``BlicketError`` when a build id of the comparison is not shaped like one, or writing
+    fails.
     """
     for build in (comparison.baseline, comparison.current):
         if not manifest.BUILD_ID.fullmatch(build.id):
             raise BlicketError(f"build {build.run} has an invalid build id {build.id!r}")
     compare = current / COMPARE
     baseline_id = comparison.baseline.id
-    built = manifest.read(baseline).blicks
-    tables = {e.id: (e.data, e.hash) for e in built if e.id is not None and e.data is not None}
+
+    def copied(blick: BlickComparison) -> str:
+        """Where the copy of the baseline's table of ``blick`` goes, in the comparison's
+        directory."""
+        return f"blicks/{blick.id}.parquet"
+
+    def place(blick: BlickComparison, counterpart: BlickEntry) -> str:
+        return f"{COMPARE}/{baseline_id}/{copied(blick)}"
+
     temporary = compare / f".tmp-{os.getpid()}-{secrets.token_hex(4)}"
     blicks: list[BlickComparison] = []
     try:
         temporary.mkdir(parents=True)
-        for blick in comparison.blicks:
-            if blick.id is not None and blick.change.flags & {"value", "schema"}:
-                data, digest = tables[blick.matched or blick.id]
-                name = f"blicks/{blick.id}.parquet"
-                (temporary / name).parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(baseline / data, temporary / name)
-                relative = f"{COMPARE}/{baseline_id}/{name}"
-                blick = blick.model_copy(
-                    update={"baseline_data": relative, "baseline_hash": digest}
-                )
+        for given in comparison.blicks:
+            blick, counterpart = place_baseline(given, baseline, place)
+            if counterpart is not None and counterpart.data and blick.baseline_data:
+                copy = temporary / copied(blick)
+                copy.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(baseline.directory / counterpart.data, copy)
             blicks.append(blick)
         written = comparison.model_copy(update={"blicks": tuple(blicks)})
         (temporary / COMPARISON).write_text(written.model_dump_json(indent=2) + "\n")
@@ -277,7 +412,7 @@ def write(comparison: Comparison, baseline: Path, current: Path) -> Comparison:
     return written
 
 
-def _flagged(
+def flagged(
     entry: BlickEntry,
     flag: Flag,
     message: str | None = None,
@@ -285,6 +420,7 @@ def _flagged(
     skipped: bool = False,
     matched: str | None = None,
 ) -> BlickComparison:
+    """The Blick ``entry`` in a comparison, with the one flag ``flag`` and ``message``."""
     change = Change(flags=frozenset({flag}))
     return BlickComparison(
         id=entry.id,
@@ -296,15 +432,10 @@ def _flagged(
     )
 
 
-def _first(text: str) -> str:
-    """The first line of ``text``, empty for an empty text."""
-    return next(iter(text.splitlines()), "")
-
-
 def _cause(entry: BlickEntry) -> str | None:
     """The first line of the entry's first error."""
     errors = [p for p in entry.problems if p.severity == "error"]
-    return _first(errors[0].message) if errors else None
+    return first_line(errors[0].message) if errors else None
 
 
 def _absence(entry: BlickEntry, where: str = "") -> str:
@@ -312,7 +443,7 @@ def _absence(entry: BlickEntry, where: str = "") -> str:
     ``where`` follows the verb, such as ``in the baseline``."""
     place = f" {where}" if where else ""
     if entry.status == "skipped":
-        return f"skipped{place}: {_first(entry.skipped or '')}"
+        return f"skipped{place}: {first_line(entry.skipped or '')}"
     return f"did not build{place}"
 
 
@@ -323,7 +454,7 @@ def _incomplete(built: Manifest) -> tuple[str, ...]:
     for problem in built.problems:
         if problem.severity == "error":
             where = problem.source.file.as_posix() if problem.source else "the project"
-            first = _first(problem.message)
+            first = first_line(problem.message)
             reasons.append(
                 f"{where} failed to import: {first}"
                 if problem.kind == Kind.IMPORT
@@ -341,7 +472,8 @@ def _table(directory: Path, data: str) -> pl.DataFrame:
         raise BlicketError(f"cannot read {data} in {directory}: {reason}") from error
 
 
-def _reference(built: Manifest) -> BuildRef:
+def reference(built: Manifest) -> BuildRef:
+    """What a comparison records of the build ``built``."""
     return BuildRef(
         id=built.build.id,
         run=built.run.id,

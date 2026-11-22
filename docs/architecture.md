@@ -439,6 +439,28 @@ memoised.
   that keeps the run, on the standard library's server; the loop above is M2.2's, which polls
   `dev/info` instead of server-sent events and restarts on a run change (see
   [plans/m2-2-dev-loop.md](plans/m2-2-dev-loop.md)).
+- Amendment of 2026-11-16 ([plans/on-demand-blicks.md](plans/on-demand-blicks.md)): every session
+  of `blicket dev` serves at once and builds its Blicks while the viewer is open; it makes no
+  build: no id, no directory, nothing to push. A Blick is cheap or expensive: it says so in its
+  definition (`bk.blick(expensive=...)`), or the loader says it for every Blick of the run whose
+  definition says nothing (`RunInfo.expensive`); neither is written into a manifest or changes an
+  id. One worker thread builds one Blick at a time on the run object the session holds, which
+  decides what is fresh: first the cheap Blicks a page asked for, then the expensive ones a page
+  asked for, then the background, the cheap Blicks in the order `blicket list` shows them. A cheap
+  Blick is built again at each visit of its page, an expensive one when its page asks for it and on
+  `Rebuild`; a build running is never interrupted. The session keeps the tables in memory by
+  content hash and answers the manifest, in which the Blicks not built yet are `pending` and the
+  expensive ones `expensive`, and the comparison from memory. Its baseline is resolved once, when
+  the run is loaded, and each Blick is compared as it is built. The builder's queries share the
+  session's lock with the builds: a query waits for a cheap build and goes before the next, and is
+  refused during an expensive one and while a run loads. The viewer polls `dev/info` once a second, its `session`,
+  `revision` and `jobs`, and reads the manifest and the comparison again when the revision or the
+  session changes; this is the one polling channel M2.2 plans too. The run picker offers the
+  project itself when `runs` lists `.` and loads another run in place of the one served, with a new
+  session id; nothing of the run before is built or printed after that. The session has one
+  worker for its lifetime, whose jobs are `Build` tasks in one ranked list; it is where M2.2's job
+  queue starts, with a reload task beside `Build`, and what a change of the code or the run does is
+  M2.2's. `build` and `check` build every Blick, expensive or not.
 
 ## Blick builder (dev mode)
 

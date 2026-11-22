@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { TAB, queryFromState, stateFromQuery, yAxisOf, type ControlState } from '~/lib/controls'
 import { downloadCsv } from '~/lib/csv'
+import { rebuildable } from '~/lib/jobs'
 import { sourceText } from '~/lib/manifest'
 import { drawsBaseline, nothingToCompare } from '~/plots'
 import { CATEGORICAL, GHOST } from '~/plots/theme'
@@ -10,24 +11,17 @@ const CHANGE_KINDS = ['change', 'relative'] as const
 
 const route = useRoute()
 const router = useRouter()
-const { manifest } = useManifest()
+const { manifest, dev } = useManifest()
 const { comparison, blicks, loading } = useComparison()
 const theme = useTheme()
+const { stopped, stale, lost } = useJobs()
 
 const id = useBlickId()
+// The Blick's entry in the manifest now; what the page draws, its definition, controls, rows and
+// problems, are of `shownEntry`, which is the same but while a rebuilt Blick's new rows are
+// fetched, so that a manifest read again never puts new controls on old rows.
 const entry = computed(() => manifest.value?.blicks.find(b => b.id === id.value) ?? null)
 const group = computed(() => manifest.value?.groups.find(g => g.name === entry.value?.group) ?? null)
-const definition = computed(() => entry.value?.definition ?? null)
-const schema = computed(() => entry.value?.columns ?? null)
-const controls = computed(() => entry.value?.controls ?? [])
-const defaultY = computed(() => yAxisOf(definition.value))
-const parsed = computed(() => (schema.value ? stateFromQuery(controls.value, schema.value, route.query, defaultY.value) : null))
-const state = computed(() => parsed.value?.state ?? null)
-const warnings = computed(() => entry.value?.problems.filter(p => p.severity === 'warning') ?? [])
-
-watch(() => parsed.value?.unknown.join(', '), (unknown) => {
-  if (unknown) console.warn(`blicket: the URL names ${unknown}, which this Blick has no control for; ignored`)
-}, { immediate: true })
 
 // The Blick in the comparison shown, and the baseline drawn behind its chart while the switch is on.
 const change = computed(() => (entry.value ? blicks.value.get(entry.value.name) ?? null : null))
@@ -35,8 +29,30 @@ const change = computed(() => (entry.value ? blicks.value.get(entry.value.name) 
 const strip = computed(() => (change.value && !(change.value.skipped && !change.value.change.flags.length) ? change.value : null))
 const compare = ref(true)
 // `fileName` names exported images and the CSV file; `chartProps` is what the chart and the
-// change charts are drawn from.
-const { error, baselineFile, baselineError, shown, baseline, baselineWaiting, chartProps, undrawn, leftOut, fileName } = useBlickChart(entry, state, change, { compare })
+// change charts are drawn from. The state is a getter, since it is made of the entry drawn.
+const { shownEntry, error, baselineFile, baselineError, shown, baseline, baselineWaiting, chartProps, undrawn, leftOut, fileName } = useBlickChart(entry, () => state.value, change, { compare })
+
+const definition = computed(() => shownEntry.value?.definition ?? null)
+const schema = computed(() => shownEntry.value?.columns ?? null)
+const controls = computed(() => shownEntry.value?.controls ?? [])
+const defaultY = computed(() => yAxisOf(definition.value))
+// A value the URL names that the table lacks is not in this build, or this run of a session.
+const parsed = computed(() => (schema.value ? stateFromQuery(controls.value, schema.value, route.query, defaultY.value, dev.value ? 'this run' : 'this build') : null))
+const state = computed(() => parsed.value?.state ?? null)
+const warnings = computed(() => shownEntry.value?.problems.filter(p => p.severity === 'warning') ?? [])
+
+watch(() => parsed.value?.unknown.join(', '), (unknown) => {
+  if (unknown) console.warn(`blicket: the URL names ${unknown}, which this Blick has no control for; ignored`)
+}, { immediate: true })
+
+// In a session of blicket dev the page asks for its Blick at each visit: a cheap one is built, or
+// built again; an expensive one not built yet is built when no Blick a page asked for builds or
+// waits, otherwise by `Build next`, and `Rebuild` builds it again. A poll of dev/info that fails,
+// a manifest that cannot be read again and a request that fails each say so.
+const devInfo = useDev()
+const { state: build, ask, refused, retry, outcome } = useBlickBuild(() => entry.value)
+// An expensive Blick rebuilt is dimmed; a cheap one built again is not, since that is quick.
+const rebuilding = computed(() => build.value?.kind === 'rebuilding')
 
 const tab = useTab()
 
@@ -58,7 +74,9 @@ const incomparable = computed(() => {
   return nothingToCompare(type, { table: shown.value, baseline: baseline.value, schema: schema.value, mapping })
 })
 
-useHead({ title: computed(() => `${definition.value?.title ?? id.value} · blicket`) })
+// The browser's tab says when the Blick builds.
+const working = computed(() => (build.value?.kind === 'building' || build.value?.kind === 'rebuilding' ? 'Building… · ' : ''))
+useHead({ title: computed(() => `${working.value}${entry.value?.definition?.title ?? id.value} · blicket`) })
 
 /** Put the control state into the URL, without a history entry. */
 async function update(next: ControlState) {
@@ -93,10 +111,10 @@ const source = computed(() => (entry.value?.source ? sourceText(entry.value.sour
 <template>
   <div v-if="!entry" class="space-y-3">
     <h1 class="text-lg font-semibold text-highlighted">
-      No such Blick in this build
+      No such Blick in this {{ dev ? 'session' : 'build' }}
     </h1>
     <p class="text-sm text-muted">
-      This build has no Blick <code>{{ id }}</code>.
+      This {{ dev ? 'session' : 'build' }} has no Blick <code>{{ id }}</code>.
     </p>
     <UButton to="/" icon="i-lucide-arrow-left" variant="outline" color="neutral" label="Overview" />
   </div>
@@ -105,19 +123,32 @@ const source = computed(() => (entry.value?.source ? sourceText(entry.value.sour
       <UBreadcrumb :items="breadcrumb" />
       <div class="flex flex-wrap items-start justify-between gap-x-4 gap-y-2">
         <h1 class="min-w-0 text-xl font-semibold text-highlighted">
-          {{ definition?.title ?? entry.name }}
+          {{ entry.definition?.title ?? entry.name }}
         </h1>
-        <PinButton :id="id" :label="definition?.title ?? entry.name" class="shrink-0" />
+        <div class="flex shrink-0 gap-2">
+          <UTooltip v-if="rebuildable(entry, build)" text="Run the transformation again">
+            <UButton
+              icon="i-lucide-refresh-cw"
+              color="neutral"
+              variant="outline"
+              size="sm"
+              label="Rebuild"
+              :aria-label="`Rebuild ${entry.definition?.title ?? entry.name}`"
+              @click="ask(true)"
+            />
+          </UTooltip>
+          <PinButton :id="id" :label="entry.definition?.title ?? entry.name" />
+        </div>
       </div>
-      <p v-if="definition?.description" class="max-w-3xl text-sm text-muted">
-        {{ definition.description }}
+      <p v-if="entry.definition?.description" class="max-w-3xl text-sm text-muted">
+        {{ entry.definition.description }}
       </p>
       <p class="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted">
         <span class="font-mono">{{ entry.name }}</span>
-        <span v-if="definition">{{ definition.plot.type }}</span>
-        <span v-if="definition?.unit">unit: {{ definition.unit }}</span>
-        <span v-if="entry.rows !== null">{{ entry.rows.toLocaleString('en') }} rows</span>
-        <a v-if="entry.data" :href="`./${entry.data}`" download class="underline hover:text-default">Parquet file</a>
+        <span v-if="entry.definition">{{ entry.definition.plot.type }}</span>
+        <span v-if="entry.definition?.unit">unit: {{ entry.definition.unit }}</span>
+        <span v-if="shownEntry && shownEntry.rows !== null">{{ shownEntry.rows.toLocaleString('en') }} rows</span>
+        <a v-if="shownEntry?.data" :href="`./${shownEntry.data}`" download class="underline hover:text-default">Parquet file</a>
         <button v-if="shown?.length" type="button" class="underline hover:text-default" @click="saveCsv">
           CSV of this selection
         </button>
@@ -125,56 +156,84 @@ const source = computed(() => (entry.value?.source ? sourceText(entry.value.sour
       </p>
     </div>
 
-    <ChangeStrip
-      v-if="strip"
-      :blick="strip"
-      :baseline="comparison!.baseline"
-      :state="state"
-      :schema="schema"
-      :mapping="definition?.plot.mapping ?? {}"
-      @update="showWhere"
-    />
-    <ProblemList v-if="entry.status === 'error'" :problems="entry.problems" />
-    <UAlert v-else-if="entry.status === 'skipped'" color="neutral" variant="subtle" icon="i-lucide-circle-slash" title="Skipped for this run" :description="entry.skipped ?? undefined" :ui="{ description: 'whitespace-pre-wrap wrap-anywhere' }" />
-    <template v-else-if="schema && state && definition">
-      <ProblemList v-if="warnings.length" :problems="warnings" />
-      <UAlert v-for="notice in parsed?.notices" :key="notice" color="neutral" variant="subtle" icon="i-lucide-info" :title="notice" />
-      <ControlBar v-if="controls.length || comparing" ref="controlBar" :controls="controls" :schema="schema" :state="state" :axes="tab === 'chart'" @update="update">
-        <template v-if="comparing">
-          <USwitch v-model="compare" size="sm">
-            <template #label>
-              <span class="inline-flex items-center gap-2">
-                Compare with baseline
-                <span v-if="baselineDrawn" aria-hidden="true" class="h-1.5 w-6 rounded-full" :style="key" />
-              </span>
-            </template>
-          </USwitch>
-          <span v-if="baseline && !baseline.length" class="text-sm text-muted">no baseline rows for this selection</span>
-          <span v-else-if="incomparable" class="text-sm text-muted">nothing to compare in this selection</span>
-        </template>
-      </ControlBar>
-      <ChartTabs v-model="tab" />
-      <UAlert v-if="baselineError && comparing" color="warning" variant="subtle" title="The baseline's table cannot be read" :description="baselineError" :ui="{ description: 'wrap-anywhere' }" />
-      <UAlert v-if="error" color="error" variant="subtle" title="The table cannot be read" :description="error" />
-      <p v-else-if="!shown || waiting" class="text-sm text-muted">
-        Loading the table…
-      </p>
-      <p v-else-if="entry.rows === 0" class="text-sm text-muted">
-        This Blick's table has no rows.
-      </p>
-      <p v-else-if="!shown.length" class="text-sm text-muted">
-        No rows for this selection.
-      </p>
-      <p v-else-if="tab === 'chart' && undrawn" class="text-sm text-muted">
-        No row of this selection can be drawn; the data tab lists the rows.
-      </p>
-      <div v-else-if="tab === 'chart' && chartProps" class="space-y-4">
-        <BlickChart v-bind="chartProps" :name="chartName" :note="leftOut" />
-        <template v-if="baseline?.length && !incomparable">
-          <BlickChart v-for="kind in CHANGE_KINDS" :key="kind" v-bind="chartProps" :name="fileName" :kind="kind" />
-        </template>
-      </div>
-      <DataTable v-else :rows="shown" :schema="schema" :unit="definition.unit" :mapping="definition.plot.mapping" />
+    <template v-if="build">
+      <UAlert v-if="stopped" color="error" variant="subtle" icon="i-lucide-circle-x" title="blicket dev builds no Blick any more" :description="`The worker that builds them stopped (${stopped}); restart blicket dev.`" />
+      <BuildStatus v-else-if="build" :state="build" :outcome="outcome" :lost="lost" @build="ask()" />
+      <DevAlert
+        v-if="refused.message.value !== null"
+        title="The Blick cannot be built"
+        :message="refused.message.value"
+        :unreachable="refused.unreachable.value"
+        :failures="refused.failures.value"
+        :failed-at="refused.failedAt.value"
+        :busy="false"
+        @retry="retry"
+      />
+      <DevAlert
+        v-else-if="lost"
+        title="blicket dev does not answer"
+        :message="devInfo.error.value ?? ''"
+        :unreachable="devInfo.unreachable.value"
+        :failures="devInfo.failures.value"
+        :failed-at="devInfo.failedAt.value"
+        :busy="devInfo.loading.value"
+        @retry="devInfo.reload()"
+      />
+      <UAlert v-else-if="stale" color="warning" variant="subtle" icon="i-lucide-triangle-alert" title="What the page shows may be older than the run" :description="`The Blicks cannot be read again: ${stale}. The page tries again every second.`" :ui="{ description: 'wrap-anywhere' }" />
     </template>
+    <!-- While the Blick is rebuilt, what was there stays, dimmed. -->
+    <div v-if="shownEntry" class="space-y-5 transition-opacity" :class="{ 'opacity-50': rebuilding }" :aria-busy="rebuilding">
+      <ChangeStrip
+        v-if="strip"
+        :blick="strip"
+        :baseline="comparison!.baseline"
+        :state="state"
+        :schema="schema"
+        :mapping="definition?.plot.mapping ?? {}"
+        @update="showWhere"
+      />
+      <ProblemList v-if="shownEntry.status === 'error'" :problems="shownEntry.problems" />
+      <UAlert v-else-if="shownEntry.status === 'skipped'" color="neutral" variant="subtle" icon="i-lucide-circle-slash" title="Skipped for this run" :description="shownEntry.skipped ?? undefined" :ui="{ description: 'whitespace-pre-wrap wrap-anywhere' }" />
+      <template v-else-if="schema && state && definition">
+        <ProblemList v-if="warnings.length" :problems="warnings" />
+        <UAlert v-for="notice in parsed?.notices" :key="notice" color="neutral" variant="subtle" icon="i-lucide-info" :title="notice" />
+        <ControlBar v-if="controls.length || comparing" ref="controlBar" :controls="controls" :schema="schema" :state="state" :axes="tab === 'chart'" @update="update">
+          <template v-if="comparing">
+            <USwitch v-model="compare" size="sm">
+              <template #label>
+                <span class="inline-flex items-center gap-2">
+                  Compare with baseline
+                  <span v-if="baselineDrawn" aria-hidden="true" class="h-1.5 w-6 rounded-full" :style="key" />
+                </span>
+              </template>
+            </USwitch>
+            <span v-if="baseline && !baseline.length" class="text-sm text-muted">no baseline rows for this selection</span>
+            <span v-else-if="incomparable" class="text-sm text-muted">nothing to compare in this selection</span>
+          </template>
+        </ControlBar>
+        <ChartTabs v-model="tab" />
+        <UAlert v-if="baselineError && comparing" color="warning" variant="subtle" title="The baseline's table cannot be read" :description="baselineError" :ui="{ description: 'wrap-anywhere' }" />
+        <UAlert v-if="error" color="error" variant="subtle" title="The table cannot be read" :description="error" />
+        <p v-else-if="!shown || waiting" class="text-sm text-muted">
+          Loading the table…
+        </p>
+        <p v-else-if="shownEntry.rows === 0" class="text-sm text-muted">
+          This Blick's table has no rows.
+        </p>
+        <p v-else-if="!shown.length" class="text-sm text-muted">
+          No rows for this selection.
+        </p>
+        <p v-else-if="tab === 'chart' && undrawn" class="text-sm text-muted">
+          No row of this selection can be drawn; the data tab lists the rows.
+        </p>
+        <div v-else-if="tab === 'chart' && chartProps" class="space-y-4">
+          <BlickChart v-bind="chartProps" :name="chartName" :note="leftOut" />
+          <template v-if="baseline?.length && !incomparable">
+            <BlickChart v-for="kind in CHANGE_KINDS" :key="kind" v-bind="chartProps" :name="fileName" :kind="kind" />
+          </template>
+        </div>
+        <DataTable v-else :rows="shown" :schema="schema" :unit="definition.unit" :mapping="definition.plot.mapping" />
+      </template>
+    </div>
   </div>
 </template>

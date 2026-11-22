@@ -59,10 +59,11 @@ export interface Parsed {
 /**
  * The control state a query asks for. A dimension listed under `_split` is split, one given as
  * `dim=value` is filtered on that value, and any other has its control's kind and default;
- * values that the dimension lacks fall back to the default. `_y` is `shared` or `independent`;
+ * values that the dimension lacks fall back to the default, and a notice says that they are not
+ * in `where`, `this build` unless the caller says otherwise. `_y` is `shared` or `independent`;
  * without it the y axes are `defaultY`. Other keys with an underscore belong to the page.
  */
-export function stateFromQuery(controls: Control[], schema: TableSchema, query: Query, defaultY: YAxis = 'shared'): Parsed {
+export function stateFromQuery(controls: Control[], schema: TableSchema, query: Query, defaultY: YAxis = 'shared', where = 'this build'): Parsed {
   const dimensions = new Map(schema.dimensions.map(dimension => [dimension.name, dimension]))
   const names = new Set(controls.map(control => control.dimension))
   const splitAsked = strings(query[SPLIT])
@@ -90,7 +91,7 @@ export function stateFromQuery(controls: Control[], schema: TableSchema, query: 
     if (value === undefined) continue
     state.filters[control.dimension] = value
     if (text !== undefined && asked === undefined) {
-      notices.push(`${control.dimension} '${text}' is not in this build; showing ${String(value)}`)
+      notices.push(`${control.dimension} '${text}' is not in ${where}; showing ${String(value)}`)
     }
   }
   return { state, notices, unknown }

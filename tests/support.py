@@ -1,12 +1,22 @@
 """Helpers shared by the tests."""
 
+import re
+import shutil
 import subprocess
 import textwrap
 from pathlib import Path
 
+from typer.testing import CliRunner
+
 import blicket as bk
+from blicket import cli
 
 PROJECTS = Path(__file__).parent / "projects"
+# The project whose loader makes the Blicks of its runs expensive, unless the environment sets
+# CHEAP, and gives them a dataset when it sets WITH_DATASET, as its blicketconf.py says.
+ON_DEMAND = PROJECTS / "on-demand"
+CHEAP = "BLICKET_TEST_CHEAP"
+WITH_DATASET = "BLICKET_TEST_DATASET"
 
 
 def make_project(
@@ -144,3 +154,29 @@ class Values:
 def dataset(run):
     return Values(run)
 """
+
+
+def on_demand_project(tmp_path: Path) -> Path:
+    """A committed copy of the project ``ON_DEMAND``, with its runs a and b (2022 moved)."""
+    root = tmp_path / "on-demand"
+    shutil.copytree(ON_DEMAND, root, ignore=shutil.ignore_patterns("__pycache__", ".blicket"))
+    commit_all(root)
+    return root
+
+
+# The line of the on-demand project's blicketconf.py that raises for a table it does not have.
+ON_DEMAND_RAISES = line_of((ON_DEMAND / "blicketconf.py").read_text(), "raise KeyError(name)")
+
+
+def normalised(printed: str) -> list[str]:
+    """The lines printed, with the times of day as 12:00:00 and the durations as 5 ms."""
+    printed = re.sub(r"^\d\d:\d\d:\d\d ", "12:00:00 ", printed, flags=re.MULTILINE)
+    took = r"\d+ ms|\d+\.\d s|(\d+ h )?\d+ min \d+ s"
+    return re.sub(rf" in ({took})", " in 5 ms", printed).splitlines()
+
+
+def push_whole(run: str = "runs/a") -> str:
+    """Check the run ``run`` of the on-demand project in the working directory whole, as
+    ``check`` builds every Blick, expensive or not, and push it; its build id."""
+    checked = CliRunner().invoke(cli.app, ["check", run, "--push"])
+    return checked.stdout.splitlines()[2].split()[1]

@@ -6,6 +6,8 @@ are normalised (strings for categoricals, ``Int64``, naive UTC ``Datetime("us")`
 tables from different libraries are equal.
 """
 
+import hashlib
+import io
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -17,6 +19,9 @@ from blicket.errors import Kind, Problem, Skip
 from blicket.model import Blick
 from blicket.schema import Dimension, Measure, TableSchema, dimension_type
 from blicket.tracebacks import locate, project_traceback, raised_at
+
+# What a table's hash in a manifest starts with: the sha256 of its Parquet bytes follows in hex.
+HASH_PREFIX = "parquet-sha256:"
 
 _INDEX_HINT = (
     "an unnamed pandas index level was dropped; if it holds data, name it, "
@@ -481,3 +486,22 @@ def compute(blick: Blick, run: object, root: Path) -> Checked:
             traceback=project_traceback(cause, root),
         )
         return Checked.failed(problem)
+
+
+def parquet(frame: pl.DataFrame) -> tuple[bytes, str]:
+    """``frame`` as Parquet bytes, and their sha256 in hex, which ``content_hash`` makes the hash
+    a manifest records."""
+    buffer = io.BytesIO()
+    frame.write_parquet(buffer)
+    table = buffer.getvalue()
+    return table, hashlib.sha256(table).hexdigest()
+
+
+def content_hash(digest: str) -> str:
+    """The hash a manifest records for a table whose sha256 is ``digest``, in hex."""
+    return f"{HASH_PREFIX}{digest}"
+
+
+def digest_of(content: str) -> str:
+    """The sha256 in hex of a table's hash as a manifest records it."""
+    return content.removeprefix(HASH_PREFIX)

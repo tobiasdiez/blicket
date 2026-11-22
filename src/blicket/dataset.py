@@ -5,8 +5,10 @@ by default, next to ``load_run``. It returns an object with three methods: ``qua
 quantities of the run (flows, stocks, parameters, variables) as ``Quantity``; ``dimensions()``,
 the dimensions they are defined over as ``Dimension``, each once, with its values in display
 order; and ``select(quantity, keep, values)``, the table of one quantity. The function is
-optional: a project without it has no builder. ``Frames`` is the stock dataset: tables, one per
-quantity, which blicket filters and sums itself.
+optional: a project without it has no builder, and it returns ``None`` for a run that has no
+dataset, such as a run of expensive Blicks, whose dimensions are known only once its tables are
+computed.
+``Frames`` is the stock dataset: tables, one per quantity, which blicket filters and sums itself.
 """
 
 import functools
@@ -30,6 +32,7 @@ from blicket.schema import Dimension, DimensionType, dimension_type, polars_type
 from blicket.tracebacks import project_traceback, raised_at
 
 DATASET_FUNCTION = "dataset"
+NO_DATASET = "dataset(run) returned None"
 _METHODS = ("quantities", "dimensions", "select")
 
 
@@ -381,34 +384,12 @@ def check(found: Any, root: Path, call: str = "the dataset") -> Contents:
     return Contents(found, by_name, known)
 
 
-def _open(target: str, run: object, root: Path) -> Contents | None:
-    """The dataset of ``run``, from ``dataset(run)`` in the module of the loader ``target``.
-
-    ``None`` when the module has no ``dataset``. Raises ``DatasetError`` when it raises, or when
-    what it returns lacks a method of the protocol, its ``quantities()`` or ``dimensions()``
-    raise, or what they return is invalid: a name given twice, a dimension unknown.
-    """
-    module_name, _ = split_target(target)
-    module = importlib.import_module(module_name)  # imported by the loader already
-    function = getattr(module, DATASET_FUNCTION, None)
-    if function is None:
-        return None
-    call = f"{DATASET_FUNCTION}(run) in {module_name}"
-    if not callable(function):
-        raise DatasetError(f"{DATASET_FUNCTION} in {module_name} is not a function")
-    try:
-        found = function(run)
-    except (Exception, SystemExit) as error:
-        raise _raised(call, error, root) from error
-    return check(found, root, call)
-
-
 @dataclass(frozen=True)
 class Found:
     """The dataset of a run, or why there is none.
 
-    ``contents`` is ``None`` when the project has no dataset or ``dataset(run)`` failed; then
-    ``reason`` says why, and ``error`` is the failure, if that is what it was.
+    ``contents`` is ``None`` when the project has no dataset, ``dataset(run)`` returned ``None``
+    or failed; then ``reason`` says why, and ``error`` is the failure, if that is what it was.
     """
 
     contents: Contents | None
@@ -416,13 +397,37 @@ class Found:
     error: DatasetError | None = None
 
 
+def _open(target: str, run: object, root: Path) -> Found:
+    """The dataset of ``run``, from ``dataset(run)`` in the module of the loader ``target``, or
+    why there is none: the module has no ``dataset``, or it returned ``None``.
+
+    Raises ``DatasetError`` when it raises, or when what it returns lacks a method of the
+    protocol, its ``quantities()`` or ``dimensions()`` raise, or what they return is invalid: a
+    name given twice, a dimension unknown.
+    """
+    module_name, _ = split_target(target)
+    module = importlib.import_module(module_name)  # imported by the loader already
+    function = getattr(module, DATASET_FUNCTION, None)
+    if function is None:
+        return Found(None, _absent(target))
+    call = f"{DATASET_FUNCTION}(run) in {module_name}"
+    if not callable(function):
+        raise DatasetError(f"{DATASET_FUNCTION} in {module_name} is not a function")
+    try:
+        found = function(run)
+    except (Exception, SystemExit) as error:
+        raise _raised(call, error, root) from error
+    if found is None:
+        return Found(None, NO_DATASET)
+    return Found(check(found, root, call))
+
+
 def find(target: str, run: object, root: Path) -> Found:
     """The dataset of ``run``, from ``dataset(run)`` in the module of the loader ``target``, or why
-    there is none: the module has no ``dataset``, or it raised, or what it returned does not
-    follow the protocol (a method missing or raising, a name given twice, a dimension unknown,
-    a value of another type than its dimension's)."""
+    there is none: the module has no ``dataset``, it returned ``None``, which is no failure, or it
+    raised, or what it returned does not follow the protocol (a method missing or raising, a name
+    given twice, a dimension unknown, a value of another type than its dimension's)."""
     try:
-        contents = _open(target, run, root)
+        return _open(target, run, root)
     except DatasetError as error:
         return Found(None, str(error), error)
-    return Found(contents) if contents is not None else Found(None, _absent(target))

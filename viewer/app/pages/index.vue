@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { buildingLine, lineText, notBuiltLine, overviewNotice } from '~/lib/jobs'
 import { byStatus } from '~/lib/manifest'
 import { PREVIEWS, pinnedHint, previewSections, skippedLine, troubles } from '~/lib/preview'
 import { sidebarOrder } from '~/lib/sidebar'
@@ -6,12 +7,13 @@ import { sidebarOrder } from '~/lib/sidebar'
 const { manifest, dev } = useManifest()
 const { comparison, blicks, loading } = useComparison()
 const { pinned } = usePins()
+const { jobs, expensive, later, lost, title } = useJobs()
 
 useHead({ title: computed(() => (manifest.value ? `${manifest.value.run.id} · blicket` : 'blicket')) })
 
 const entries = computed(() => (manifest.value ? sidebarOrder(manifest.value) : []))
 // Nothing is drawn while the comparisons load, so the first Blicks never show before the changed ones.
-const sections = computed(() => (loading.value ? null : previewSections(entries.value, comparison.value?.blicks ?? [], blicks.value, pinned.value, PREVIEWS)))
+const sections = computed(() => (loading.value ? null : previewSections(entries.value, comparison.value?.blicks ?? [], blicks.value, pinned.value, PREVIEWS, dev.value && expensive.value.size > 0)))
 const total = computed(() => manifest.value?.blicks.length ?? 0)
 // While nothing is pinned and nothing changed, the section shows the first Blicks instead.
 const firstLook = computed(() => !!sections.value?.unpinned && sections.value.pinned.length > 0)
@@ -25,10 +27,19 @@ const broken = computed(() => statuses.value.error)
 const skipped = computed(() => skippedLine(manifest.value?.blicks ?? []))
 // With every Blick skipped and nothing pinned, the pinned section has nothing to offer.
 const pinnedShown = computed(() => !sections.value?.unpinned || statuses.value.skipped.length < total.value)
+// In a session of blicket dev: whether an expensive Blick waits to be opened, how many Blicks are
+// not built yet, and which Blick a page asked for builds now, on the page and, without the time,
+// for a screen reader, which is told when a build starts and ends.
+const notBuilt = computed(() => notBuiltLine(manifest.value?.blicks ?? []))
+const building = computed(() => {
+  const line = buildingLine(jobs.value, later.value, lost.value)
+  return line && { shown: lineText(line, title), spoken: lineText(line, title, true) }
+})
+const notice = computed(() => (dev.value ? overviewNotice(manifest.value?.blicks ?? [], building.value?.shown ?? null) : null))
 const errors = computed(() => (manifest.value?.problems ?? []).filter(p => p.severity === 'error'))
 const warnings = computed(() => (manifest.value?.problems ?? []).filter(p => p.severity === 'warning'))
 // The trouble of the build in a line, at the top, since the problems are far down the page.
-const trouble = computed(() => (manifest.value ? troubles(manifest.value) : ''))
+const trouble = computed(() => (manifest.value ? troubles(manifest.value, dev.value) : ''))
 const problemsHeading = useTemplateRef<HTMLElement>('problemsHeading')
 
 /** Bring the problems into view, and the keyboard with them. With the hash router, `#problems` would be a route. */
@@ -68,6 +79,12 @@ async function refocus(name: string, index: number) {
        takes some of the window. -->
   <div v-if="manifest" class="@container space-y-8">
     <ComparisonBar />
+    <template v-if="notice">
+      <UAlert color="neutral" variant="subtle" icon="i-lucide-info" :title="notice.title" :description="notice.description || undefined" />
+      <p role="status" class="sr-only">
+        {{ [notBuilt, building?.spoken].filter(Boolean).join('. ') }}
+      </p>
+    </template>
     <UAlert
       v-if="trouble"
       color="error"

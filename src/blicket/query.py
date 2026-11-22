@@ -9,8 +9,6 @@ the query: every kept dimension the plot leaves unbound is a filter control of t
 """
 
 import functools
-import hashlib
-import io
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -369,14 +367,6 @@ def _since(start: float) -> float:
     return round((time.perf_counter() - start) * 1000, 1)
 
 
-def _parquet(frame: pl.DataFrame) -> tuple[bytes, str]:
-    """The frame as Parquet, and the sha256 of the bytes in hex."""
-    buffer = io.BytesIO()
-    frame.write_parquet(buffer)
-    table = buffer.getvalue()
-    return table, hashlib.sha256(table).hexdigest()
-
-
 def _too_many_rows(frame: pl.DataFrame, plan: _Plan) -> str:
     """Why a table is too large: its size per dimension, and what helps, which for a quantity
     that is not additive is no sum."""
@@ -416,11 +406,11 @@ def run_query(contents: Contents, query: Query, root: Path) -> Result:
         problem = blick.problem(Kind.QUERY, _too_many_rows(frame, plan))
         problems = (*checked.problems, problem)
         return Result(blick.entry(problems=problems, timing_ms=_since(start)))
-    table, digest = _parquet(frame)
+    table, digest = tables.parquet(frame)
     entry = blick.entry(
         problems=checked.problems,
         data=f"{TABLES}/{digest}.parquet",
-        hash=f"parquet-sha256:{digest}",
+        hash=tables.content_hash(digest),
         rows=frame.height,
         columns=tables.ordered(checked.schema, plan.order),
         timing_ms=_since(start),

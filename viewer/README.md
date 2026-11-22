@@ -56,18 +56,83 @@ split toggle turns it into a filter without a new query. A query's table is fetc
 is, by its content hash; of the builder's tables, `dev/tables/<hex>.parquet`, the viewer keeps
 the last 50 it used, and of a build's all.
 
-The run picker (`app/pages/runs.vue`, `#/runs`) is the page while `blicket dev` serves no run
-yet. `blicket dev` then answers `manifest.json` with a 404 that carries the header
-`Blicket-Dev: 1` (`isNoRun` in `app/lib/dev.ts`), which `useManifest` records as `noRun`, and the
-shell (`app/app.vue`) sends every route to `#/runs`, under the header without the sidebar and the
-run. The page lists the folders of `dev/runs` (`useRuns`), posts the ones ticked to `dev/run`
-(`postRun`), which answers once the run is loaded, built and checked, and then reloads the viewer
-on the overview, since the manifest is fetched once; a load that fails leaves the ticks and shows
-why under the list, the keyboard staying on Load. `app/lib/runs.ts` holds the page's words and
-ticks: how long ago a run changed, the load button's label, the `runs` setting, and the ticks a
-new list keeps (`keepListed`); `app/lib/time.ts` writes a time in UTC, for the picker and the
-comparison. Served by `blicket serve`, or once a run
-is loaded, the page says so and links the overview.
+The run picker (`app/pages/runs.vue`, `#/runs`) is the page while `blicket dev` serves no run yet.
+`blicket dev` then answers `manifest.json` with a 404 that carries the header `Blicket-Dev: 1`
+(`isNoRun` in `app/lib/dev.ts`), which `useManifest` records as `noRun`, and the shell
+(`app/app.vue`) sends every route to `#/runs`, under the header without the sidebar and the run.
+While a run is served, the header has `Pick another run` when `dev/runs` lists globs, which opens
+the same page with the run served marked (`served` in `dev/runs`) and a link back to the overview.
+The page lists the folders of `dev/runs` (`useRuns`), the project itself first when `runs` has `.`
+(`project`, said to be computed from code, `whenText`), which loads alone (`ticked`), posts the
+ones ticked to `dev/run` (`postRun`), which answers once the run is loaded and its baseline found,
+and then reloads the viewer on the overview, since the session is another; a load that fails leaves
+the ticks and the run served and shows why under the list, the keyboard staying on Load; while the
+load waits for a cheap Blick that builds, the page says so and for how long (`loadingLine`). Before
+a load that drops expensive Blicks built (`expensiveBuilt`), it asks in a dialog (`dropQuestion`),
+without a transition, which stays until blicket dev answers; a load refused or failed closes it and
+gives the keyboard to the alert under the list. `app/lib/runs.ts` holds the page's words and ticks:
+how long ago a run changed, the load button's label, the `runs` setting, how a tick changes the
+others, the ticks a new list keeps (`keepListed`) and the question; `app/lib/time.ts` writes a time
+in UTC, for the picker and the comparison. Served by `blicket serve`, the page says that it needs
+`blicket dev` and links the overview.
+
+A session of `blicket dev` builds its Blicks while the viewer is open (see the
+[root README](../README.md#developing-blicks)): a cheap Blick in the background and again at each
+visit of its page, an [expensive one](../README.md#expensive-blicks) when its page asks for it.
+`useRefresh`, which the shell starts in every session once it serves a run, asks `dev/info` once a
+second while the tab is visible, and when its `session` or `revision` is not the one shown, reads
+the manifest and the comparisons again without showing them (`fetch` of `useManifest` and
+`useComparison`, through `reloadable` in `app/lib/resource.ts`), and once their header
+`Blicket-Revision` names the revision of the answer, shows all three at one moment (`afterReading`
+in `app/lib/reload.ts`), so that no page sees a Blick built and still building; when a Blick was
+built meanwhile, it asks `dev/info` and reads them again at once, a few times at most before it
+leaves them to the next tick. A restart of `blicket dev`, or the load of another run, is a new
+`session`, read again whatever its revision. Asked while it reads, it reads once more after, and
+`refresh` settles once a read asked for after the call has ended (`coalesced`), to whether its
+answer was shown, so that a page that asked for a build knows whether it sees an answer that
+knows of it. `useJobs` gives the pages what that answer
+says, computed once for them all: the `jobs`, the Blick building and the Blicks a page asked for
+that wait, each `asked` or of the background; where each Blick stands in them (`marks`, one map
+that stays the same object while a build only goes on); the expensive Blicks, which the manifest
+marks `expensive`; why the worker `stopped`; the seconds since the answer; whether `dev/info`
+stopped answering (`lost`); and a Blick's title by its id (`title`).
+Reading again disturbs nothing: `app/lib/reload.ts` keeps the entries and comparisons that did not
+change as the objects they were (`share`), and the baseline chosen, "No baseline" too
+(`keptChoice`); `useTable` fetches a table again only when its path or hash changed and keeps the
+rows shown while their owner is the same (`rowsStay`, `rowOwners`): the Blick owns its own table's
+rows, the baseline's table its own, so that another baseline never draws the old one's rows;
+`useBlickChart` draws the entry before a rebuild until its new rows arrive (`settled`), so that new
+controls never meet old rows; and `BlickChart` redraws only when its rows, or what it is drawn as,
+change by value. A manifest that cannot be read again leaves the page as it is, and a Blick's page
+warns that it may be older than the run. A poll that fails shows `Cannot reach blicket dev` with
+Retry on a Blick's page, which then says that its Blick was building when contact was lost, and
+counts no time; elsewhere the page stays as it is, its spinners stopped.
+
+`useBlickBuild` is the build of the Blick on its page: `app/lib/jobs.ts` says what the page shows
+(`pageState`) and what a visit asks (`visitRequest`), once per visit, and once more after a restart
+of `blicket dev` (`visitOf`). A cheap Blick not built is asked for at once; built, it is asked for
+again, and the page shows what was built under `Updating… 0:08`, or `Updating after <title> (0:42)`
+behind an expensive build, not dimmed, without `Rebuild`. An expensive Blick not built is asked for
+while no Blick a page asked for builds or waits, the background not counted; otherwise the page
+offers `Build next`. The page says where the Blick waits or how long it builds (`statusLine`, which
+names a Blick by its title, as a link, and leaves the time out of what a screen reader is told),
+and offers `Rebuild` on an expensive Blick built (`rebuildable`), dimming it while it rebuilds; how
+the last build ended (`outcomeLine`) takes the line's place when nothing builds, with the time when
+the page asked for the build and saw it end: once blicket dev took the request on and an answer of
+`dev/info` read after it was shown, the build ended when the Blick has left the jobs
+(`askedEnded`), whether or not its entry changed, `Rebuilt` for a Blick built before; without such
+an answer, the line says no time. `BuildStatus` draws the line, one `role="status"` that stays
+while the page shows the Blick, and moves the keyboard to it after `Build next`, since the button
+goes. An entry `pending` is a Blick not built yet: its card says so (`pendingText`: `Not built
+yet`, `Queued`, `Building…`), the sidebar marks it with a dashed circle, a spinner while it builds
+and a clock while a page asked for it and it waits, and counts them at its foot (`pendingCount`);
+the overview says, in one notice (`overviewNotice`), that an expensive Blick is built when it is
+opened, when the session has one, how many are left of all the Blicks (`notBuiltLine`) and which
+Blick a page asked for builds (`buildingLine`), also to a screen reader, and in a session with an
+expensive Blick fills "A first look" with the first six Blicks not already under "Changed since the
+baseline" (`previewSections` with `expensive`); the footer names the session instead of a build
+(`footerText`). An entry in error without a timing failed in its definition, which no build changes
+(`isInvalid`): its page says where to fix it and has no `Rebuild`.
 
 The shell (`app/app.vue`) is a row: the sidebar (`BlickSidebar`, on Nuxt UI's `USidebar`), and
 a column of the header, the page and the footer. From 1280 px (Tailwind's `xl`) the sidebar stands

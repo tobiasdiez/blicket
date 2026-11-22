@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { Unreachable, bodyOf, failure, isEntry, isInfo, isNoRun, isOptions, isRunList, postQuery, postRun } from '../app/lib/dev'
+import { Unreachable, bodyOf, failure, isEntry, isInfo, isNoRun, isOptions, isRunList, postBuild, postQuery, postRun } from '../app/lib/dev'
 
 const answer = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status })
 const request = { quantities: ['flows/a'], plot: 'line', mapping: { x: 'Time' }, keep: [], values: {} }
@@ -37,7 +37,14 @@ describe('requests to blicket dev', () => {
     expect(isEntry({ name: 'builder/query', status: 'skipped', problems: [] })).toBe(true)
     expect(isEntry({ name: 'builder/query', status: 'broken', problems: [] })).toBe(false)
     expect(isEntry({ message: 'no dataset' })).toBe(false)
-    expect(isInfo({ root: '/p', dataset: false, message: 'no dataset(run)', failed: false })).toBe(true)
+    const info = { root: '/p', dataset: false, message: 'no dataset(run)', failed: false, session: 's', revision: 0, jobs: [], stopped: null }
+    expect(isInfo(info)).toBe(true)
+    const job = { id: 'a/b', state: 'building', asked: true, since: '2026-11-11T12:01:05Z', seconds: 3 }
+    expect(isInfo({ ...info, jobs: [job] })).toBe(true)
+    expect(isInfo({ ...info, jobs: [{ ...job, asked: false }] })).toBe(true) // the background's
+    expect(isInfo({ ...info, jobs: [{ ...job, state: 'done' }] })).toBe(false)
+    expect(isInfo({ ...info, jobs: [{ ...job, seconds: undefined }] })).toBe(false)
+    expect(isInfo({ ...info, jobs: [{ ...job, asked: undefined }] })).toBe(false)
     expect(isInfo({ message: 'no route' })).toBe(false)
     expect(failure(new Error('')).message).toBe('the request failed')
   })
@@ -58,11 +65,29 @@ describe('requests to blicket dev', () => {
     expect(JSON.parse(String(sent[1]!.init?.body))).toEqual({ paths: ['/data/a', '/data/b'] })
   })
 
-  it('checks the shape of dev/runs', () => {
-    const run = { path: '/data/b', name: 'b', modified: '2026-10-26T10:25:13Z' }
-    expect(isRunList({ patterns: ['../data/*'], runs: [run] })).toBe(true)
+  it('asks for a build with a POST to dev/build, and says why it was refused', async () => {
+    const sent: { path: string, init: RequestInit | undefined }[] = []
+    const answers = [answer({ state: 'queued', revision: 0 }), answer({ message: 'no Blick steel/none to build' }, 404), answer({ state: 'built' })]
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      sent.push({ path, init })
+      return answers.shift()!
+    }))
+    expect(await postBuild('steel/trade')).toBe('queued')
+    expect([sent[0]!.path, sent[0]!.init?.method]).toEqual(['./dev/build', 'POST'])
+    expect(JSON.parse(String(sent[0]!.init?.body))).toEqual({ id: 'steel/trade', rebuild: false })
+    await expect(postBuild('steel/none', true)).rejects.toThrow('no Blick steel/none to build')
+    expect(JSON.parse(String(sent[1]!.init?.body))).toEqual({ id: 'steel/none', rebuild: true })
+    await expect(postBuild('steel/trade')).rejects.toThrow('dev/build: the answer is not what the viewer expects')
+  })
+
+  it('checks the shape of dev/runs, with the project itself, which has no time', () => {
+    const run = { path: '/data/b', name: 'b', modified: '2026-10-26T10:25:13Z', project: false, served: false }
+    const project = { path: '/p', name: 'This project', modified: null, project: true, served: true }
+    expect(isRunList({ patterns: ['.', '../data/*'], runs: [project, run] })).toBe(true)
     expect(isRunList({ patterns: [], runs: [] })).toBe(true)
     expect(isRunList({ patterns: [], runs: [{ ...run, modified: 1 }] })).toBe(false)
+    expect(isRunList({ patterns: [], runs: [{ ...run, project: undefined }] })).toBe(false)
+    expect(isRunList({ patterns: [], runs: [{ ...run, served: undefined }] })).toBe(false)
     expect(isRunList({ runs: [] })).toBe(false)
   })
 

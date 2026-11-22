@@ -1,5 +1,6 @@
 // The Blicks as the sidebar lists them: by group, searched and filtered, each with its badge.
 import { blickBadge, type Badge, type BlickComparison } from './comparison'
+import type { BuildMark } from './jobs'
 import type { BlickEntry, Manifest } from './manifest'
 import { searchText } from './roles'
 import { read, write, type KeyValueStorage } from './storage'
@@ -25,6 +26,10 @@ export interface SidebarEntry {
   badge: Badge | null
   /** Whether the Blick was skipped for the run and no comparison flags it, which mutes it. */
   muted: boolean
+  /** Whether the Blick is not built yet, in a session of blicket dev, which mutes it. */
+  pending: boolean
+  /** Whether the Blick of a session is building, or waits after a page asked for it, if either. */
+  build: BuildMark | null
   pinned: boolean
   /** Whether the Blick has no page, which a Blick without an id lacks. */
   disabled: boolean
@@ -66,7 +71,8 @@ export function sidebarOrder(manifest: Pick<Manifest, 'groups' | 'blicks'>): Bli
  * The sidebar's groups in the manifest's order, each with its Blicks in the manifest's order: those
  * whose search text has every word of `search` and, with `changedOnly`, that the comparison flags.
  * A group left without a Blick is left out. `changes` are the build's Blicks in the comparison by
- * name, `pinned` the names of the pinned Blicks.
+ * name, `pinned` the names of the pinned Blicks, `marks` where the Blicks of a session stand
+ * in its jobs, by id.
  */
 export function sidebarGroups(
   manifest: Pick<Manifest, 'groups' | 'blicks'>,
@@ -74,6 +80,7 @@ export function sidebarGroups(
   pinned: ReadonlySet<string>,
   search: string,
   changedOnly: boolean,
+  marks: ReadonlyMap<string, BuildMark> = new Map(),
 ): SidebarGroup[] {
   const wanted = words(search)
   return manifest.groups.flatMap((group) => {
@@ -91,6 +98,8 @@ export function sidebarGroups(
           label: entry.definition?.title ?? entry.name,
           badge,
           muted: entry.status === 'skipped' && badge === null,
+          pending: entry.status === 'pending',
+          build: (entry.id && marks.get(entry.id)) || null,
           pinned: pinned.has(entry.name),
           disabled: entry.id === null,
         }
@@ -102,7 +111,7 @@ export function sidebarGroups(
 /**
  * The groups open while the user has chosen none, in their order: all but those whose Blicks are
  * all skipped for the run and unflagged, which hold nothing to look at, unless `opened` names them,
- * as the group of the Blick whose page is shown.
+ * as the group of the Blick whose page is shown. A Blick not built yet is something to look at.
  */
 export function initiallyOpen(groups: SidebarGroup[], opened: readonly string[] = []): string[] {
   return groups

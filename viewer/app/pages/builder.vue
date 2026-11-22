@@ -123,7 +123,15 @@ const hint = (offered: BuilderOptions, row: FormDimension) => requiredHint(state
 // The first problem of a refused query, shown under the quantity too on a narrow page, where
 // the chart comes after the form.
 const firstProblem = computed(() => failed.value?.problems.find(p => p.severity === 'error')?.message ?? null)
-const capitalized = (text: string) => text.charAt(0).toUpperCase() + text.slice(1)
+// Why there is no builder, as blicket dev says it, a sentence; one that starts with code, as
+// `dataset(run) returned None` does, keeps its case. A run of expensive Blicks usually has no
+// dataset.
+const { expensive } = useJobs()
+const noDataset = computed(() => {
+  const message = info.value?.message ?? 'no dataset(run)'
+  const said = /^\w+\(/.test(message) ? message : message.charAt(0).toUpperCase() + message.slice(1)
+  return expensive.value.size ? `${said}. A run of expensive Blicks usually has none: its quantities are known only once its tables are computed.` : `${said}.`
+})
 
 function onPlot(plot: string) {
   if (options.value) change(setPlot(state.value, options.value, plot))
@@ -168,7 +176,7 @@ const breadcrumb = [{ label: 'Overview', to: '/' }, { label: 'Build a Blick' }]
     <UAlert v-else-if="info && !info.dataset && info.failed" color="warning" variant="subtle" icon="i-lucide-triangle-alert" title="The dataset of this project failed" :ui="{ description: 'whitespace-pre-wrap wrap-anywhere' }">
       <template #description>{{ info.message }}. Fix it and restart <code>blicket dev</code>.</template>
     </UAlert>
-    <UAlert v-else-if="info && !info.dataset" color="neutral" variant="subtle" icon="i-lucide-info" title="This project has no dataset" :description="`${capitalized(info.message ?? 'no dataset(run)')}.`" />
+    <UAlert v-else-if="info && !info.dataset" color="neutral" variant="subtle" icon="i-lucide-info" title="The builder is off" :description="noDataset" />
     <p v-else-if="!options" class="text-sm text-muted">
       Loading the dataset…
     </p>
